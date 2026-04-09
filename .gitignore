@@ -1,0 +1,7 @@
+node_modules
+.env
+shopify_token.json
+server/crm.db
+server/crm.db-journal
+client/dist
+.DS_Store
