@@ -63,13 +63,13 @@ router.get('/', async (req, res) => {
             totalCustomers = customerCountResult.count;
             avgOrderValue = totalOrders > 0 ? totalRevenue / totalOrders : 0;
         } else {
-            // ALL-TIME: Use REAL data from Shopify API + customer aggregates
-            // Customer table has complete data for ALL customers (not scope-limited)
+            // ALL-TIME: Use REAL data from Shopify API
             const [shopifyCount] = await Promise.all([getShopifyOrderCount()]);
             totalOrders = shopifyCount;
 
-            // Revenue from orders (without hardcoded offset - use actual data)
-            const dbRevenue = db.prepare('SELECT COALESCE(SUM(total_price), 0) as total FROM orders').get().total;
+            // For ALL-TIME revenue without a date filter, use the customer total_spent
+            // which represents all-time spending (more accurate than order count * price)
+            const dbRevenue = db.prepare('SELECT COALESCE(SUM(total_spent), 0) as total FROM customers').get().total;
             totalRevenue = dbRevenue;
 
             totalCustomers = db.prepare('SELECT COUNT(*) as count FROM customers').get().count;
