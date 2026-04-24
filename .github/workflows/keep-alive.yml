@@ -1,0 +1,32 @@
+name: Keep Render Backend Alive
+
+on:
+  schedule:
+    # Runs every 14 minutes to prevent Render free tier sleep
+    - cron: '*/14 * * * *'
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  keep-alive:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Ping Render Backend
+        run: |
+          echo "🔔 Pinging backend at $(date)"
+          curl -f -X GET https://normless-crm-api.onrender.com/api/health || exit 1
+          echo "✅ Backend is alive!"
+
+      - name: Log sync status
+        run: |
+          echo "📊 Checking sync status..."
+          # Optional: Add auth token if you want detailed status
+          curl -s https://normless-crm-api.onrender.com/api/health
+          echo ""
+          echo "✨ Cron job completed successfully at $(date)"
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "❌ ALERT: Backend is down or unreachable!"
+          echo "Check Render dashboard: https://dashboard.render.com"
