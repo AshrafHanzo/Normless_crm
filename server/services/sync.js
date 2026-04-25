@@ -52,8 +52,9 @@ async function syncAll() {
                 total_price = excluded.total_price,
                 currency = excluded.currency,
                 financial_status = excluded.financial_status,
-                fulfillment_status = excluded.fulfillment_status,
-                line_items_json = excluded.line_items_json
+                fulfillment_status = excluded.fulfillment_status
+                -- We DO NOT overwrite line_items_json here because it might contain 
+                -- dynamically fetched images that the REST API sync doesn't have.
         `);
 
         const insertManyOrders = db.transaction((items) => {

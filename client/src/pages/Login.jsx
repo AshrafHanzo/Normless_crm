@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import { useAuth } from '../App'
 
 export default function Login() {
@@ -65,6 +66,7 @@ export default function Login() {
               placeholder="Enter password"
               required
             />
+            <Link to="/forgot-password" style={{ fontSize: '12px', color: 'var(--primary)', textDecoration: 'none', marginTop: '6px', display: 'block' }}>Forgot password?</Link>
           </div>
 
           <button type="submit" className="btn btn-primary" disabled={loading}>

@@ -61,8 +61,8 @@ Once frontend is deployed:
 
 ### Step 5: Test Full Login Flow
 **Credentials**:
-- Username: `normlessfashion@gmail.com`
-- Password: `hsSeMEiG8MBhSzC`
+- Username: `[YOUR_ADMIN_EMAIL]`
+- Password: `[REDACTED_PASSWORD]`
 
 **Expected**: Login → Dashboard with data loads
 
@@ -160,7 +160,7 @@ Verify:
 - `SHOPIFY_STORE_DOMAIN=uqcyff-my.myshopify.com`
 - `SHOPIFY_ACCESS_TOKEN=shpat_...`
 - `JWT_SECRET=...`
-- `GMAIL_USER=normlessforgot@gmail.com`
+- `GMAIL_USER=[YOUR_GMAIL_ACCOUNT]`
 - `GMAIL_APP_PASSWORD=...`
 
 ---

@@ -48,7 +48,7 @@
      JWT_SECRET=[CREATE A RANDOM SECURE STRING]
      SHOPIFY_ACCESS_TOKEN=[your_token]
      SHOPIFY_STORE_DOMAIN=[your_store.myshopify.com]
-     GMAIL_USER=normlessforgot@gmail.com
+     GMAIL_USER=[YOUR_GMAIL_ACCOUNT]
      GMAIL_APP_PASSWORD=[app_password]
      CORS_ORIGIN=https://normless.store
      FRONTEND_URL=https://normless.store

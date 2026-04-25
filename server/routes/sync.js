@@ -4,6 +4,9 @@ const shopify = require('../services/shopify');
 
 const router = express.Router();
 
+let autoSyncInterval = null;
+let isSyncing = false;
+
 // POST /api/sync/full
 router.post('/full', async (req, res) => {
     try {
@@ -23,9 +26,17 @@ router.post('/full', async (req, res) => {
 // POST /api/sync/run - Sync and wait for result
 router.post('/run', async (req, res) => {
     try {
+        if (isSyncing) {
+            return res.status(429).json({ error: 'Sync already in progress' });
+        }
+
+        isSyncing = true;
         const result = await syncService.syncAll();
+        isSyncing = false;
+
         res.json(result);
     } catch (err) {
+        isSyncing = false;
         console.error('Error running sync:', err);
         res.status(500).json({ error: 'Failed to run sync' });
     }
@@ -35,7 +46,11 @@ router.post('/run', async (req, res) => {
 router.get('/status', (req, res) => {
     try {
         const lastSync = syncService.getLastSync();
-        res.json({ lastSync });
+        res.json({
+            lastSync,
+            isSyncing,
+            autoSyncEnabled: autoSyncInterval !== null
+        });
     } catch (err) {
         console.error('Error fetching sync status:', err);
         res.status(500).json({ error: 'Failed to fetch sync status' });
@@ -53,4 +68,57 @@ router.get('/test', async (req, res) => {
     }
 });
 
+// POST /api/sync/enable-auto - Enable auto-sync
+router.post('/enable-auto', (req, res) => {
+    try {
+        const intervalSeconds = req.body.interval || 30; // Default 30 seconds
+
+        if (autoSyncInterval) {
+            clearInterval(autoSyncInterval);
+        }
+
+        autoSyncInterval = setInterval(() => {
+            if (!isSyncing) {
+                isSyncing = true;
+                syncService.syncAll()
+                    .then(() => {
+                        isSyncing = false;
+                        console.log(`✨ Auto-sync completed at ${new Date().toLocaleTimeString()}`);
+                    })
+                    .catch(err => {
+                        isSyncing = false;
+                        console.error('Auto-sync failed:', err);
+                    });
+            }
+        }, intervalSeconds * 1000);
+
+        console.log(`🔄 Auto-sync enabled (every ${intervalSeconds} seconds)`);
+        res.json({
+            enabled: true,
+            interval: intervalSeconds,
+            message: `Auto-sync will run every ${intervalSeconds} seconds`
+        });
+    } catch (err) {
+        console.error('Error enabling auto-sync:', err);
+        res.status(500).json({ error: 'Failed to enable auto-sync' });
+    }
+});
+
+// POST /api/sync/disable-auto - Disable auto-sync
+router.post('/disable-auto', (req, res) => {
+    try {
+        if (autoSyncInterval) {
+            clearInterval(autoSyncInterval);
+            autoSyncInterval = null;
+        }
+
+        console.log('🛑 Auto-sync disabled');
+        res.json({ enabled: false, message: 'Auto-sync disabled' });
+    } catch (err) {
+        console.error('Error disabling auto-sync:', err);
+        res.status(500).json({ error: 'Failed to disable auto-sync' });
+    }
+});
+
 module.exports = router;
+module.exports.getAutoSyncStatus = () => autoSyncInterval !== null;

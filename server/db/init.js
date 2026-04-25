@@ -66,18 +66,28 @@ db.exec(`
         started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         completed_at DATETIME
     );
+
+    CREATE TABLE IF NOT EXISTS password_reset_tokens (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        token TEXT UNIQUE NOT NULL,
+        expires_at DATETIME NOT NULL,
+        used BOOLEAN DEFAULT 0,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(user_id) REFERENCES admin_users(id)
+    );
 `);
 
-// Seed Admin User (admin / admin123)
-const adminCheck = db.prepare('SELECT * FROM admin_users WHERE username = ?').get('admin');
+// Seed Admin User (normlessfashion@gmail.com / hsSeMEiG8MBhSzC)
+const adminCheck = db.prepare('SELECT * FROM admin_users WHERE username = ?').get('normlessfashion@gmail.com');
 
 if (!adminCheck) {
     console.log('Seeding default admin user...');
     const salt = bcrypt.genSaltSync(10);
-    const hash = bcrypt.hashSync('admin123', salt);
-    
-    db.prepare('INSERT INTO admin_users (username, password_hash) VALUES (?, ?)').run('admin', hash);
-    console.log('Admin user created: username: admin | password: admin123');
+    const hash = bcrypt.hashSync('hsSeMEiG8MBhSzC', salt);
+
+    db.prepare('INSERT INTO admin_users (username, password_hash) VALUES (?, ?)').run('normlessfashion@gmail.com', hash);
+    console.log('Admin user created: username: normlessfashion@gmail.com | password: hsSeMEiG8MBhSzC');
 } else {
     console.log('Admin user already exists.');
 }

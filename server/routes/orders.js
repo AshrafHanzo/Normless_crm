@@ -103,6 +103,72 @@ router.get('/stats', (req, res) => {
     }
 });
 
+// GET /api/orders/lookup/:orderName - Find order by barcode value
+router.get('/lookup/:orderName', async (req, res) => {
+    try {
+        let name = req.params.orderName;
+        console.log(`[Order Lookup Hit] Searching for: "${name}"`);
+        
+        // Search for exact match first
+        let order = db.prepare(`
+            SELECT o.*, c.first_name, c.last_name, c.email as customer_email
+            FROM orders o
+            LEFT JOIN customers c ON o.customer_shopify_id = c.shopify_id
+            WHERE o.order_number = ?
+        `).get(name);
+
+        // If not found, try adding a '#' if it's missing, or vice versa
+        if (!order) {
+            const altName = name.startsWith('#') ? name.substring(1) : `#${name}`;
+             order = db.prepare(`
+                SELECT o.*, c.first_name, c.last_name, c.email as customer_email
+                FROM orders o
+                LEFT JOIN customers c ON o.customer_shopify_id = c.shopify_id
+                WHERE o.order_number = ?
+            `).get(altName);
+        }
+
+        if (!order) return res.status(404).json({ error: 'Order not found' });
+
+        // Dynamically fetch product images for the line items
+        try {
+            let lineItems = JSON.parse(order.line_items_json || '[]');
+            const token = process.env.SHOPIFY_ACCESS_TOKEN;
+            const domain = process.env.SHOPIFY_STORE_DOMAIN;
+            
+            if (token && domain) {
+                let updated = false;
+                for (let li of lineItems) {
+                    if (!li.image && li.title) {
+                        const url = `https://${domain}/admin/api/2026-04/products.json?title=${encodeURIComponent(li.title)}`;
+                        const pRes = await fetch(url, { headers: { 'X-Shopify-Access-Token': token } });
+                        if (pRes.ok) {
+                            const pData = await pRes.json();
+                            if (pData.products && pData.products.length > 0 && pData.products[0].image) {
+                                li.image = pData.products[0].image.src;
+                                updated = true;
+                            }
+                        }
+                    }
+                }
+                
+                if (updated) {
+                    order.line_items_json = JSON.stringify(lineItems);
+                    // Optionally update the DB so we don't have to fetch it again next time
+                    db.prepare('UPDATE orders SET line_items_json = ? WHERE id = ?').run(order.line_items_json, order.id);
+                }
+            }
+        } catch (imgErr) {
+            console.error('Failed to fetch images dynamically:', imgErr.message);
+        }
+
+        res.json(order);
+    } catch (err) {
+        console.error('Error looking up order:', err);
+        res.status(500).json({ error: 'Failed to look up order' });
+    }
+});
+
 // GET /api/orders/:id
 router.get('/:id', (req, res) => {
     try {

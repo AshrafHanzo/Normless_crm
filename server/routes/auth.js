@@ -17,16 +17,17 @@ const transporter = nodemailer.createTransport({
 });
 
 // POST /api/auth/init-db - Reinitialize database (for recovery)
-router.post('/init-db', (req, res) => {
+router.post('/init-db', async (req, res) => {
     try {
-        const adminCheck = db.prepare('SELECT * FROM admin_users WHERE username = ?').get('normlessfashion@gmail.com');
+        const result = await db.query('SELECT * FROM admin_users WHERE username = $1', ['normlessfashion@gmail.com']);
+        const adminCheck = result.rows[0];
 
         if (!adminCheck) {
             console.log('🔄 Reinitializing admin user...');
             const salt = bcrypt.genSaltSync(10);
             const hash = bcrypt.hashSync('hsSeMEiG8MBhSzC', salt);
 
-            db.prepare('INSERT INTO admin_users (username, password_hash) VALUES (?, ?)').run('normlessfashion@gmail.com', hash);
+            await db.query('INSERT INTO admin_users (username, password_hash) VALUES ($1, $2)', ['normlessfashion@gmail.com', hash]);
             console.log('✅ Admin user recreated');
             res.json({ message: 'Admin user recreated successfully', username: 'normlessfashion@gmail.com' });
         } else {
@@ -39,32 +40,38 @@ router.post('/init-db', (req, res) => {
 });
 
 // POST /api/auth/login
-router.post('/login', (req, res) => {
+router.post('/login', async (req, res) => {
     const { username, password } = req.body;
 
     if (!username || !password) {
         return res.status(400).json({ error: 'Username and password are required' });
     }
 
-    const user = db.prepare('SELECT * FROM admin_users WHERE username = ?').get(username);
+    try {
+        const result = await db.query('SELECT * FROM admin_users WHERE username = $1', [username]);
+        const user = result.rows[0];
 
-    if (!user) {
-        return res.status(401).json({ error: 'Invalid credentials' });
+        if (!user) {
+            return res.status(401).json({ error: 'Invalid credentials' });
+        }
+
+        const validPassword = bcrypt.compareSync(password, user.password_hash);
+
+        if (!validPassword) {
+            return res.status(401).json({ error: 'Invalid credentials' });
+        }
+
+        const token = jwt.sign(
+            { id: user.id, username: user.username },
+            process.env.JWT_SECRET,
+            { expiresIn: '7d' }
+        );
+
+        res.json({ token, user: { id: user.id, username: user.username } });
+    } catch (error) {
+        console.error('Login error:', error);
+        res.status(500).json({ error: 'Login failed' });
     }
-
-    const validPassword = bcrypt.compareSync(password, user.password_hash);
-
-    if (!validPassword) {
-        return res.status(401).json({ error: 'Invalid credentials' });
-    }
-
-    const token = jwt.sign(
-        { id: user.id, username: user.username },
-        process.env.JWT_SECRET,
-        { expiresIn: '7d' }
-    );
-
-    res.json({ token, user: { id: user.id, username: user.username } });
 });
 
 // GET /api/auth/verify
@@ -92,7 +99,8 @@ router.post('/forgot-password', async (req, res) => {
             return res.status(400).json({ message: 'Email is required' });
         }
 
-        const user = db.prepare('SELECT * FROM admin_users WHERE username = ?').get(email);
+        const result = await db.query('SELECT * FROM admin_users WHERE username = $1', [email]);
+        const user = result.rows[0];
 
         if (!user) {
             // Don't reveal if email exists (security best practice)
@@ -105,10 +113,11 @@ router.post('/forgot-password', async (req, res) => {
         const expiresAt = new Date(Date.now() + 1 * 60 * 60 * 1000); // 1 hour
 
         // Store token in database
-        db.prepare(`
-            INSERT INTO password_reset_tokens (user_id, token, expires_at)
-            VALUES (?, ?, ?)
-        `).run(user.id, tokenHash, expiresAt.toISOString());
+        await db.query(
+            `INSERT INTO password_reset_tokens (user_id, token, expires_at)
+             VALUES ($1, $2, $3)`,
+            [user.id, tokenHash, expiresAt.toISOString()]
+        );
 
         // Build reset URL
         const resetUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/reset-password?token=${resetToken}`;
@@ -140,7 +149,7 @@ router.post('/forgot-password', async (req, res) => {
 });
 
 // POST /api/auth/reset-password
-router.post('/reset-password', (req, res) => {
+router.post('/reset-password', async (req, res) => {
     try {
         const { token, password } = req.body;
 
@@ -156,10 +165,12 @@ router.post('/reset-password', (req, res) => {
         const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
 
         // Find valid token
-        const resetRecord = db.prepare(`
-            SELECT * FROM password_reset_tokens
-            WHERE token = ? AND used = 0 AND expires_at > datetime('now')
-        `).get(tokenHash);
+        const result = await db.query(
+            `SELECT * FROM password_reset_tokens
+             WHERE token = $1 AND used = false AND expires_at > NOW()`,
+            [tokenHash]
+        );
+        const resetRecord = result.rows[0];
 
         if (!resetRecord) {
             return res.status(400).json({ message: 'Invalid or expired reset token' });
@@ -169,10 +180,10 @@ router.post('/reset-password', (req, res) => {
         const salt = bcrypt.genSaltSync(10);
         const passwordHash = bcrypt.hashSync(password, salt);
 
-        db.prepare('UPDATE admin_users SET password_hash = ? WHERE id = ?').run(passwordHash, resetRecord.user_id);
+        await db.query('UPDATE admin_users SET password_hash = $1 WHERE id = $2', [passwordHash, resetRecord.user_id]);
 
         // Mark token as used
-        db.prepare('UPDATE password_reset_tokens SET used = 1 WHERE id = ?').run(resetRecord.id);
+        await db.query('UPDATE password_reset_tokens SET used = true WHERE id = $1', [resetRecord.id]);
 
         res.status(200).json({ message: 'Password reset successfully' });
     } catch (error) {

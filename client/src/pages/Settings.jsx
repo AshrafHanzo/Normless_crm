@@ -3,15 +3,18 @@ import { useApi } from '../App'
 
 export default function Settings() {
   const apiFetch = useApi()
-  const [syncing, setSyncing] = useState(false)
-  const [syncResult, setSyncResult] = useState(null)
   const [lastSync, setLastSync] = useState(null)
   const [connectionStatus, setConnectionStatus] = useState(null)
   const [testing, setTesting] = useState(false)
+  const [syncing, setSyncing] = useState(false)
+  const [syncResult, setSyncResult] = useState(null)
 
   useEffect(() => {
     loadSyncStatus()
     testConnection()
+    // Poll sync status every 5 seconds
+    const interval = setInterval(loadSyncStatus, 5000)
+    return () => clearInterval(interval)
   }, [])
 
   const loadSyncStatus = async () => {
@@ -47,14 +50,14 @@ export default function Settings() {
     <div className="page-enter">
       <div className="page-header">
         <h1>Settings & Sync</h1>
-        <p>Manage your Shopify data sync and CRM settings</p>
+        <p>Shopify data syncs automatically every 30 seconds</p>
       </div>
 
       <div className="grid-2" style={{ marginBottom: '24px' }}>
         {/* Connection Status */}
         <div className="glass-card">
           <h3 style={{ fontSize: '16px', fontWeight: 600, marginBottom: '20px' }}>🔌 Shopify Connection</h3>
-          
+
           {testing ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
               <div className="spinner" style={{ width: '20px', height: '20px' }}></div>
@@ -92,10 +95,10 @@ export default function Settings() {
           </button>
         </div>
 
-        {/* Last Sync */}
+        {/* Last Sync Info */}
         <div className="glass-card">
           <h3 style={{ fontSize: '16px', fontWeight: 600, marginBottom: '20px' }}>📊 Last Sync Info</h3>
-          
+
           {lastSync ? (
             <div style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>
               <div style={{ marginBottom: '8px' }}>
@@ -116,18 +119,37 @@ export default function Settings() {
             </div>
           ) : (
             <div style={{ color: 'var(--text-muted)', fontSize: '14px' }}>
-              No sync has been performed yet. Click the button below to sync your Shopify data.
+              Auto-sync will run soon... First sync in progress!
             </div>
           )}
         </div>
       </div>
 
-      {/* Sync Action */}
-      <div className="glass-card">
-        <h3 style={{ fontSize: '16px', fontWeight: 600, marginBottom: '12px' }}>🔄 Data Sync</h3>
+      {/* Auto-Sync Status - Always Active */}
+      <div className="glass-card" style={{ marginBottom: '24px' }}>
+        <h3 style={{ fontSize: '16px', fontWeight: 600, marginBottom: '12px' }}>⚡ Real-Time Auto-Sync</h3>
         <p style={{ color: 'var(--text-secondary)', fontSize: '14px', marginBottom: '20px' }}>
-          Pull all customers and orders from your Shopify store. This may take a few minutes depending on your data volume.
-          Existing CRM data (notes, tags, interactions) will be preserved.
+          Your Shopify data is automatically synced every 30 seconds. Customers, orders, and inventory are always current - no manual action needed!
+        </p>
+
+        <div style={{
+          padding: '16px', borderRadius: 'var(--radius-md)',
+          background: 'var(--success-bg)', border: '1px solid var(--success)20'
+        }}>
+          <div style={{ fontWeight: 600, color: 'var(--success)', marginBottom: '8px' }}>
+            ✅ Auto-Sync Active
+          </div>
+          <div style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>
+            Syncing every 30 seconds • In background • Always current
+          </div>
+        </div>
+      </div>
+
+      {/* Manual Sync (Optional - for emergency refresh) */}
+      <div className="glass-card">
+        <h3 style={{ fontSize: '16px', fontWeight: 600, marginBottom: '12px' }}>🔄 Manual Refresh (Optional)</h3>
+        <p style={{ color: 'var(--text-secondary)', fontSize: '14px', marginBottom: '20px' }}>
+          Click below to force an immediate sync. Usually not needed since auto-sync is running.
         </p>
 
         {syncResult && (
@@ -152,14 +174,14 @@ export default function Settings() {
           </div>
         )}
 
-        <button className="btn btn-primary" onClick={runSync} disabled={syncing}>
+        <button className="btn btn-secondary" onClick={runSync} disabled={syncing}>
           {syncing ? (
             <>
               <div className="spinner" style={{ width: '18px', height: '18px', borderWidth: '2px' }}></div>
-              Syncing... (this may take a few minutes)
+              Syncing...
             </>
           ) : (
-            '🔄 Sync All Data from Shopify'
+            '🔄 Force Sync Now'
           )}
         </button>
       </div>

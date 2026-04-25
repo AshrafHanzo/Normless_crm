@@ -80,8 +80,8 @@ This means frontend can't reach backend. Let me know!
 **Go to**: https://app.normless.store
 
 **Enter**:
-- Username: `normlessfashion@gmail.com`
-- Password: `hsSeMEiG8MBhSzC`
+- Username: `[YOUR_ADMIN_EMAIL]`
+- Password: `[REDACTED_PASSWORD]`
 
 **Click**: Login
 
@@ -225,12 +225,12 @@ Once logged in, you should see:
 ## 🔐 CREDENTIALS REMINDER
 
 **Admin Login**:
-- Email: `normlessfashion@gmail.com`
-- Password: `hsSeMEiG8MBhSzC`
+- Email: `[YOUR_ADMIN_EMAIL]`
+- Password: `[REDACTED_PASSWORD]`
 
 **Shopify Store**: `uqcyff-my.myshopify.com`
 
-**Gmail Account**: `normlessforgot@gmail.com`
+**Gmail Account**: `[YOUR_GMAIL_ACCOUNT]`
 
 ---
 
