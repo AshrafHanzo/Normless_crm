@@ -5,20 +5,20 @@ const db = require('../db/connection');
 const router = express.Router();
 
 // GET /api/admin/users - List all users (admin only)
-router.get('/users', (req, res) => {
+router.get('/users', async (req, res) => {
   try {
     if (req.user.role !== 'owner' && req.user.role !== 'admin') {
       return res.status(403).json({ error: 'Access denied' });
     }
 
-    const users = db.prepare(`
+    const result = await db.query(`
       SELECT id, username, role, is_active, last_login, login_count, created_at,
              can_view_dashboard, can_view_customers, can_view_orders, can_scan_orders, can_sync_data
       FROM admin_users
       ORDER BY created_at DESC
-    `).all();
+    `);
 
-    res.json(users);
+    res.json(result.rows);
   } catch (err) {
     console.error('Error fetching users:', err);
     res.status(500).json({ error: 'Failed to fetch users' });
@@ -26,7 +26,7 @@ router.get('/users', (req, res) => {
 });
 
 // POST /api/admin/users - Create new user (admin only)
-router.post('/users', (req, res) => {
+router.post('/users', async (req, res) => {
   try {
     if (req.user.role !== 'owner' && req.user.role !== 'admin') {
       return res.status(403).json({ error: 'Access denied' });
@@ -41,19 +41,19 @@ router.post('/users', (req, res) => {
     const salt = bcrypt.genSaltSync(10);
     const hash = bcrypt.hashSync(password, salt);
 
-    db.prepare(`
+    await db.query(`
       INSERT INTO admin_users (
         username, password_hash, role, is_active,
         can_view_dashboard, can_view_customers, can_view_orders, can_scan_orders, can_sync_data
-      ) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?)
-    `).run(
+      ) VALUES ($1, $2, $3, true, $4, $5, $6, $7, $8)
+    `, [
       username, hash, role || 'operator',
-      permissions?.dashboard !== false ? 1 : 0,
-      permissions?.customers !== false ? 1 : 0,
-      permissions?.orders !== false ? 1 : 0,
-      permissions?.scanner !== false ? 1 : 0,
-      permissions?.sync !== false ? 1 : 0
-    );
+      permissions?.dashboard !== false ? true : false,
+      permissions?.customers !== false ? true : false,
+      permissions?.orders !== false ? true : false,
+      permissions?.scanner !== false ? true : false,
+      permissions?.sync !== false ? true : false
+    ]);
 
     res.json({ success: true, message: 'User created' });
   } catch (err) {
@@ -63,7 +63,7 @@ router.post('/users', (req, res) => {
 });
 
 // PUT /api/admin/users/:id - Update user (admin only)
-router.put('/users/:id', (req, res) => {
+router.put('/users/:id', async (req, res) => {
   try {
     if (req.user.role !== 'owner' && req.user.role !== 'admin') {
       return res.status(403).json({ error: 'Access denied' });
@@ -71,27 +71,27 @@ router.put('/users/:id', (req, res) => {
 
     const { role, is_active, permissions } = req.body;
 
-    db.prepare(`
+    await db.query(`
       UPDATE admin_users SET
-        role = COALESCE(?, role),
-        is_active = COALESCE(?, is_active),
-        can_view_dashboard = COALESCE(?, can_view_dashboard),
-        can_view_customers = COALESCE(?, can_view_customers),
-        can_view_orders = COALESCE(?, can_view_orders),
-        can_scan_orders = COALESCE(?, can_scan_orders),
-        can_sync_data = COALESCE(?, can_sync_data),
+        role = COALESCE($1, role),
+        is_active = COALESCE($2, is_active),
+        can_view_dashboard = COALESCE($3, can_view_dashboard),
+        can_view_customers = COALESCE($4, can_view_customers),
+        can_view_orders = COALESCE($5, can_view_orders),
+        can_scan_orders = COALESCE($6, can_scan_orders),
+        can_sync_data = COALESCE($7, can_sync_data),
         updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `).run(
+      WHERE id = $8
+    `, [
       role || null,
-      is_active !== undefined ? (is_active ? 1 : 0) : null,
-      permissions?.dashboard !== undefined ? (permissions.dashboard ? 1 : 0) : null,
-      permissions?.customers !== undefined ? (permissions.customers ? 1 : 0) : null,
-      permissions?.orders !== undefined ? (permissions.orders ? 1 : 0) : null,
-      permissions?.scanner !== undefined ? (permissions.scanner ? 1 : 0) : null,
-      permissions?.sync !== undefined ? (permissions.sync ? 1 : 0) : null,
+      is_active !== undefined ? is_active : null,
+      permissions?.dashboard !== undefined ? permissions.dashboard : null,
+      permissions?.customers !== undefined ? permissions.customers : null,
+      permissions?.orders !== undefined ? permissions.orders : null,
+      permissions?.scanner !== undefined ? permissions.scanner : null,
+      permissions?.sync !== undefined ? permissions.sync : null,
       req.params.id
-    );
+    ]);
 
     res.json({ success: true, message: 'User updated' });
   } catch (err) {
@@ -101,7 +101,7 @@ router.put('/users/:id', (req, res) => {
 });
 
 // DELETE /api/admin/users/:id - Delete user (admin only)
-router.delete('/users/:id', (req, res) => {
+router.delete('/users/:id', async (req, res) => {
   try {
     if (req.user.role !== 'owner' && req.user.role !== 'admin') {
       return res.status(403).json({ error: 'Access denied' });
@@ -111,7 +111,7 @@ router.delete('/users/:id', (req, res) => {
       return res.status(400).json({ error: 'Cannot delete your own account' });
     }
 
-    db.prepare('DELETE FROM admin_users WHERE id = ?').run(req.params.id);
+    await db.query('DELETE FROM admin_users WHERE id = $1', [req.params.id]);
     res.json({ success: true, message: 'User deleted' });
   } catch (err) {
     console.error('Error deleting user:', err);
@@ -120,14 +120,15 @@ router.delete('/users/:id', (req, res) => {
 });
 
 // GET /api/admin/user/:id - Get user permissions
-router.get('/user/:id', (req, res) => {
+router.get('/user/:id', async (req, res) => {
   try {
-    const user = db.prepare(`
+    const result = await db.query(`
       SELECT id, username, role, is_active,
              can_view_dashboard, can_view_customers, can_view_orders, can_scan_orders, can_sync_data
       FROM admin_users
-      WHERE id = ?
-    `).get(req.params.id);
+      WHERE id = $1
+    `, [req.params.id]);
+    const user = result.rows?.[0];
 
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
@@ -141,7 +142,7 @@ router.get('/user/:id', (req, res) => {
 });
 
 // POST /api/admin/change-password - Change own password
-router.post('/change-password', (req, res) => {
+router.post('/change-password', async (req, res) => {
   try {
     const { currentPassword, newPassword } = req.body;
 
@@ -149,7 +150,8 @@ router.post('/change-password', (req, res) => {
       return res.status(400).json({ error: 'Current and new passwords required' });
     }
 
-    const user = db.prepare('SELECT password_hash FROM admin_users WHERE id = ?').get(req.user.id);
+    const result = await db.query('SELECT password_hash FROM admin_users WHERE id = $1', [req.user.id]);
+    const user = result.rows?.[0];
     const validPassword = bcrypt.compareSync(currentPassword, user.password_hash);
 
     if (!validPassword) {
@@ -159,7 +161,7 @@ router.post('/change-password', (req, res) => {
     const salt = bcrypt.genSaltSync(10);
     const hash = bcrypt.hashSync(newPassword, salt);
 
-    db.prepare('UPDATE admin_users SET password_hash = ? WHERE id = ?').run(hash, req.user.id);
+    await db.query('UPDATE admin_users SET password_hash = $1 WHERE id = $2', [hash, req.user.id]);
     res.json({ success: true, message: 'Password changed' });
   } catch (err) {
     console.error('Error changing password:', err);
@@ -168,15 +170,20 @@ router.post('/change-password', (req, res) => {
 });
 
 // GET /api/admin/stats - Admin dashboard stats
-router.get('/stats', (req, res) => {
+router.get('/stats', async (req, res) => {
   try {
     if (req.user.role !== 'owner' && req.user.role !== 'admin') {
       return res.status(403).json({ error: 'Access denied' });
     }
 
-    const totalUsers = db.prepare('SELECT COUNT(*) as count FROM admin_users').get().count;
-    const activeUsers = db.prepare('SELECT COUNT(*) as count FROM admin_users WHERE is_active = 1').get().count;
-    const operators = db.prepare("SELECT COUNT(*) as count FROM admin_users WHERE role = 'operator'").get().count;
+    const totalUsersResult = await db.query('SELECT COUNT(*) as count FROM admin_users');
+    const totalUsers = parseInt(totalUsersResult.rows[0]?.count) || 0;
+
+    const activeUsersResult = await db.query('SELECT COUNT(*) as count FROM admin_users WHERE is_active = true');
+    const activeUsers = parseInt(activeUsersResult.rows[0]?.count) || 0;
+
+    const operatorsResult = await db.query("SELECT COUNT(*) as count FROM admin_users WHERE role = 'operator'");
+    const operators = parseInt(operatorsResult.rows[0]?.count) || 0;
 
     res.json({ totalUsers, activeUsers, operators });
   } catch (err) {

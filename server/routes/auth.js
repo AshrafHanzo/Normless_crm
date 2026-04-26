@@ -75,7 +75,7 @@ router.post('/login', async (req, res) => {
 });
 
 // GET /api/auth/verify
-router.get('/verify', (req, res) => {
+router.get('/verify', async (req, res) => {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
         return res.status(401).json({ valid: false });

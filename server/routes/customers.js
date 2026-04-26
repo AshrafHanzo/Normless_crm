@@ -4,7 +4,7 @@ const db = require('../db/connection');
 const router = express.Router();
 
 // GET /api/customers - List with search, filter, pagination
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
     try {
         const {
             search = '',
@@ -19,21 +19,25 @@ router.get('/', (req, res) => {
         const offset = (parseInt(page) - 1) * parseInt(limit);
         let conditions = [];
         let params = [];
+        let paramCount = 1;
 
         if (search) {
-            conditions.push(`(first_name LIKE ? OR last_name LIKE ? OR email LIKE ? OR phone LIKE ?)`);
+            conditions.push(`(first_name ILIKE $${paramCount} OR last_name ILIKE $${paramCount + 1} OR email ILIKE $${paramCount + 2} OR phone ILIKE $${paramCount + 3})`);
             const s = `%${search}%`;
             params.push(s, s, s, s);
+            paramCount += 4;
         }
 
         if (status) {
-            conditions.push(`crm_status = ?`);
+            conditions.push(`crm_status = $${paramCount}`);
             params.push(status);
+            paramCount += 1;
         }
 
         if (priority) {
-            conditions.push(`crm_priority = ?`);
+            conditions.push(`crm_priority = $${paramCount}`);
             params.push(priority);
+            paramCount += 1;
         }
 
         const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -42,17 +46,17 @@ router.get('/', (req, res) => {
         const sortCol = allowedSorts.includes(sort) ? sort : 'total_spent';
         const sortDir = order.toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
 
-        const countRow = db.prepare(`SELECT COUNT(*) as total FROM customers ${whereClause}`).get(...params);
-        const total = countRow.total;
+        const countResult = await db.query(`SELECT COUNT(*) as total FROM customers ${whereClause}`, params);
+        const total = parseInt(countResult.rows[0]?.total) || 0;
 
-        const customers = db.prepare(`
+        const customers = await db.query(`
             SELECT * FROM customers ${whereClause}
             ORDER BY ${sortCol} ${sortDir}
-            LIMIT ? OFFSET ?
-        `).all(...params, parseInt(limit), offset);
+            LIMIT $${paramCount} OFFSET $${paramCount + 1}
+        `, [...params, parseInt(limit), offset]);
 
         res.json({
-            customers,
+            customers: customers.rows,
             pagination: {
                 total,
                 page: parseInt(page),
@@ -67,13 +71,22 @@ router.get('/', (req, res) => {
 });
 
 // GET /api/customers/stats
-router.get('/stats', (req, res) => {
+router.get('/stats', async (req, res) => {
     try {
-        const totalCustomers = db.prepare('SELECT COUNT(*) as count FROM customers').get().count;
-        const avgSpent = db.prepare('SELECT AVG(total_spent) as avg FROM customers').get().avg || 0;
-        const totalRevenue = db.prepare('SELECT SUM(total_spent) as sum FROM customers').get().sum || 0;
-        const statusBreakdown = db.prepare('SELECT crm_status, COUNT(*) as count FROM customers GROUP BY crm_status').all();
-        const priorityBreakdown = db.prepare('SELECT crm_priority, COUNT(*) as count FROM customers GROUP BY crm_priority').all();
+        const totalCustomersResult = await db.query('SELECT COUNT(*) as count FROM customers');
+        const totalCustomers = parseInt(totalCustomersResult.rows[0]?.count) || 0;
+
+        const avgSpentResult = await db.query('SELECT AVG(total_spent) as avg FROM customers');
+        const avgSpent = parseFloat(avgSpentResult.rows[0]?.avg) || 0;
+
+        const totalRevenueResult = await db.query('SELECT SUM(total_spent) as sum FROM customers');
+        const totalRevenue = parseFloat(totalRevenueResult.rows[0]?.sum) || 0;
+
+        const statusBreakdownResult = await db.query('SELECT crm_status, COUNT(*) as count FROM customers GROUP BY crm_status');
+        const statusBreakdown = statusBreakdownResult.rows;
+
+        const priorityBreakdownResult = await db.query('SELECT crm_priority, COUNT(*) as count FROM customers GROUP BY crm_priority');
+        const priorityBreakdown = priorityBreakdownResult.rows;
 
         res.json({ totalCustomers, avgSpent, totalRevenue, statusBreakdown, priorityBreakdown });
     } catch (err) {
@@ -83,13 +96,17 @@ router.get('/stats', (req, res) => {
 });
 
 // GET /api/customers/:id
-router.get('/:id', (req, res) => {
+router.get('/:id', async (req, res) => {
     try {
-        const customer = db.prepare('SELECT * FROM customers WHERE id = ?').get(req.params.id);
+        const customerResult = await db.query('SELECT * FROM customers WHERE id = $1', [req.params.id]);
+        const customer = customerResult.rows?.[0];
         if (!customer) return res.status(404).json({ error: 'Customer not found' });
 
-        const orders = db.prepare('SELECT * FROM orders WHERE customer_shopify_id = ? ORDER BY created_at DESC').all(customer.shopify_id);
-        const interactions = db.prepare('SELECT * FROM interactions WHERE customer_shopify_id = ? ORDER BY created_at DESC').all(customer.shopify_id);
+        const ordersResult = await db.query('SELECT * FROM orders WHERE customer_shopify_id = $1 ORDER BY created_at DESC', [customer.shopify_id]);
+        const orders = ordersResult.rows;
+
+        const interactionsResult = await db.query('SELECT * FROM interactions WHERE customer_shopify_id = $1 ORDER BY created_at DESC', [customer.shopify_id]);
+        const interactions = interactionsResult.rows;
 
         res.json({ customer, orders, interactions });
     } catch (err) {
@@ -99,22 +116,25 @@ router.get('/:id', (req, res) => {
 });
 
 // PUT /api/customers/:id
-router.put('/:id', (req, res) => {
+router.put('/:id', async (req, res) => {
     try {
         const { crm_status, crm_notes, crm_priority } = req.body;
-        const customer = db.prepare('SELECT * FROM customers WHERE id = ?').get(req.params.id);
+
+        const customerResult = await db.query('SELECT * FROM customers WHERE id = $1', [req.params.id]);
+        const customer = customerResult.rows?.[0];
         if (!customer) return res.status(404).json({ error: 'Customer not found' });
 
-        db.prepare(`
+        await db.query(`
             UPDATE customers SET
-                crm_status = COALESCE(?, crm_status),
-                crm_notes = COALESCE(?, crm_notes),
-                crm_priority = COALESCE(?, crm_priority),
+                crm_status = COALESCE($1, crm_status),
+                crm_notes = COALESCE($2, crm_notes),
+                crm_priority = COALESCE($3, crm_priority),
                 updated_at = CURRENT_TIMESTAMP
-            WHERE id = ?
-        `).run(crm_status || null, crm_notes || null, crm_priority || null, req.params.id);
+            WHERE id = $4
+        `, [crm_status || null, crm_notes || null, crm_priority || null, req.params.id]);
 
-        const updated = db.prepare('SELECT * FROM customers WHERE id = ?').get(req.params.id);
+        const updatedResult = await db.query('SELECT * FROM customers WHERE id = $1', [req.params.id]);
+        const updated = updatedResult.rows?.[0];
         res.json(updated);
     } catch (err) {
         console.error('Error updating customer:', err);

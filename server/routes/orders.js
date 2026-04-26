@@ -4,7 +4,7 @@ const db = require('../db/connection');
 const router = express.Router();
 
 // GET /api/orders - List with filters and pagination
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
     try {
         const {
             search = '',
@@ -19,21 +19,25 @@ router.get('/', (req, res) => {
         const offset = (parseInt(page) - 1) * parseInt(limit);
         let conditions = [];
         let params = [];
+        let paramCount = 1;
 
         if (search) {
-            conditions.push(`(order_number LIKE ? OR customer_shopify_id LIKE ?)`);
+            conditions.push(`(order_number ILIKE $${paramCount} OR customer_shopify_id ILIKE $${paramCount + 1})`);
             const s = `%${search}%`;
             params.push(s, s);
+            paramCount += 2;
         }
 
         if (financial_status) {
-            conditions.push(`financial_status = ?`);
+            conditions.push(`financial_status = $${paramCount}`);
             params.push(financial_status);
+            paramCount += 1;
         }
 
         if (fulfillment_status) {
-            conditions.push(`fulfillment_status = ?`);
+            conditions.push(`fulfillment_status = $${paramCount}`);
             params.push(fulfillment_status);
+            paramCount += 1;
         }
 
         const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -42,20 +46,20 @@ router.get('/', (req, res) => {
         const sortCol = allowedSorts.includes(sort) ? sort : 'created_at';
         const sortDir = order.toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
 
-        const countRow = db.prepare(`SELECT COUNT(*) as total FROM orders ${whereClause}`).get(...params);
-        const total = countRow.total;
+        const countResult = await db.query(`SELECT COUNT(*) as total FROM orders ${whereClause}`, params);
+        const total = parseInt(countResult.rows[0]?.total) || 0;
 
-        const orders = db.prepare(`
+        const ordersResult = await db.query(`
             SELECT o.*, c.first_name, c.last_name, c.email as customer_email
             FROM orders o
             LEFT JOIN customers c ON o.customer_shopify_id = c.shopify_id
             ${whereClause}
             ORDER BY o.${sortCol} ${sortDir}
-            LIMIT ? OFFSET ?
-        `).all(...params, parseInt(limit), offset);
+            LIMIT $${paramCount} OFFSET $${paramCount + 1}
+        `, [...params, parseInt(limit), offset]);
 
         res.json({
-            orders,
+            orders: ordersResult.rows,
             pagination: {
                 total,
                 page: parseInt(page),
@@ -70,31 +74,39 @@ router.get('/', (req, res) => {
 });
 
 // GET /api/orders/stats
-router.get('/stats', (req, res) => {
+router.get('/stats', async (req, res) => {
     try {
-        const totalOrders = db.prepare('SELECT COUNT(*) as count FROM orders').get().count;
-        const totalRevenue = db.prepare('SELECT SUM(total_price) as sum FROM orders').get().sum || 0;
-        const avgOrderValue = db.prepare('SELECT AVG(total_price) as avg FROM orders').get().avg || 0;
+        const totalOrdersResult = await db.query('SELECT COUNT(*) as count FROM orders');
+        const totalOrders = parseInt(totalOrdersResult.rows[0]?.count) || 0;
 
-        const financialBreakdown = db.prepare(
+        const totalRevenueResult = await db.query('SELECT SUM(total_price) as sum FROM orders');
+        const totalRevenue = parseFloat(totalRevenueResult.rows[0]?.sum) || 0;
+
+        const avgOrderValueResult = await db.query('SELECT AVG(total_price) as avg FROM orders');
+        const avgOrderValue = parseFloat(avgOrderValueResult.rows[0]?.avg) || 0;
+
+        const financialBreakdownResult = await db.query(
             'SELECT financial_status, COUNT(*) as count FROM orders GROUP BY financial_status'
-        ).all();
+        );
+        const financialBreakdown = financialBreakdownResult.rows;
 
-        const fulfillmentBreakdown = db.prepare(
+        const fulfillmentBreakdownResult = await db.query(
             'SELECT fulfillment_status, COUNT(*) as count FROM orders GROUP BY fulfillment_status'
-        ).all();
+        );
+        const fulfillmentBreakdown = fulfillmentBreakdownResult.rows;
 
         // Revenue by month (last 6 months)
-        const revenueByMonth = db.prepare(`
+        const revenueByMonthResult = await db.query(`
             SELECT
-                strftime('%Y-%m', created_at) as month,
+                TO_CHAR(created_at, 'YYYY-MM') as month,
                 SUM(total_price) as revenue,
                 COUNT(*) as order_count
             FROM orders
-            WHERE created_at >= date('now', '-6 months')
-            GROUP BY strftime('%Y-%m', created_at)
+            WHERE created_at >= NOW() - INTERVAL '6 months'
+            GROUP BY TO_CHAR(created_at, 'YYYY-MM')
             ORDER BY month ASC
-        `).all();
+        `);
+        const revenueByMonth = revenueByMonthResult.rows;
 
         res.json({ totalOrders, totalRevenue, avgOrderValue, financialBreakdown, fulfillmentBreakdown, revenueByMonth });
     } catch (err) {
@@ -108,24 +120,26 @@ router.get('/lookup/:orderName', async (req, res) => {
     try {
         let name = req.params.orderName;
         console.log(`[Order Lookup Hit] Searching for: "${name}"`);
-        
+
         // Search for exact match first
-        let order = db.prepare(`
+        let orderResult = await db.query(`
             SELECT o.*, c.first_name, c.last_name, c.email as customer_email
             FROM orders o
             LEFT JOIN customers c ON o.customer_shopify_id = c.shopify_id
-            WHERE o.order_number = ?
-        `).get(name);
+            WHERE o.order_number = $1
+        `, [name]);
+        let order = orderResult.rows?.[0];
 
         // If not found, try adding a '#' if it's missing, or vice versa
         if (!order) {
             const altName = name.startsWith('#') ? name.substring(1) : `#${name}`;
-             order = db.prepare(`
+            orderResult = await db.query(`
                 SELECT o.*, c.first_name, c.last_name, c.email as customer_email
                 FROM orders o
                 LEFT JOIN customers c ON o.customer_shopify_id = c.shopify_id
-                WHERE o.order_number = ?
-            `).get(altName);
+                WHERE o.order_number = $1
+            `, [altName]);
+            order = orderResult.rows?.[0];
         }
 
         if (!order) return res.status(404).json({ error: 'Order not found' });
@@ -135,7 +149,7 @@ router.get('/lookup/:orderName', async (req, res) => {
             let lineItems = JSON.parse(order.line_items_json || '[]');
             const token = process.env.SHOPIFY_ACCESS_TOKEN;
             const domain = process.env.SHOPIFY_STORE_DOMAIN;
-            
+
             if (token && domain) {
                 let updated = false;
                 for (let li of lineItems) {
@@ -151,11 +165,11 @@ router.get('/lookup/:orderName', async (req, res) => {
                         }
                     }
                 }
-                
+
                 if (updated) {
                     order.line_items_json = JSON.stringify(lineItems);
                     // Optionally update the DB so we don't have to fetch it again next time
-                    db.prepare('UPDATE orders SET line_items_json = ? WHERE id = ?').run(order.line_items_json, order.id);
+                    await db.query('UPDATE orders SET line_items_json = $1 WHERE id = $2', [order.line_items_json, order.id]);
                 }
             }
         } catch (imgErr) {
@@ -170,14 +184,15 @@ router.get('/lookup/:orderName', async (req, res) => {
 });
 
 // GET /api/orders/:id
-router.get('/:id', (req, res) => {
+router.get('/:id', async (req, res) => {
     try {
-        const order = db.prepare(`
+        const orderResult = await db.query(`
             SELECT o.*, c.first_name, c.last_name, c.email as customer_email
             FROM orders o
             LEFT JOIN customers c ON o.customer_shopify_id = c.shopify_id
-            WHERE o.id = ?
-        `).get(req.params.id);
+            WHERE o.id = $1
+        `, [req.params.id]);
+        const order = orderResult.rows?.[0];
 
         if (!order) return res.status(404).json({ error: 'Order not found' });
 
