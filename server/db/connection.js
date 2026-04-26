@@ -9,18 +9,55 @@ const pool = new Pool({
     }
 });
 
-// Create a synchronous wrapper for compatibility with existing code
+// Create a synchronous-looking wrapper for PostgreSQL
 const db = {
     prepare: (sql) => ({
         get: function(...args) {
-            // This is called synchronously but we need async handling
-            throw new Error('Use db.query() for async queries instead of db.prepare().get()');
+            // Return a promise-like object that can be awaited
+            return Promise.resolve().then(async () => {
+                const client = await pool.connect();
+                try {
+                    // Convert SQLite ? placeholders to PostgreSQL $1, $2, etc
+                    let pgSql = sql;
+                    let paramIndex = 1;
+                    pgSql = pgSql.replace(/\?/g, () => `$${paramIndex++}`);
+
+                    const result = await client.query(pgSql, args);
+                    return result.rows[0] || null;
+                } finally {
+                    client.release();
+                }
+            });
         },
         run: function(...args) {
-            throw new Error('Use db.query() for async queries instead of db.prepare().run()');
+            return Promise.resolve().then(async () => {
+                const client = await pool.connect();
+                try {
+                    let pgSql = sql;
+                    let paramIndex = 1;
+                    pgSql = pgSql.replace(/\?/g, () => `$${paramIndex++}`);
+
+                    const result = await client.query(pgSql, args);
+                    return { changes: result.rowCount, lastID: null };
+                } finally {
+                    client.release();
+                }
+            });
         },
         all: function(...args) {
-            throw new Error('Use db.query() for async queries instead of db.prepare().all()');
+            return Promise.resolve().then(async () => {
+                const client = await pool.connect();
+                try {
+                    let pgSql = sql;
+                    let paramIndex = 1;
+                    pgSql = pgSql.replace(/\?/g, () => `$${paramIndex++}`);
+
+                    const result = await client.query(pgSql, args);
+                    return result.rows;
+                } finally {
+                    client.release();
+                }
+            });
         }
     }),
     query: async (sql, params = []) => {
@@ -33,8 +70,6 @@ const db = {
         }
     },
     querySync: (sql, params = []) => {
-        // For critical startup operations that need sync behavior
-        // This is a workaround - in production, refactor to async
         throw new Error('PostgreSQL requires async operations. Use db.query() instead.');
     },
     pragma: () => { /* No-op for PostgreSQL */ },
