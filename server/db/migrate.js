@@ -2,18 +2,49 @@ const { Pool } = require('pg');
 const Database = require('better-sqlite3');
 const bcrypt = require('bcryptjs');
 const path = require('path');
+const dotenv = require('dotenv');
+
+// Load .env file
+dotenv.config({ path: path.join(__dirname, '..', '..', '.env') });
+
+async function batchInsert(pgClient, table, columns, rows, conflictColumn = null) {
+    if (rows.length === 0) return;
+
+    const batchSize = 100;
+    for (let i = 0; i < rows.length; i += batchSize) {
+        const batch = rows.slice(i, i + batchSize);
+
+        // Build VALUES clause: ($1, $2, ...), ($13, $14, ...)
+        const valuePlaceholders = batch.map((_, idx) => {
+            const start = idx * columns.length + 1;
+            const placeholders = Array.from({ length: columns.length }, (_, j) => `$${start + j}`);
+            return `(${placeholders.join(', ')})`;
+        }).join(', ');
+
+        const params = batch.flat().map(row =>
+            columns.map(col => row[col])
+        ).flat();
+
+        let query = `INSERT INTO ${table} (${columns.join(', ')}) VALUES ${valuePlaceholders}`;
+        if (conflictColumn) {
+            query += ` ON CONFLICT (${conflictColumn}) DO NOTHING`;
+        }
+
+        await pgClient.query(query, params);
+        process.stdout.write(`\r    ✓ Migrated ${Math.min(i + batchSize, rows.length)}/${rows.length}...`);
+    }
+    console.log();
+}
 
 async function migrate() {
     console.log('🚀 Starting migration from SQLite to PostgreSQL...\n');
 
-    // Connect to PostgreSQL
     const pool = new Pool({
         connectionString: process.env.DATABASE_URL,
         ssl: { rejectUnauthorized: false }
     });
 
     try {
-        // Connect to SQLite
         const sqlitePath = path.join(__dirname, 'crm.db');
         const sqliteDb = new Database(sqlitePath);
 
@@ -21,7 +52,6 @@ async function migrate() {
         const pgClient = await pool.connect();
         console.log('✅ Connected to PostgreSQL');
 
-        // Create tables in PostgreSQL
         console.log('\n📋 Creating PostgreSQL tables...');
         await pgClient.query(`
             CREATE TABLE IF NOT EXISTS customers (
@@ -93,70 +123,54 @@ async function migrate() {
         `);
         console.log('✅ Tables created in PostgreSQL');
 
-        // Migrate data from SQLite
         console.log('\n📤 Migrating data from SQLite...');
 
         // Migrate customers
         const customers = sqliteDb.prepare('SELECT * FROM customers').all();
-        console.log(`  • Found ${customers.length} customers`);
-        for (const customer of customers) {
-            await pgClient.query(
-                `INSERT INTO customers (shopify_id, email, first_name, last_name, phone, orders_count, total_spent, tags, crm_status, crm_notes, crm_priority, created_at, updated_at)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-                 ON CONFLICT (shopify_id) DO NOTHING`,
-                [customer.shopify_id, customer.email, customer.first_name, customer.last_name, customer.phone, customer.orders_count, customer.total_spent, customer.tags, customer.crm_status, customer.crm_notes, customer.crm_priority, customer.created_at, customer.updated_at]
-            );
-        }
+        console.log(`  • Migrating ${customers.length} customers`);
+        await batchInsert(pgClient, 'customers',
+            ['shopify_id', 'email', 'first_name', 'last_name', 'phone', 'orders_count', 'total_spent', 'tags', 'crm_status', 'crm_notes', 'crm_priority', 'created_at', 'updated_at'],
+            customers,
+            'shopify_id'
+        );
         console.log(`    ✅ ${customers.length} customers migrated`);
 
         // Migrate orders
         const orders = sqliteDb.prepare('SELECT * FROM orders').all();
-        console.log(`  • Found ${orders.length} orders`);
-        for (const order of orders) {
-            await pgClient.query(
-                `INSERT INTO orders (shopify_id, order_number, customer_shopify_id, total_price, currency, financial_status, fulfillment_status, line_items_json, created_at)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-                 ON CONFLICT (shopify_id) DO NOTHING`,
-                [order.shopify_id, order.order_number, order.customer_shopify_id, order.total_price, order.currency, order.financial_status, order.fulfillment_status, order.line_items_json, order.created_at]
-            );
-        }
+        console.log(`  • Migrating ${orders.length} orders`);
+        await batchInsert(pgClient, 'orders',
+            ['shopify_id', 'order_number', 'customer_shopify_id', 'total_price', 'currency', 'financial_status', 'fulfillment_status', 'line_items_json', 'created_at'],
+            orders,
+            'shopify_id'
+        );
         console.log(`    ✅ ${orders.length} orders migrated`);
 
         // Migrate interactions
         const interactions = sqliteDb.prepare('SELECT * FROM interactions').all();
-        console.log(`  • Found ${interactions.length} interactions`);
-        for (const interaction of interactions) {
-            await pgClient.query(
-                `INSERT INTO interactions (customer_shopify_id, type, content, created_by, created_at)
-                 VALUES ($1, $2, $3, $4, $5)`,
-                [interaction.customer_shopify_id, interaction.type, interaction.content, interaction.created_by, interaction.created_at]
-            );
-        }
+        console.log(`  • Migrating ${interactions.length} interactions`);
+        await batchInsert(pgClient, 'interactions',
+            ['customer_shopify_id', 'type', 'content', 'created_by', 'created_at'],
+            interactions
+        );
         console.log(`    ✅ ${interactions.length} interactions migrated`);
 
         // Migrate admin users
         const adminUsers = sqliteDb.prepare('SELECT * FROM admin_users').all();
-        console.log(`  • Found ${adminUsers.length} admin users`);
-        for (const user of adminUsers) {
-            await pgClient.query(
-                `INSERT INTO admin_users (username, password_hash, created_at)
-                 VALUES ($1, $2, $3)
-                 ON CONFLICT (username) DO NOTHING`,
-                [user.username, user.password_hash, user.created_at]
-            );
-        }
+        console.log(`  • Migrating ${adminUsers.length} admin users`);
+        await batchInsert(pgClient, 'admin_users',
+            ['username', 'password_hash', 'created_at'],
+            adminUsers,
+            'username'
+        );
         console.log(`    ✅ ${adminUsers.length} admin users migrated`);
 
         // Migrate sync logs
         const syncLogs = sqliteDb.prepare('SELECT * FROM sync_logs').all();
-        console.log(`  • Found ${syncLogs.length} sync logs`);
-        for (const log of syncLogs) {
-            await pgClient.query(
-                `INSERT INTO sync_logs (type, status, records_synced, error_message, started_at, completed_at)
-                 VALUES ($1, $2, $3, $4, $5, $6)`,
-                [log.type, log.status, log.records_synced, log.error_message, log.started_at, log.completed_at]
-            );
-        }
+        console.log(`  • Migrating ${syncLogs.length} sync logs`);
+        await batchInsert(pgClient, 'sync_logs',
+            ['type', 'status', 'records_synced', 'error_message', 'started_at', 'completed_at'],
+            syncLogs
+        );
         console.log(`    ✅ ${syncLogs.length} sync logs migrated`);
 
         // Ensure admin user exists
@@ -179,9 +193,11 @@ async function migrate() {
         await pool.end();
 
         console.log('\n✨ Migration completed successfully!');
+        console.log('✅ PostgreSQL is now your primary database!');
         process.exit(0);
     } catch (error) {
-        console.error('\n❌ Migration failed:', error.message);
+        console.error('\n❌ Migration failed:', error.message || error);
+        console.error(error);
         process.exit(1);
     }
 }
