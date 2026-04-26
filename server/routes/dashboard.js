@@ -33,6 +33,27 @@ async function getShopifyOrderCount() {
     return result?.total || 0;
 }
 
+/**
+ * Fetch real order count for a date range from Shopify REST API
+ */
+async function getShopifyFilteredOrderCount(startDate, endDate) {
+    try {
+        const domain = process.env.SHOPIFY_STORE_DOMAIN;
+        const token = process.env.SHOPIFY_ACCESS_TOKEN;
+        if (!domain || !token) return null;
+        
+        const url = `https://${domain}/admin/api/2026-04/orders/count.json?status=any&created_at_min=${startDate}T00:00:00Z&created_at_max=${endDate}T23:59:59Z`;
+        const response = await fetch(url, { headers: { 'X-Shopify-Access-Token': token } });
+        if (response.ok) {
+            const data = await response.json();
+            return data.count;
+        }
+    } catch (err) {
+        console.error('❌ Failed to fetch Shopify filtered count:', err.message);
+    }
+    return null;
+}
+
 // GET /api/dashboard?startDate=2025-06-01&endDate=2026-04-18
 router.get('/', async (req, res) => {
     try {
@@ -50,9 +71,13 @@ router.get('/', async (req, res) => {
 
         if (dateFilter) {
             // With date filter
+            const shopifyCount = await getShopifyFilteredOrderCount(startDate, endDate);
+            
             const countResult = await db.prepare(`SELECT COUNT(*) as count FROM orders ${dateFilter}`).get(...params);
             const revenueResult = await db.prepare(`SELECT COALESCE(SUM(total_price), 0) as sum FROM orders ${dateFilter}`).get(...params);
-            totalOrders = countResult?.count || 0;
+            
+            // Use Shopify API count if available, otherwise fallback to DB
+            totalOrders = shopifyCount !== null ? shopifyCount : (countResult?.count || 0);
             totalRevenue = revenueResult?.sum || 0;
 
             const customerCountResult = await db.prepare(`
