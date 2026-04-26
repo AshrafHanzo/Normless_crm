@@ -15,27 +15,25 @@ async function syncAll() {
         console.log('📥 Fetching customers...');
         const customers = await shopify.fetchAllCustomers();
 
-        const upsertCustomer = db.prepare(`
-            INSERT INTO customers (shopify_id, email, first_name, last_name, phone, orders_count, total_spent, tags, updated_at)
-            VALUES (@shopify_id, @email, @first_name, @last_name, @phone, @orders_count, @total_spent, @tags, @updated_at)
-            ON CONFLICT(shopify_id) DO UPDATE SET
-                email = excluded.email,
-                first_name = excluded.first_name,
-                last_name = excluded.last_name,
-                phone = excluded.phone,
-                orders_count = excluded.orders_count,
-                total_spent = excluded.total_spent,
-                tags = excluded.tags,
-                updated_at = excluded.updated_at
-        `);
+        for (const item of customers) {
+            await db.query(`
+                INSERT INTO customers (shopify_id, email, first_name, last_name, phone, orders_count, total_spent, tags, updated_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                ON CONFLICT(shopify_id) DO UPDATE SET
+                    email = excluded.email,
+                    first_name = excluded.first_name,
+                    last_name = excluded.last_name,
+                    phone = excluded.phone,
+                    orders_count = excluded.orders_count,
+                    total_spent = excluded.total_spent,
+                    tags = excluded.tags,
+                    updated_at = excluded.updated_at
+            `, [
+                item.shopify_id, item.email, item.first_name, item.last_name, item.phone,
+                item.orders_count, item.total_spent, item.tags, item.updated_at
+            ]);
+        }
 
-        const insertManyCustomers = db.transaction((items) => {
-            for (const item of items) {
-                upsertCustomer.run(item);
-            }
-        });
-
-        insertManyCustomers(customers);
         console.log(`✅ Synced ${customers.length} customers`);
         totalSynced += customers.length;
 
@@ -43,35 +41,31 @@ async function syncAll() {
         console.log('📥 Fetching orders...');
         const orders = await shopify.fetchAllOrders();
 
-        const upsertOrder = db.prepare(`
-            INSERT INTO orders (shopify_id, order_number, customer_shopify_id, total_price, currency, financial_status, fulfillment_status, line_items_json, created_at)
-            VALUES (@shopify_id, @order_number, @customer_shopify_id, @total_price, @currency, @financial_status, @fulfillment_status, @line_items_json, @created_at)
-            ON CONFLICT(shopify_id) DO UPDATE SET
-                order_number = excluded.order_number,
-                customer_shopify_id = excluded.customer_shopify_id,
-                total_price = excluded.total_price,
-                currency = excluded.currency,
-                financial_status = excluded.financial_status,
-                fulfillment_status = excluded.fulfillment_status
-                -- We DO NOT overwrite line_items_json here because it might contain 
-                -- dynamically fetched images that the REST API sync doesn't have.
-        `);
+        for (const item of orders) {
+            await db.query(`
+                INSERT INTO orders (shopify_id, order_number, customer_shopify_id, total_price, currency, financial_status, fulfillment_status, line_items_json, created_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                ON CONFLICT(shopify_id) DO UPDATE SET
+                    order_number = excluded.order_number,
+                    customer_shopify_id = excluded.customer_shopify_id,
+                    total_price = excluded.total_price,
+                    currency = excluded.currency,
+                    financial_status = excluded.financial_status,
+                    fulfillment_status = excluded.fulfillment_status
+            `, [
+                item.shopify_id, item.order_number, item.customer_shopify_id, item.total_price, item.currency,
+                item.financial_status, item.fulfillment_status, item.line_items_json, item.created_at
+            ]);
+        }
 
-        const insertManyOrders = db.transaction((items) => {
-            for (const item of items) {
-                upsertOrder.run(item);
-            }
-        });
-
-        insertManyOrders(orders);
         console.log(`✅ Synced ${orders.length} orders`);
         totalSynced += orders.length;
 
         // Log sync
-        db.prepare(`
+        await db.query(`
             INSERT INTO sync_logs (type, status, records_synced, started_at, completed_at)
-            VALUES ('full', 'success', ?, ?, ?)
-        `).run(totalSynced, startedAt, new Date().toISOString());
+            VALUES ('full', 'success', $1, $2, $3)
+        `, [totalSynced, startedAt, new Date().toISOString()]);
 
         console.log(`🎉 Full sync complete! Total records: ${totalSynced}`);
 
@@ -79,10 +73,10 @@ async function syncAll() {
     } catch (error) {
         console.error('❌ Sync failed:', error.message);
 
-        db.prepare(`
+        await db.query(`
             INSERT INTO sync_logs (type, status, records_synced, error_message, started_at, completed_at)
-            VALUES ('full', 'error', ?, ?, ?, ?)
-        `).run(totalSynced, error.message, startedAt, new Date().toISOString());
+            VALUES ('full', 'error', $1, $2, $3, $4)
+        `, [totalSynced, error.message, startedAt, new Date().toISOString()]);
 
         return { success: false, error: error.message };
     }
@@ -92,7 +86,7 @@ async function syncAll() {
  * Get last sync info
  */
 function getLastSync() {
-    return db.prepare('SELECT * FROM sync_logs ORDER BY id DESC LIMIT 1').get() || null;
+    return db.query('SELECT * FROM sync_logs ORDER BY id DESC LIMIT 1').then(res => res.rows[0] || null).catch(() => null);
 }
 
 module.exports = { syncAll, getLastSync };

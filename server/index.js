@@ -37,7 +37,7 @@ app.get('/api/scanner/lookup/:id', authMiddleware, async (req, res) => {
     
     try {
         // Search logic (Try exact, then try with/without #)
-        let order = db.prepare(`
+        let order = await db.prepare(`
             SELECT o.*, c.first_name, c.last_name, c.email as customer_email
             FROM orders o
             LEFT JOIN customers c ON o.customer_shopify_id = c.shopify_id
@@ -46,7 +46,7 @@ app.get('/api/scanner/lookup/:id', authMiddleware, async (req, res) => {
 
         if (!order) {
             const altId = id.startsWith('#') ? id.substring(1) : `#${id}`;
-            order = db.prepare(`
+            order = await db.prepare(`
                 SELECT o.*, c.first_name, c.last_name, c.email as customer_email
                 FROM orders o
                 LEFT JOIN customers c ON o.customer_shopify_id = c.shopify_id
@@ -113,7 +113,7 @@ app.get('/api/scanner/lookup/:id', authMiddleware, async (req, res) => {
                     
                     if (updated) {
                         order.line_items_json = JSON.stringify(lineItems);
-                        db.prepare('UPDATE orders SET line_items_json = ? WHERE id = ?').run(order.line_items_json, order.id);
+                        await db.prepare('UPDATE orders SET line_items_json = ? WHERE id = ?').run(order.line_items_json, order.id);
                         console.log('Saved updated line_items_json to DB');
                     }
                 } else {
