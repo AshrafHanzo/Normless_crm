@@ -19,7 +19,8 @@ app.use(express.json());
 app.use((req, res, next) => {
     const log = `🚀 [HIT] ${req.method} ${req.url} (Path: ${req.path}) at ${new Date().toISOString()}\n`;
     try {
-        fs.appendFileSync('C:\\Users\\abcom\\Desktop\\Personal\\normless_crm\\debug.log', log);
+        const logPath = path.join(__dirname, 'debug.log');
+        fs.appendFileSync(logPath, log);
     } catch (e) {
         console.error('Logging failed:', e.message);
     }
