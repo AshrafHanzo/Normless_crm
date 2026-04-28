@@ -67,7 +67,19 @@ router.post('/login', async (req, res) => {
             { expiresIn: '7d' }
         );
 
-        res.json({ token, user: { id: user.id, username: user.username, role: user.role } });
+        res.json({ 
+            token, 
+            user: { 
+                id: user.id, 
+                username: user.username, 
+                role: user.role,
+                can_view_dashboard: user.can_view_dashboard,
+                can_view_customers: user.can_view_customers,
+                can_view_orders: user.can_view_orders,
+                can_scan_orders: user.can_scan_orders,
+                can_sync_data: user.can_sync_data
+            } 
+        });
     } catch (error) {
         console.error('Login error:', error);
         res.status(500).json({ error: 'Login failed' });
@@ -84,7 +96,28 @@ router.get('/verify', async (req, res) => {
     try {
         const token = authHeader.split(' ')[1];
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
-        res.json({ valid: true, user: { id: decoded.id, username: decoded.username } });
+        
+        // Fetch full user data to get permissions
+        const result = await db.query('SELECT * FROM admin_users WHERE id = $1', [decoded.id]);
+        const user = result.rows[0];
+
+        if (!user) {
+            return res.status(401).json({ valid: false });
+        }
+
+        res.json({ 
+            valid: true, 
+            user: { 
+                id: user.id, 
+                username: user.username, 
+                role: user.role,
+                can_view_dashboard: user.can_view_dashboard,
+                can_view_customers: user.can_view_customers,
+                can_view_orders: user.can_view_orders,
+                can_scan_orders: user.can_scan_orders,
+                can_sync_data: user.can_sync_data
+            } 
+        });
     } catch {
         res.status(401).json({ valid: false });
     }

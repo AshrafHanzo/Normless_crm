@@ -61,9 +61,17 @@ export function useApi() {
   return apiFetch
 }
 
-function ProtectedRoute({ children }) {
-  const { token } = useAuth()
+function ProtectedRoute({ children, permission }) {
+  const { token, user } = useAuth()
   if (!token) return <Navigate to="/login" replace />
+  
+  if (permission && user) {
+    const isOwnerOrAdmin = user.role === 'owner' || user.role === 'admin'
+    if (!isOwnerOrAdmin && !user[permission]) {
+      return <Navigate to="/scan" replace /> // Default fallback for limited users
+    }
+  }
+  
   return children
 }
 
@@ -126,33 +134,36 @@ function App() {
               token ? <Navigate to="/" replace /> : <ResetPassword />
             } />
             <Route path="/" element={
-              <ProtectedRoute>
+              <ProtectedRoute permission="can_view_dashboard">
                 <AppLayout><Dashboard /></AppLayout>
               </ProtectedRoute>
             } />
             <Route path="/customers" element={
-              <ProtectedRoute>
+              <ProtectedRoute permission="can_view_customers">
                 <AppLayout><Customers /></AppLayout>
               </ProtectedRoute>
             } />
             <Route path="/orders" element={
-              <ProtectedRoute>
+              <ProtectedRoute permission="can_view_orders">
                 <AppLayout><Orders /></AppLayout>
               </ProtectedRoute>
             } />
             <Route path="/scan" element={
-              <ProtectedRoute>
+              <ProtectedRoute permission="can_scan_orders">
                 <AppLayout><ScanHub /></AppLayout>
               </ProtectedRoute>
             } />
             <Route path="/settings" element={
-              <ProtectedRoute>
+              <ProtectedRoute permission="can_sync_data">
                 <AppLayout><Settings /></AppLayout>
               </ProtectedRoute>
             } />
             <Route path="/admin" element={
               <ProtectedRoute>
-                <AppLayout><Admin /></AppLayout>
+                {/* Admin page is special, only owner/admin role allowed */}
+                <AppLayout>
+                  {(user?.role === 'owner' || user?.role === 'admin') ? <Admin /> : <Navigate to="/" replace />}
+                </AppLayout>
               </ProtectedRoute>
             } />
             <Route path="/profile" element={

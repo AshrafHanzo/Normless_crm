@@ -38,59 +38,71 @@ export default function Sidebar() {
         <nav className="sidebar-nav">
           <div className="sidebar-section">
             <div className="sidebar-section-label">Main</div>
-            <NavLink
-              to="/"
-              end
-              className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}
-              onClick={handleNavClick}
-            >
-              <span className="link-icon">📊</span>
-              <span>Dashboard</span>
-            </NavLink>
-            <NavLink
-              to="/customers"
-              className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}
-              onClick={handleNavClick}
-            >
-              <span className="link-icon">👥</span>
-              <span>Customers</span>
-            </NavLink>
-            <NavLink
-              to="/orders"
-              className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}
-              onClick={handleNavClick}
-            >
-              <span className="link-icon">📦</span>
-              <span>Orders</span>
-            </NavLink>
-            <NavLink
-              to="/scan"
-              className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}
-              onClick={handleNavClick}
-            >
-              <span className="link-icon">🎯</span>
-              <span>Scan Order</span>
-            </NavLink>
+            {(user?.role === 'owner' || user?.role === 'admin' || user?.can_view_dashboard) && (
+              <NavLink
+                to="/"
+                end
+                className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}
+                onClick={handleNavClick}
+              >
+                <span className="link-icon">📊</span>
+                <span>Dashboard</span>
+              </NavLink>
+            )}
+            {(user?.role === 'owner' || user?.role === 'admin' || user?.can_view_customers) && (
+              <NavLink
+                to="/customers"
+                className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}
+                onClick={handleNavClick}
+              >
+                <span className="link-icon">👥</span>
+                <span>Customers</span>
+              </NavLink>
+            )}
+            {(user?.role === 'owner' || user?.role === 'admin' || user?.can_view_orders) && (
+              <NavLink
+                to="/orders"
+                className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}
+                onClick={handleNavClick}
+              >
+                <span className="link-icon">📦</span>
+                <span>Orders</span>
+              </NavLink>
+            )}
+            {(user?.role === 'owner' || user?.role === 'admin' || user?.can_scan_orders) && (
+              <NavLink
+                to="/scan"
+                className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}
+                onClick={handleNavClick}
+              >
+                <span className="link-icon">🎯</span>
+                <span>Scan Order</span>
+              </NavLink>
+            )}
           </div>
 
           <div className="sidebar-section">
             <div className="sidebar-section-label">System</div>
-            <NavLink
-              to="/settings"
-              className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}
-              onClick={handleNavClick}
-            >
-              <span className="link-icon">⚙️</span>
-              <span>Settings & Sync</span>
-            </NavLink>
-            <NavLink
-              to="/admin"
-              className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}
-              onClick={handleNavClick}
-            >
-              <span className="link-icon">👮</span>
-              <span>Admin</span>
-            </NavLink>
+            {(user?.role === 'owner' || user?.role === 'admin' || user?.can_sync_data) && (
+              <NavLink
+                to="/settings"
+                className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}
+                onClick={handleNavClick}
+              >
+                <span className="link-icon">⚙️</span>
+                <span>Settings & Sync</span>
+              </NavLink>
+            )}
+            {(user?.role === 'owner' || user?.role === 'admin') && (
+              <NavLink
+                to="/admin"
+                className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}
+                onClick={handleNavClick}
+              >
+                <span className="link-icon">👮</span>
+                <span>Admin</span>
+              </NavLink>
+            )}
           </div>
         </nav>
 
@@ -119,7 +131,7 @@ export default function Sidebar() {
             <div className="sidebar-user-avatar">{user?.username?.charAt(0).toUpperCase() || 'A'}</div>
             <div className="sidebar-user-info">
               <div className="sidebar-user-name" onClick={() => { navigate('/profile'); handleNavClick(); }}>{user?.username || 'Admin'}</div>
-              <div className="sidebar-user-role">Administrator</div>
+              <div className="sidebar-user-role">{user?.role?.charAt(0).toUpperCase() + user?.role?.slice(1) || 'Administrator'}</div>
               <div className="sidebar-user-status">● Online</div>
             </div>
             <button className="btn-icon sidebar-logout" onClick={handleLogout} title="Logout">🚪</button>
