@@ -1,47 +1,27 @@
 #!/bin/bash
+# Normless CRM — update/redeploy script (run on the VPS AFTER initial setup).
+# Pulls latest code, installs deps, rebuilds the frontend, reloads PM2.
+set -e
 
-# Normless CRM - Production Deployment Script
-# Run this on your ServerByt server to deploy the app
+cd "$(dirname "$0")"
 
-echo "🚀 Starting Normless CRM Production Deployment..."
+echo "📥 Pulling latest code..."
+git pull origin main
 
-# Step 1: Navigate to app directory
-cd /home/sites/3b/7b3d2b2433
+echo "📦 Installing backend deps..."
+npm install --omit=dev
 
-# Step 2: Pull latest code (if using git)
-# git pull origin main
-
-# Step 3: Install dependencies
-echo "📦 Installing dependencies..."
-npm install --production
-
-# Step 4: Build React frontend
-echo "🔨 Building React frontend..."
+echo "🔨 Building frontend..."
 cd client
 npm install
 npm run build
 cd ..
 
-# Step 5: Setup PM2 if not already installed
-if ! command -v pm2 &> /dev/null; then
-  echo "⚙️  Installing PM2..."
-  npm install -g pm2
-fi
+echo "🗄️  Ensuring DB schema is up to date..."
+node server/db/init-postgres.js
 
-# Step 6: Stop existing process
-echo "🛑 Stopping existing process..."
-pm2 stop normless-crm || true
-
-# Step 7: Start app with PM2
-echo "✅ Starting Normless CRM..."
-pm2 start server/index.js --name "normless-crm" --instances 1
-
-# Step 8: Save PM2 process list
+echo "♻️  Reloading app (zero-downtime)..."
+pm2 reload ecosystem.config.js --update-env || pm2 start ecosystem.config.js
 pm2 save
 
-# Step 9: Tell PM2 to restart on reboot
-pm2 startup
-
-echo "🎉 Deployment complete!"
-echo "📊 View logs: pm2 logs normless-crm"
-echo "⚙️  View status: pm2 status"
+echo "✅ Deploy complete. Logs: pm2 logs normless-crm"

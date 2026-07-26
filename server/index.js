@@ -234,14 +234,24 @@ function startAutoSync() {
 // Initialize database on startup (for PostgreSQL recovery)
 async function ensureAdminUser() {
     try {
-        const result = await db.query('SELECT * FROM admin_users WHERE username = $1', ['normlessfashion@gmail.com']);
+        const username = process.env.ADMIN_USERNAME || 'normlessfashion@gmail.com';
+        const result = await db.query('SELECT id FROM admin_users WHERE username = $1', [username]);
         if (result.rows.length === 0) {
-            console.log('🔄 Admin user missing - reinitializing...');
+            console.log('🔄 Admin user missing - creating owner...');
             const bcrypt = require('bcryptjs');
-            const salt = bcrypt.genSaltSync(10);
-            const hash = bcrypt.hashSync('hsSeMEiG8MBhSzC', salt);
-            await db.query('INSERT INTO admin_users (username, password_hash) VALUES ($1, $2)', ['normlessfashion@gmail.com', hash]);
-            console.log('✅ Admin user restored');
+            const crypto = require('crypto');
+            // Password comes from env; if unset, generate a random one and print it once.
+            const password = process.env.ADMIN_PASSWORD || crypto.randomBytes(9).toString('base64');
+            const hash = bcrypt.hashSync(password, bcrypt.genSaltSync(10));
+            await db.query(
+                `INSERT INTO admin_users (username, password_hash, role, is_active,
+                    can_view_dashboard, can_view_customers, can_view_orders, can_scan_orders, can_sync_data)
+                 VALUES ($1, $2, 'owner', true, true, true, true, true, true)`,
+                [username, hash]
+            );
+            console.log(process.env.ADMIN_PASSWORD
+                ? `✅ Owner admin created: ${username}`
+                : `✅ Owner admin created: ${username} / ${password}  (set ADMIN_PASSWORD in .env to control this)`);
         }
     } catch (error) {
         console.error('Error ensuring admin user:', error);

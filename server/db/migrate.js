@@ -174,16 +174,19 @@ async function migrate() {
         console.log(`    ✅ ${syncLogs.length} sync logs migrated`);
 
         // Ensure admin user exists
-        const existingAdmin = await pgClient.query('SELECT * FROM admin_users WHERE username = $1', ['normlessfashion@gmail.com']);
+        const adminUsername = process.env.ADMIN_USERNAME || 'normlessfashion@gmail.com';
+        const existingAdmin = await pgClient.query('SELECT * FROM admin_users WHERE username = $1', [adminUsername]);
         if (existingAdmin.rows.length === 0) {
             console.log('\n🔐 Creating default admin user...');
+            const crypto = require('crypto');
+            const adminPassword = process.env.ADMIN_PASSWORD || crypto.randomBytes(9).toString('base64');
             const salt = bcrypt.genSaltSync(10);
-            const hash = bcrypt.hashSync('hsSeMEiG8MBhSzC', salt);
+            const hash = bcrypt.hashSync(adminPassword, salt);
             await pgClient.query(
                 'INSERT INTO admin_users (username, password_hash) VALUES ($1, $2)',
-                ['normlessfashion@gmail.com', hash]
+                [adminUsername, hash]
             );
-            console.log('✅ Admin user created: normlessfashion@gmail.com');
+            console.log(`✅ Admin user created: ${adminUsername}${process.env.ADMIN_PASSWORD ? '' : ' / ' + adminPassword}`);
         } else {
             console.log('✅ Admin user already exists');
         }

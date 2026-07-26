@@ -78,16 +78,19 @@ db.exec(`
     );
 `);
 
-// Seed Admin User (normlessfashion@gmail.com / hsSeMEiG8MBhSzC)
-const adminCheck = db.prepare('SELECT * FROM admin_users WHERE username = ?').get('normlessfashion@gmail.com');
+// Seed Admin User (username + password come from ADMIN_USERNAME / ADMIN_PASSWORD env)
+const adminUsername = process.env.ADMIN_USERNAME || 'normlessfashion@gmail.com';
+const adminCheck = db.prepare('SELECT * FROM admin_users WHERE username = ?').get(adminUsername);
 
 if (!adminCheck) {
     console.log('Seeding default admin user...');
+    const crypto = require('crypto');
+    const adminPassword = process.env.ADMIN_PASSWORD || crypto.randomBytes(9).toString('base64');
     const salt = bcrypt.genSaltSync(10);
-    const hash = bcrypt.hashSync('hsSeMEiG8MBhSzC', salt);
+    const hash = bcrypt.hashSync(adminPassword, salt);
 
-    db.prepare('INSERT INTO admin_users (username, password_hash) VALUES (?, ?)').run('normlessfashion@gmail.com', hash);
-    console.log('Admin user created: username: normlessfashion@gmail.com | password: hsSeMEiG8MBhSzC');
+    db.prepare('INSERT INTO admin_users (username, password_hash) VALUES (?, ?)').run(adminUsername, hash);
+    console.log(`Admin user created: ${adminUsername}${process.env.ADMIN_PASSWORD ? '' : ' / ' + adminPassword}`);
 } else {
     console.log('Admin user already exists.');
 }

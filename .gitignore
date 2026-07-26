@@ -1,8 +1,20 @@
 node_modules
 .env
+.env.local
 shopify_token.json
+
+# Local SQLite database + WAL files (contains real customer data — never commit)
 server/crm.db
 server/crm.db-journal
+server/db/crm.db
+server/db/crm.db-shm
+server/db/crm.db-wal
+
+# Logs
+logs/
+debug.log
+server/debug.log
+
 client/dist
 .DS_Store
 scratch_*.js

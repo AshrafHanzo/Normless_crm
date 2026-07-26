@@ -15,7 +15,9 @@ import Profile from './pages/Profile'
 import ForgotPassword from './pages/ForgotPassword'
 import ResetPassword from './pages/ResetPassword'
 
-const API_URL = import.meta.env.DEV ? 'http://localhost:5000' : (import.meta.env.VITE_API_URL || 'https://normless-crm-api.onrender.com')
+// In dev, talk to the local backend. In production the app is served from the
+// same domain as the API (nginx proxies /api), so an empty base = same-origin.
+const API_URL = import.meta.env.DEV ? 'http://localhost:5000' : (import.meta.env.VITE_API_URL || '')
 
 // Auth Context
 const AuthContext = createContext(null)

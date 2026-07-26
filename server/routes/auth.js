@@ -11,27 +11,32 @@ const router = express.Router();
 const transporter = nodemailer.createTransport({
     service: 'gmail',
     auth: {
-        user: process.env.GMAIL_USER || 'normlessforgot@gmail.com',
-        pass: process.env.GMAIL_APP_PASSWORD || 'zxzj ozgu fbho zscu'
+        user: process.env.GMAIL_USER,
+        pass: process.env.GMAIL_APP_PASSWORD
     }
 });
 
 // POST /api/auth/init-db - Reinitialize database (for recovery)
 router.post('/init-db', async (req, res) => {
     try {
-        const result = await db.query('SELECT * FROM admin_users WHERE username = $1', ['normlessfashion@gmail.com']);
-        const adminCheck = result.rows[0];
+        const username = process.env.ADMIN_USERNAME || 'normlessfashion@gmail.com';
+        const result = await db.query('SELECT id FROM admin_users WHERE username = $1', [username]);
 
-        if (!adminCheck) {
-            console.log('🔄 Reinitializing admin user...');
-            const salt = bcrypt.genSaltSync(10);
-            const hash = bcrypt.hashSync('hsSeMEiG8MBhSzC', salt);
-
-            await db.query('INSERT INTO admin_users (username, password_hash) VALUES ($1, $2)', ['normlessfashion@gmail.com', hash]);
-            console.log('✅ Admin user recreated');
-            res.json({ message: 'Admin user recreated successfully', username: 'normlessfashion@gmail.com' });
+        if (!result.rows[0]) {
+            if (!process.env.ADMIN_PASSWORD) {
+                return res.status(400).json({ error: 'ADMIN_PASSWORD is not configured on the server' });
+            }
+            const hash = bcrypt.hashSync(process.env.ADMIN_PASSWORD, bcrypt.genSaltSync(10));
+            await db.query(
+                `INSERT INTO admin_users (username, password_hash, role, is_active,
+                    can_view_dashboard, can_view_customers, can_view_orders, can_scan_orders, can_sync_data)
+                 VALUES ($1, $2, 'owner', true, true, true, true, true, true)`,
+                [username, hash]
+            );
+            console.log('✅ Owner admin created');
+            res.json({ message: 'Admin user created successfully', username });
         } else {
-            res.json({ message: 'Admin user already exists', username: 'normlessfashion@gmail.com' });
+            res.json({ message: 'Admin user already exists', username });
         }
     } catch (error) {
         console.error('Error reinitializing database:', error);
