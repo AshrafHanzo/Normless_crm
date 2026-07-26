@@ -16,11 +16,12 @@ const useSqlite =
 function makePostgres() {
     const { Pool } = require('pg');
 
+    // Local Postgres (same VPS) has no SSL; a managed/remote one needs it.
+    const isLocalDb = /@(localhost|127\.0\.0\.1)[:/]/.test(process.env.DATABASE_URL || '');
+
     const pool = new Pool({
         connectionString: process.env.DATABASE_URL,
-        ssl: {
-            rejectUnauthorized: false
-        }
+        ssl: isLocalDb ? false : { rejectUnauthorized: false }
     });
 
     const toPg = (sql) => {

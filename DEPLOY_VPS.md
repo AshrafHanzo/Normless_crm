@@ -50,9 +50,13 @@ sudo -u postgres psql <<'SQL'
 CREATE USER normless WITH PASSWORD 'PUT_A_STRONG_DB_PASSWORD_HERE';
 CREATE DATABASE normless_crm OWNER normless;
 GRANT ALL PRIVILEGES ON DATABASE normless_crm TO normless;
+\c normless_crm
+GRANT ALL ON SCHEMA public TO normless;
+ALTER SCHEMA public OWNER TO normless;
 SQL
 ```
 Remember that DB password — it goes in `.env`.
+(The `public` schema grant is required on Postgres 15+, or table creation fails.)
 
 ---
 
