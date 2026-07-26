@@ -18,4 +18,8 @@ server/debug.log
 client/dist
 .DS_Store
 scratch_*.js
+scratch_*.txt
 .env.*.example
+
+# Private setup notes (contains secrets — keep local only)
+SERVER_SETUP.md
