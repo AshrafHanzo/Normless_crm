@@ -4,7 +4,7 @@ Single source of truth. Stack: **Node/Express + PostgreSQL + PM2 + nginx + Let's
 
 **Server:** `ssh root@163.128.112.31 -p 2244`
 **Path:** `/root/normless_crm`
-**Domain:** `normless.store`
+**CRM domain:** `ops.normless.store`  (subdomain — the Shopify store stays on `normless.store`)
 **Repo:** `https://github.com/AshrafHanzo/Normless_crm.git`
 
 > The Node app serves BOTH the API and the built React frontend on port 5000.
@@ -12,13 +12,13 @@ Single source of truth. Stack: **Node/Express + PostgreSQL + PM2 + nginx + Let's
 
 ---
 
-## 1. Point the domain at the VPS (GoDaddy — do first, DNS is slow)
+## 1. Point a SUBDOMAIN at the VPS (GoDaddy — do first, DNS is slow)
+⚠️ Do NOT change the `@` record — that's your Shopify store. Add ONE new record:
 | Type | Name | Value | TTL |
 |------|------|-------|-----|
-| A | @ | 163.128.112.31 | 600 |
-| A | www | 163.128.112.31 | 600 |
+| A | ops | 163.128.112.31 | 1 Hour |
 
-Verify later:  `ping normless.store` → should show `163.128.112.31`.
+Verify later:  `ping ops.normless.store` → should show `163.128.112.31`.
 
 ---
 
@@ -78,8 +78,8 @@ SHOPIFY_STORE_DOMAIN=uqcyff-my.myshopify.com
 SHOPIFY_ACCESS_TOKEN=  # NEW token — see "Rotate Shopify token" below
 GMAIL_USER=normlessforgot@gmail.com
 GMAIL_APP_PASSWORD=    # NEW Gmail app password
-FRONTEND_URL=https://normless.store
-CORS_ORIGIN=https://normless.store
+FRONTEND_URL=https://ops.normless.store
+CORS_ORIGIN=https://ops.normless.store
 ADMIN_USERNAME=normlessfashion@gmail.com
 ADMIN_PASSWORD=        # pick a NEW strong login password for the CRM
 ```
@@ -115,26 +115,26 @@ pm2 logs normless-crm                      # watch the first Shopify sync fill t
 
 ## 8. nginx site config (already-installed nginx)
 ```bash
-cp deploy/nginx-normless.conf /etc/nginx/sites-available/normless.store
-ln -sf /etc/nginx/sites-available/normless.store /etc/nginx/sites-enabled/normless.store
-rm -f /etc/nginx/sites-enabled/default
+cp deploy/nginx-normless.conf /etc/nginx/sites-available/ops.normless.store
+ln -sf /etc/nginx/sites-available/ops.normless.store /etc/nginx/sites-enabled/ops.normless.store
 nginx -t
 systemctl reload nginx
 ```
-Visit `http://normless.store` — app should load over HTTP.
+(Leave the default site alone — it may be serving other things on this box.)
+Visit `http://ops.normless.store` — app should load over HTTP.
 
 ---
 
 ## 9. HTTPS (free SSL)
 ```bash
-certbot --nginx -d normless.store -d www.normless.store
+certbot --nginx -d ops.normless.store
 ```
-Pick "redirect HTTP → HTTPS". Auto-renews. Now `https://normless.store` is live. 🎉
+Pick "redirect HTTP → HTTPS". Auto-renews. Now `https://ops.normless.store` is live. 🎉
 
 ---
 
 ## 10. Log in
-- `https://normless.store`
+- `https://ops.normless.store`
 - User: `normlessfashion@gmail.com` (or your `ADMIN_USERNAME`)
 - Pass: whatever you set as `ADMIN_PASSWORD`
 
