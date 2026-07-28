@@ -9,205 +9,182 @@ export default function Dashboard() {
   const [startDate, setStartDate] = useState('')
   const [endDate, setEndDate] = useState('')
 
-  useEffect(() => {
-    loadDashboard('')
-  }, [])
+  useEffect(() => { loadDashboard('') }, [])
 
   const loadDashboard = async (url) => {
-    setLoading(true)
-    setError(null)
+    setLoading(true); setError(null)
     try {
-      const finalUrl = url || '/api/dashboard'
-      const result = await apiFetch(finalUrl)
+      const result = await apiFetch(url || '/api/dashboard')
       setData(result || null)
       if (result?.error) setError(result.error)
-    } catch (err) {
+    } catch {
       setError('Error loading dashboard')
     }
     setLoading(false)
   }
 
   const applyFilter = () => {
-    if (startDate && endDate) {
-      loadDashboard(`/api/dashboard?startDate=${startDate}&endDate=${endDate}`)
-    }
+    if (startDate && endDate) loadDashboard(`/api/dashboard?startDate=${startDate}&endDate=${endDate}`)
   }
+  const clearFilter = () => { setStartDate(''); setEndDate(''); loadDashboard('/api/dashboard') }
 
-  const clearFilter = () => {
-    setStartDate('')
-    setEndDate('')
-    loadDashboard('/api/dashboard')
-  }
-
-  const fmt = (val) => {
-    return new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', minimumFractionDigits: 0 }).format(val || 0)
-  }
-
+  const fmt = (val) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', minimumFractionDigits: 0 }).format(val || 0)
   const shortNum = (val) => {
-    if (val >= 1000000) return (val / 1000000).toFixed(1) + 'M'
-    if (val >= 1000) return (val / 1000).toFixed(1) + 'K'
-    return val.toString()
+    val = Number(val) || 0
+    if (val >= 1e7) return (val / 1e7).toFixed(2) + 'Cr'
+    if (val >= 1e5) return (val / 1e5).toFixed(2) + 'L'
+    if (val >= 1e3) return (val / 1e3).toFixed(1) + 'K'
+    return String(val)
   }
 
-  if (loading) return <div style={{ padding: '40px', color: 'var(--text-muted)', textAlign: 'center' }}>Loading dashboard...</div>
-  if (error) return <div style={{ padding: '40px', background: 'var(--danger-bg)', color: 'var(--danger)', borderRadius: '8px' }}>Error: {error}</div>
-  if (!data?.metrics) return <div style={{ padding: '40px', textAlign: 'center' }}>No data available</div>
+  const statusColor = (name) => {
+    const s = (name || '').toLowerCase()
+    if (s.includes('unfulfilled') || s.includes('pending') || s === 'null') return 'var(--warning)'
+    if (s.includes('partial')) return 'var(--info)'
+    if (s.includes('restock') || s.includes('cancel') || s.includes('refund')) return 'var(--danger)'
+    if (s.includes('fulfilled')) return 'var(--success)'
+    return 'var(--primary)'
+  }
+
+  if (loading) return <div className="loader"><div className="spinner" /><span>Loading dashboard…</span></div>
+  if (error) return <div className="page-enter"><div className="login-error" style={{ maxWidth: 480 }}>Error: {error}</div></div>
+  if (!data?.metrics) return <div className="empty-state"><div className="empty-icon">📊</div><p>No data available yet</p></div>
 
   const m = data.metrics
   const daily = data.dailyRevenue || []
-  const maxRev = daily.length > 0 ? Math.max(...daily.map(d => d.revenue)) : 1
+  const maxRev = daily.length ? Math.max(...daily.map(d => d.revenue), 1) : 1
+  const statuses = data.statusBreakdown || []
+  const statusTotal = statuses.reduce((s, x) => s + Number(x.count), 0) || 1
+
+  const kpis = [
+    { icon: '💰', label: 'Total Revenue', value: fmt(m.totalRevenue), trend: `${fmt(m.revenueThisMonth)} this mo`, cls: 'up' },
+    { icon: '📦', label: 'Total Orders', value: shortNum(m.totalOrders), trend: `+${m.ordersThisMonth} this mo`, cls: 'up' },
+    { icon: '👥', label: 'Total Customers', value: shortNum(m.totalCustomers), trend: `+${m.newCustomersThisMonth} this mo`, cls: 'up' },
+    { icon: '📈', label: 'Avg Order Value', value: fmt(m.avgOrderValue), trend: 'per order', cls: 'neutral' },
+  ]
 
   return (
-    <div>
-      {/* Header */}
-      <div style={{ marginBottom: '28px' }}>
-        <h1 style={{ fontSize: '32px', fontWeight: '700', marginBottom: '8px' }}>Dashboard</h1>
-        <p style={{ color: 'var(--text-muted)', fontSize: '14px' }}>Real-time analytics & insights</p>
+    <div className="page-enter">
+      <div className="dash-toolbar">
+        <div>
+          <h1>Dashboard</h1>
+          <p style={{ color: 'var(--text-muted)' }}>Real-time analytics &amp; insights</p>
+        </div>
+        <div className="date-filter">
+          <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} />
+          <span style={{ color: 'var(--text-muted)' }}>→</span>
+          <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} />
+          <button className="btn btn-primary btn-sm" onClick={applyFilter} disabled={!startDate || !endDate}>Apply</button>
+          {(startDate || endDate) && <button className="btn btn-secondary btn-sm" onClick={clearFilter}>Clear</button>}
+        </div>
       </div>
 
-      {/* Date Filter */}
-      <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: '12px', padding: '20px', marginBottom: '28px', display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
-        <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} style={{ padding: '8px 12px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: '13px' }} />
-        <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} style={{ padding: '8px 12px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: '13px' }} />
-        <button onClick={applyFilter} disabled={!startDate || !endDate} style={{ padding: '8px 20px', background: startDate && endDate ? 'var(--primary)' : 'rgba(99,102,241,0.3)', color: 'white', border: 'none', borderRadius: '6px', fontWeight: '600', cursor: startDate && endDate ? 'pointer' : 'not-allowed' }}>Apply</button>
-        {startDate || endDate ? <button onClick={clearFilter} style={{ padding: '8px 16px', background: 'transparent', color: 'var(--text-secondary)', border: '1px solid var(--border)', borderRadius: '6px', cursor: 'pointer' }}>Clear</button> : null}
-      </div>
-
-      {/* KPI Cards */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '16px', marginBottom: '28px' }}>
-        <div style={{ background: 'var(--bg-secondary)', border: '1px solid rgba(99,102,241,0.3)', borderRadius: '12px', padding: '24px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
-            <span style={{ fontSize: '28px' }}>📦</span>
-            <span style={{ background: 'var(--success-bg)', color: 'var(--success)', padding: '3px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: '600' }}>+{m.ordersThisMonth}</span>
+      {/* KPIs */}
+      <div className="kpi-grid">
+        {kpis.map((k, i) => (
+          <div className="kpi-card" key={i}>
+            <div className="kpi-head">
+              <div className="kpi-icon">{k.icon}</div>
+              <span className={`kpi-trend ${k.cls}`}>{k.trend}</span>
+            </div>
+            <div className="kpi-value">{k.value}</div>
+            <div className="kpi-label">{k.label}</div>
           </div>
-          <div style={{ fontSize: '32px', fontWeight: '700', marginBottom: '4px' }}>{shortNum(m.totalOrders)}</div>
-          <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>Total Orders</div>
-        </div>
-
-        <div style={{ background: 'var(--bg-secondary)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: '12px', padding: '24px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
-            <span style={{ fontSize: '28px' }}>💰</span>
-            <span style={{ background: 'var(--success-bg)', color: 'var(--success)', padding: '3px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: '600' }}>{fmt(m.revenueThisMonth)}</span>
-          </div>
-          <div style={{ fontSize: '28px', fontWeight: '700', marginBottom: '4px' }}>{fmt(m.totalRevenue)}</div>
-          <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>Total Revenue</div>
-        </div>
-
-        <div style={{ background: 'var(--bg-secondary)', border: '1px solid rgba(59,130,246,0.3)', borderRadius: '12px', padding: '24px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
-            <span style={{ fontSize: '28px' }}>👥</span>
-            <span style={{ background: 'var(--success-bg)', color: 'var(--success)', padding: '3px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: '600' }}>+{m.newCustomersThisMonth}</span>
-          </div>
-          <div style={{ fontSize: '32px', fontWeight: '700', marginBottom: '4px' }}>{shortNum(m.totalCustomers)}</div>
-          <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>Total Customers</div>
-        </div>
-
-        <div style={{ background: 'var(--bg-secondary)', border: '1px solid rgba(16,185,129,0.3)', borderRadius: '12px', padding: '24px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
-            <span style={{ fontSize: '28px' }}>📈</span>
-            <span style={{ background: 'var(--info-bg)', color: 'var(--info)', padding: '3px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: '600' }}>Avg</span>
-          </div>
-          <div style={{ fontSize: '28px', fontWeight: '700', marginBottom: '4px' }}>{fmt(m.avgOrderValue)}</div>
-          <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>Avg Order Value</div>
-        </div>
+        ))}
       </div>
 
       {/* Charts */}
-      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '20px', marginBottom: '28px' }}>
-        {/* Revenue Chart */}
-        <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: '12px', padding: '24px' }}>
-          <h3 style={{ marginBottom: '16px' }}>Revenue Trend</h3>
-          {daily.length > 0 ? (
-            <div style={{ display: 'flex', alignItems: 'flex-end', height: '240px', gap: '2px' }}>
-              {daily.map((d, i) => (
-                <div key={i} style={{ flex: 1, height: `${maxRev > 0 ? (d.revenue / maxRev) * 100 : 1}%`, minHeight: '2px', background: 'linear-gradient(to top, #6366f1, #818cf8)', borderRadius: '2px 2px 0 0', cursor: 'pointer' }} title={`${d.date}: ${fmt(d.revenue)}`} onMouseEnter={(e) => e.target.style.opacity = '0.7'} onMouseLeave={(e) => e.target.style.opacity = '1'} />
-              ))}
+      <div className="dash-row charts">
+        <div className="panel">
+          <div className="panel-head">
+            <div>
+              <div className="panel-title">Revenue Trend</div>
+              <div className="panel-sub">{startDate && endDate ? 'Selected range' : 'Last 30 days'}</div>
             </div>
-          ) : (
-            <div style={{ textAlign: 'center', padding: '60px 20px', color: 'var(--text-muted)' }}>No data</div>
-          )}
+          </div>
+          <div className="panel-body">
+            {daily.length ? (
+              <>
+                <div className="chart">
+                  {daily.map((d, i) => (
+                    <div key={i} className="chart-bar"
+                      style={{ height: `${Math.max((d.revenue / maxRev) * 100, 1.5)}%` }}
+                      title={`${d.date} — ${fmt(d.revenue)} (${d.order_count} orders)`} />
+                  ))}
+                </div>
+                <div className="chart-axis">
+                  <span>{daily[0]?.date}</span>
+                  <span>{daily[daily.length - 1]?.date}</span>
+                </div>
+              </>
+            ) : <div className="chart-empty">No revenue data for this range</div>}
+          </div>
         </div>
 
-        {/* Order Status */}
-        <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: '12px', padding: '24px' }}>
-          <h3 style={{ marginBottom: '16px' }}>Order Status</h3>
-          {data.statusBreakdown && data.statusBreakdown.length > 0 ? (
-            <div>
-              {data.statusBreakdown.map((s, i) => {
-                const t = data.statusBreakdown.reduce((sum, x) => sum + x.count, 0)
-                const pct = ((s.count / t) * 100).toFixed(1)
-                const colors = ['#6366f1', '#10b981', '#f59e0b', '#ef4444']
-                return (
-                  <div key={i} style={{ marginBottom: '12px' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', marginBottom: '4px' }}>
-                      <span>{s.fulfillment_status || 'Unknown'}</span>
-                      <span>{pct}%</span>
+        <div className="panel">
+          <div className="panel-head"><div className="panel-title">Order Status</div></div>
+          <div className="panel-body">
+            {statuses.length ? (
+              <div className="status-list">
+                {statuses.map((s, i) => {
+                  const pct = ((Number(s.count) / statusTotal) * 100)
+                  const color = statusColor(s.fulfillment_status)
+                  return (
+                    <div key={i}>
+                      <div className="status-row">
+                        <span className="status-name"><span className="status-dot" style={{ background: color }} />{s.fulfillment_status || 'Unfulfilled'}</span>
+                        <span className="status-count">{s.count} · {pct.toFixed(0)}%</span>
+                      </div>
+                      <div className="status-track"><div className="status-fill" style={{ width: `${pct}%`, background: color }} /></div>
                     </div>
-                    <div style={{ height: '6px', background: 'var(--surface)', borderRadius: '3px', overflow: 'hidden' }}>
-                      <div style={{ height: '100%', width: `${pct}%`, background: colors[i % colors.length], borderRadius: '3px' }} />
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          ) : (
-            <div style={{ color: 'var(--text-muted)' }}>No status data</div>
-          )}
+                  )
+                })}
+              </div>
+            ) : <div className="empty-state" style={{ padding: '30px 0' }}>No status data</div>}
+          </div>
         </div>
       </div>
 
       {/* Tables */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
-        {/* Top Customers */}
-        <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: '12px', overflow: 'hidden' }}>
-          <div style={{ padding: '20px 24px', borderBottom: '1px solid var(--border)' }}>
-            <h3>Top Customers</h3>
-          </div>
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead>
-              <tr style={{ borderBottom: '1px solid var(--border)' }}>
-                <th style={{ padding: '12px 16px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: 'var(--text-muted)' }}>Name</th>
-                <th style={{ padding: '12px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: 'var(--text-muted)' }}>Orders</th>
-                <th style={{ padding: '12px 16px', textAlign: 'right', fontSize: '12px', fontWeight: '600', color: 'var(--text-muted)' }}>Spent</th>
-              </tr>
-            </thead>
+      <div className="dash-row tables">
+        <div className="panel">
+          <div className="panel-head"><div className="panel-title">Top Customers</div><span className="panel-sub">by spend</span></div>
+          <table className="data-table">
+            <thead><tr><th>Customer</th><th style={{ textAlign: 'center' }}>Orders</th><th style={{ textAlign: 'right' }}>Spent</th></tr></thead>
             <tbody>
-              {data.topCustomers && data.topCustomers.slice(0, 8).map((c, i) => (
-                <tr key={c.id} style={{ borderBottom: '1px solid var(--border)', background: i % 2 === 0 ? '' : 'rgba(0,0,0,0.1)' }}>
-                  <td style={{ padding: '12px 16px', fontSize: '13px' }}>{c.first_name} {c.last_name}</td>
-                  <td style={{ padding: '12px 16px', textAlign: 'center', fontSize: '13px', fontWeight: '600' }}>{c.orders_count}</td>
-                  <td style={{ padding: '12px 16px', textAlign: 'right', fontSize: '13px', fontWeight: '600', color: 'var(--success)' }}>{fmt(c.total_spent)}</td>
+              {(data.topCustomers || []).slice(0, 8).map((c) => (
+                <tr key={c.id}>
+                  <td>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <div className="avatar" style={{ width: 30, height: 30, fontSize: 12 }}>{(c.first_name || '?').charAt(0)}</div>
+                      <span>{c.first_name} {c.last_name}</span>
+                    </div>
+                  </td>
+                  <td style={{ textAlign: 'center', fontWeight: 600 }}>{c.orders_count}</td>
+                  <td style={{ textAlign: 'right', fontWeight: 700, color: 'var(--success)' }}>{fmt(c.total_spent)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
 
-        {/* Recent Orders */}
-        <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: '12px', overflow: 'hidden' }}>
-          <div style={{ padding: '20px 24px', borderBottom: '1px solid var(--border)' }}>
-            <h3>Recent Orders</h3>
-          </div>
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead>
-              <tr style={{ borderBottom: '1px solid var(--border)' }}>
-                <th style={{ padding: '12px 16px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: 'var(--text-muted)' }}>Order</th>
-                <th style={{ padding: '12px 16px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: 'var(--text-muted)' }}>Status</th>
-                <th style={{ padding: '12px 16px', textAlign: 'right', fontSize: '12px', fontWeight: '600', color: 'var(--text-muted)' }}>Amount</th>
-              </tr>
-            </thead>
+        <div className="panel">
+          <div className="panel-head"><div className="panel-title">Recent Orders</div><span className="panel-sub">latest 8</span></div>
+          <table className="data-table">
+            <thead><tr><th>Order</th><th style={{ textAlign: 'center' }}>Status</th><th style={{ textAlign: 'right' }}>Amount</th></tr></thead>
             <tbody>
-              {data.recentOrders && data.recentOrders.slice(0, 8).map((o, i) => (
-                <tr key={o.id} style={{ borderBottom: '1px solid var(--border)', background: i % 2 === 0 ? '' : 'rgba(0,0,0,0.1)' }}>
-                  <td style={{ padding: '12px 16px', fontSize: '13px', fontWeight: '600' }}>{o.order_number}</td>
-                  <td style={{ padding: '12px 16px', textAlign: 'center' }}>
-                    <span style={{ background: o.fulfillment_status?.toLowerCase().includes('fulfilled') ? 'var(--success-bg)' : 'var(--warning-bg)', color: o.fulfillment_status?.toLowerCase().includes('fulfilled') ? 'var(--success)' : 'var(--warning)', padding: '2px 8px', borderRadius: '3px', fontSize: '11px', fontWeight: '600' }}>
-                      {o.fulfillment_status || 'Pending'}
-                    </span>
-                  </td>
-                  <td style={{ padding: '12px 16px', textAlign: 'right', fontSize: '13px', fontWeight: '600' }}>{fmt(o.total_price)}</td>
-                </tr>
-              ))}
+              {(data.recentOrders || []).slice(0, 8).map((o) => {
+                const fulfilled = o.fulfillment_status?.toLowerCase().includes('fulfilled') && !o.fulfillment_status?.toLowerCase().includes('un')
+                return (
+                  <tr key={o.id}>
+                    <td style={{ fontWeight: 700 }}>{o.order_number}</td>
+                    <td style={{ textAlign: 'center' }}>
+                      <span className={`status-badge ${fulfilled ? 'fulfilled' : 'pending'}`}>{o.fulfillment_status || 'Pending'}</span>
+                    </td>
+                    <td style={{ textAlign: 'right', fontWeight: 700 }}>{fmt(o.total_price)}</td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         </div>

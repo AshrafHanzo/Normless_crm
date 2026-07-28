@@ -15,9 +15,12 @@ import Profile from './pages/Profile'
 import ForgotPassword from './pages/ForgotPassword'
 import ResetPassword from './pages/ResetPassword'
 
-// In dev, talk to the local backend. In production the app is served from the
-// same domain as the API (nginx proxies /api), so an empty base = same-origin.
-const API_URL = import.meta.env.DEV ? 'http://localhost:5000' : (import.meta.env.VITE_API_URL || '')
+// API base. In dev, VITE_API_URL (from .env.local) can point at production so
+// local preview uses the SAME Postgres; falls back to the local backend.
+// In production the app is same-origin (nginx proxies /api).
+const API_URL = import.meta.env.DEV
+  ? (import.meta.env.VITE_API_URL || 'http://localhost:5000')
+  : (import.meta.env.VITE_API_URL || '')
 
 // Auth Context
 const AuthContext = createContext(null)
