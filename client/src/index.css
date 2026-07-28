@@ -300,6 +300,17 @@ select { cursor: pointer; appearance: none;
 
 .form-row { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
 
+/* Password field with show/hide eye toggle */
+.password-wrap { position: relative; }
+.password-wrap input { padding-right: 44px; }
+.password-toggle {
+  position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+  width: 32px; height: 32px; border: none; background: transparent;
+  color: var(--text-muted); cursor: pointer; display: grid; place-items: center;
+  border-radius: 8px; transition: all 0.15s ease;
+}
+.password-toggle:hover { color: var(--text-primary); background: var(--surface-hover); }
+
 .filters-row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 22px; }
 .search-bar { position: relative; flex: 1; min-width: 220px; }
 .search-bar input { padding-left: 42px; }

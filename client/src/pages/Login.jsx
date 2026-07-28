@@ -2,10 +2,26 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../App'
 
+function EyeIcon({ off }) {
+  return off ? (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c6.5 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68" />
+      <path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3.5 7 10 7a9.74 9.74 0 0 0 5.39-1.61" />
+      <line x1="2" y1="2" x2="22" y2="22" />
+    </svg>
+  ) : (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  )
+}
+
 export default function Login() {
   const { login, API_URL } = useAuth()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
@@ -37,9 +53,9 @@ export default function Login() {
 
   return (
     <div className="login-page">
-      <div className="login-card">
+      <div className="login-card page-enter">
         <div className="login-logo">N</div>
-        <h1>Welcome Back</h1>
+        <h1>Welcome back</h1>
         <p>Sign in to your Normless CRM dashboard</p>
 
         {error && <div className="login-error">{error}</div>}
@@ -51,7 +67,7 @@ export default function Login() {
               type="text"
               value={username}
               onChange={e => setUsername(e.target.value)}
-              placeholder="Enter username"
+              placeholder="Enter your username"
               required
               autoFocus
             />
@@ -59,18 +75,29 @@ export default function Login() {
 
           <div className="input-group">
             <label>Password</label>
-            <input
-              type="password"
-              value={password}
-              onChange={e => setPassword(e.target.value)}
-              placeholder="Enter password"
-              required
-            />
-            <Link to="/forgot-password" style={{ fontSize: '12px', color: 'var(--primary)', textDecoration: 'none', marginTop: '6px', display: 'block' }}>Forgot password?</Link>
+            <div className="password-wrap">
+              <input
+                type={showPassword ? 'text' : 'password'}
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+                placeholder="Enter your password"
+                required
+              />
+              <button
+                type="button"
+                className="password-toggle"
+                onClick={() => setShowPassword(v => !v)}
+                title={showPassword ? 'Hide password' : 'Show password'}
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+              >
+                <EyeIcon off={showPassword} />
+              </button>
+            </div>
+            <Link to="/forgot-password" style={{ fontSize: '12px', color: 'var(--primary-light)', marginTop: '8px', display: 'inline-block' }}>Forgot password?</Link>
           </div>
 
           <button type="submit" className="btn btn-primary" disabled={loading}>
-            {loading ? 'Signing in...' : 'Sign In'}
+            {loading ? 'Signing in…' : 'Sign In'}
           </button>
         </form>
       </div>
