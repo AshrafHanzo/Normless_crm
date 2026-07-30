@@ -1,9 +1,10 @@
 import { useState, useEffect, createContext, useContext } from 'react'
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import './index.css'
 
 import { ThemeProvider } from './components/ThemeProvider'
 import Sidebar from './components/Sidebar'
+import ErrorBoundary from './components/ErrorBoundary'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import Customers from './pages/Customers'
@@ -58,10 +59,13 @@ function ProtectedRoute({ children, permission }) {
 
 function AppLayout({ children }) {
   const { brand } = useAuth()
+  const location = useLocation()
   return (
     <div className={`app-layout brand-${brand}`}>
       <Sidebar />
-      <main className="main-content">{children}</main>
+      <main className="main-content">
+        <ErrorBoundary key={location.pathname}>{children}</ErrorBoundary>
+      </main>
     </div>
   )
 }

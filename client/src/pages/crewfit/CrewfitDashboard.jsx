@@ -32,7 +32,7 @@ export default function CrewfitDashboard() {
 
   if (loading) return <div className="loader"><div className="spinner" /><span>Loading follow-ups…</span></div>
 
-  const kpis = stats ? [
+  const kpis = (stats && typeof stats.total === 'number') ? [
     { icon: '📦', label: 'Total Orders', value: stats.total, tone: 'primary' },
     { icon: '🔄', label: 'Active (in pipeline)', value: stats.active, tone: 'info' },
     { icon: '✅', label: 'Dispatched', value: stats.dispatched, tone: 'success' },

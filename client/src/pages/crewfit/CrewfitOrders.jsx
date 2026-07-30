@@ -22,7 +22,7 @@ export default function CrewfitOrders() {
   const [filters, setFilters] = useState({ search: '', status: '', payment_status: '', so: '', vendor: '' })
   const [active, setActive] = useState(null) // drawer order
 
-  useEffect(() => { apiFetch('/api/crewfit/meta').then(setMeta) }, [])
+  useEffect(() => { apiFetch('/api/crewfit/meta').then(m => setMeta(m && m.statuses ? m : null)) }, [])
   useEffect(() => { load() }, [filters])
 
   const load = async () => {
@@ -42,12 +42,15 @@ export default function CrewfitOrders() {
     await apiFetch(`/api/crewfit/orders/${id}`, { method: 'PUT', body: JSON.stringify(patch) })
   }
 
-  const Select = ({ o, field, options, cls }) => (
-    <select className={`inline-select ${cls ? 'sb-' + cls(o[field]) : ''}`} value={o[field] || ''} onClick={e => e.stopPropagation()} onChange={e => update(o.id, { [field]: e.target.value })}>
-      {(o[field] && !options.includes(o[field])) && <option value={o[field]}>{o[field]}</option>}
-      {options.map(v => <option key={v} value={v}>{v}</option>)}
-    </select>
-  )
+  const Select = ({ o, field, options, cls }) => {
+    const opts = options || []
+    return (
+      <select className={`inline-select ${cls ? 'sb-' + cls(o[field]) : ''}`} value={o[field] || ''} onClick={e => e.stopPropagation()} onChange={e => update(o.id, { [field]: e.target.value })}>
+        {(o[field] && !opts.includes(o[field])) && <option value={o[field]}>{o[field]}</option>}
+        {opts.map(v => <option key={v} value={v}>{v}</option>)}
+      </select>
+    )
+  }
 
   return (
     <div className="page-enter">
@@ -62,16 +65,16 @@ export default function CrewfitOrders() {
           <input placeholder="Search customer, phone, order #…" value={filters.search} onChange={e => setFilters(f => ({ ...f, search: e.target.value }))} />
         </div>
         <select value={filters.status} onChange={e => setFilters(f => ({ ...f, status: e.target.value }))} style={{ width: 'auto' }}>
-          <option value="">All statuses</option>{meta?.statuses.map(s => <option key={s}>{s}</option>)}
+          <option value="">All statuses</option>{(meta?.statuses || []).map(s => <option key={s}>{s}</option>)}
         </select>
         <select value={filters.payment_status} onChange={e => setFilters(f => ({ ...f, payment_status: e.target.value }))} style={{ width: 'auto' }}>
-          <option value="">All payments</option>{meta?.payments.map(s => <option key={s}>{s}</option>)}
+          <option value="">All payments</option>{(meta?.payments || []).map(s => <option key={s}>{s}</option>)}
         </select>
         <select value={filters.so} onChange={e => setFilters(f => ({ ...f, so: e.target.value }))} style={{ width: 'auto' }}>
-          <option value="">All SO</option>{meta?.sos.map(s => <option key={s}>{s}</option>)}
+          <option value="">All SO</option>{(meta?.sos || []).map(s => <option key={s}>{s}</option>)}
         </select>
         <select value={filters.vendor} onChange={e => setFilters(f => ({ ...f, vendor: e.target.value }))} style={{ width: 'auto' }}>
-          <option value="">All vendors</option>{meta?.vendors.map(s => <option key={s}>{s}</option>)}
+          <option value="">All vendors</option>{(meta?.vendors || []).map(s => <option key={s}>{s}</option>)}
         </select>
       </div>
 
