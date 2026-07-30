@@ -14,79 +14,54 @@ import Admin from './pages/Admin'
 import Profile from './pages/Profile'
 import ForgotPassword from './pages/ForgotPassword'
 import ResetPassword from './pages/ResetPassword'
+import CrewfitDashboard from './pages/crewfit/CrewfitDashboard'
+import CrewfitOrders from './pages/crewfit/CrewfitOrders'
 
-// API base. In dev, VITE_API_URL (from .env.local) can point at production so
-// local preview uses the SAME Postgres; falls back to the local backend.
-// In production the app is same-origin (nginx proxies /api).
+// API base. In dev, VITE_API_URL (from .env.development.local) points at the
+// production backend + Postgres so previews use the real database.
 const API_URL = import.meta.env.DEV
   ? (import.meta.env.VITE_API_URL || 'http://localhost:5000')
   : (import.meta.env.VITE_API_URL || '')
 
-// Auth Context
 const AuthContext = createContext(null)
-
-export function useAuth() {
-  return useContext(AuthContext)
-}
+export function useAuth() { return useContext(AuthContext) }
 
 export function useApi() {
   const { token } = useAuth()
-  
   const apiFetch = async (endpoint, options = {}) => {
     const res = await fetch(`${API_URL}${endpoint}`, {
       ...options,
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-        ...options.headers,
-      },
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}`, ...options.headers },
     })
-    if (res.status === 401) {
-      localStorage.removeItem('crm_token')
-      window.location.reload()
-      return null
+    if (res.status === 401) { localStorage.removeItem('crm_token'); window.location.reload(); return null }
+    const ct = res.headers.get('content-type')
+    if (ct && ct.includes('application/json')) {
+      const data = await res.json()
+      if (!res.ok) return { error: data.error || 'Request failed', status: res.status }
+      return data
     }
-
-    const contentType = res.headers.get('content-type')
-    if (contentType && contentType.includes('application/json')) {
-        const data = await res.json()
-        if (!res.ok) {
-            return { error: data.error || 'Request failed', status: res.status }
-        }
-        return data
-    }
-
-    // Fallback for non-JSON errors (like HTML 404s)
-    if (!res.ok) {
-        return { error: `Server Error (${res.status})`, status: res.status }
-    }
+    if (!res.ok) return { error: `Server Error (${res.status})`, status: res.status }
     return null
   }
-
   return apiFetch
 }
 
 function ProtectedRoute({ children, permission }) {
   const { token, user } = useAuth()
   if (!token) return <Navigate to="/login" replace />
-  
   if (permission && user) {
     const isOwnerOrAdmin = user.role === 'owner' || user.role === 'admin'
-    if (!isOwnerOrAdmin && !user[permission]) {
-      return <Navigate to="/scan" replace /> // Default fallback for limited users
-    }
+    if (!isOwnerOrAdmin && !user[permission]) return <Navigate to="/scan" replace />
   }
-  
   return children
 }
 
 function AppLayout({ children }) {
+  const { brand } = useAuth()
   return (
-    <div className="app-layout">
+    <div className={`app-layout brand-${brand}`}>
       <Sidebar />
-      <main className="main-content">
-        {children}
-      </main>
+      <main className="main-content">{children}</main>
     </div>
   )
 }
@@ -94,88 +69,45 @@ function AppLayout({ children }) {
 function App() {
   const [token, setToken] = useState(localStorage.getItem('crm_token'))
   const [user, setUser] = useState(null)
+  const [brand, setBrandState] = useState(localStorage.getItem('crm_brand') || 'normless')
+
+  const setBrand = (b) => { localStorage.setItem('crm_brand', b); setBrandState(b) }
 
   useEffect(() => {
     if (token) {
-      fetch(`${API_URL}/api/auth/verify`, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      })
+      fetch(`${API_URL}/api/auth/verify`, { headers: { 'Authorization': `Bearer ${token}` } })
         .then(r => r.json())
-        .then(data => {
-          if (data.valid) {
-            setUser(data.user)
-          } else {
-            logout()
-          }
-        })
+        .then(data => { data.valid ? setUser(data.user) : logout() })
         .catch(() => logout())
     }
   }, [token])
 
-  const login = (newToken, userData) => {
-    localStorage.setItem('crm_token', newToken)
-    setToken(newToken)
-    setUser(userData)
-  }
+  const login = (newToken, userData) => { localStorage.setItem('crm_token', newToken); setToken(newToken); setUser(userData) }
+  const logout = () => { localStorage.removeItem('crm_token'); setToken(null); setUser(null) }
 
-  const logout = () => {
-    localStorage.removeItem('crm_token')
-    setToken(null)
-    setUser(null)
-  }
+  const homeFor = (b) => (b === 'crewfit' ? '/crewfit' : '/')
 
   return (
     <ThemeProvider>
-      <AuthContext.Provider value={{ token, user, login, logout, API_URL }}>
+      <AuthContext.Provider value={{ token, user, login, logout, API_URL, brand, setBrand }}>
         <BrowserRouter>
           <Routes>
-            <Route path="/login" element={
-              token ? <Navigate to="/" replace /> : <Login />
-            } />
-            <Route path="/forgot-password" element={
-              token ? <Navigate to="/" replace /> : <ForgotPassword />
-            } />
-            <Route path="/reset-password" element={
-              token ? <Navigate to="/" replace /> : <ResetPassword />
-            } />
-            <Route path="/" element={
-              <ProtectedRoute permission="can_view_dashboard">
-                <AppLayout><Dashboard /></AppLayout>
-              </ProtectedRoute>
-            } />
-            <Route path="/customers" element={
-              <ProtectedRoute permission="can_view_customers">
-                <AppLayout><Customers /></AppLayout>
-              </ProtectedRoute>
-            } />
-            <Route path="/orders" element={
-              <ProtectedRoute permission="can_view_orders">
-                <AppLayout><Orders /></AppLayout>
-              </ProtectedRoute>
-            } />
-            <Route path="/scan" element={
-              <ProtectedRoute permission="can_scan_orders">
-                <AppLayout><ScanHub /></AppLayout>
-              </ProtectedRoute>
-            } />
-            <Route path="/settings" element={
-              <ProtectedRoute permission="can_sync_data">
-                <AppLayout><Settings /></AppLayout>
-              </ProtectedRoute>
-            } />
-            <Route path="/admin" element={
-              <ProtectedRoute>
-                {/* Admin page is special, only owner/admin role allowed */}
-                <AppLayout>
-                  {(user?.role === 'owner' || user?.role === 'admin') ? <Admin /> : <Navigate to="/" replace />}
-                </AppLayout>
-              </ProtectedRoute>
-            } />
-            <Route path="/profile" element={
-              <ProtectedRoute>
-                <AppLayout><Profile /></AppLayout>
-              </ProtectedRoute>
-            } />
+            <Route path="/login" element={token ? <Navigate to={homeFor(brand)} replace /> : <Login />} />
+            <Route path="/forgot-password" element={token ? <Navigate to={homeFor(brand)} replace /> : <ForgotPassword />} />
+            <Route path="/reset-password" element={token ? <Navigate to={homeFor(brand)} replace /> : <ResetPassword />} />
+
+            {/* Normless CRM */}
+            <Route path="/" element={<ProtectedRoute permission="can_view_dashboard"><AppLayout><Dashboard /></AppLayout></ProtectedRoute>} />
+            <Route path="/customers" element={<ProtectedRoute permission="can_view_customers"><AppLayout><Customers /></AppLayout></ProtectedRoute>} />
+            <Route path="/orders" element={<ProtectedRoute permission="can_view_orders"><AppLayout><Orders /></AppLayout></ProtectedRoute>} />
+            <Route path="/scan" element={<ProtectedRoute permission="can_scan_orders"><AppLayout><ScanHub /></AppLayout></ProtectedRoute>} />
+            <Route path="/settings" element={<ProtectedRoute permission="can_sync_data"><AppLayout><Settings /></AppLayout></ProtectedRoute>} />
+            <Route path="/admin" element={<ProtectedRoute><AppLayout>{(user?.role === 'owner' || user?.role === 'admin') ? <Admin /> : <Navigate to="/" replace />}</AppLayout></ProtectedRoute>} />
+            <Route path="/profile" element={<ProtectedRoute><AppLayout><Profile /></AppLayout></ProtectedRoute>} />
+
+            {/* Crewfit CRM */}
+            <Route path="/crewfit" element={<ProtectedRoute><AppLayout><CrewfitDashboard /></AppLayout></ProtectedRoute>} />
+            <Route path="/crewfit/orders" element={<ProtectedRoute><AppLayout><CrewfitOrders /></AppLayout></ProtectedRoute>} />
           </Routes>
         </BrowserRouter>
       </AuthContext.Provider>

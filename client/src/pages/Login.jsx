@@ -17,29 +17,34 @@ function EyeIcon({ off }) {
   )
 }
 
+const BRANDS = {
+  normless: { name: 'Normless', tag: 'Shopify retail CRM', logo: 'N' },
+  crewfit: { name: 'Crewfit', tag: 'Bulk-order CRM', logo: 'C' },
+}
+
 export default function Login() {
-  const { login, API_URL } = useAuth()
+  const { login, API_URL, brand, setBrand } = useAuth()
+  const [selected, setSelected] = useState(brand || 'normless')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
+  const b = BRANDS[selected]
+
   const handleSubmit = async (e) => {
     e.preventDefault()
-    setError('')
-    setLoading(true)
-
+    setError(''); setLoading(true)
     try {
       const res = await fetch(`${API_URL}/api/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password }),
       })
-
       const data = await res.json()
-
       if (res.ok) {
+        setBrand(selected)          // pick which CRM to open
         login(data.token, data.user)
       } else {
         setError(data.error || 'Login failed')
@@ -52,44 +57,34 @@ export default function Login() {
   }
 
   return (
-    <div className="login-page">
+    <div className={`login-page brand-${selected}`}>
       <div className="login-card page-enter">
-        <div className="login-logo">N</div>
+        {/* Brand toggle */}
+        <div className="brand-toggle">
+          {Object.entries(BRANDS).map(([key, val]) => (
+            <button key={key} type="button" className={selected === key ? 'active' : ''} onClick={() => setSelected(key)}>
+              {val.name}
+            </button>
+          ))}
+        </div>
+
+        <div className={`login-logo brand-logo-${selected}`}>{b.logo}</div>
         <h1>Welcome back</h1>
-        <p>Sign in to your Normless CRM dashboard</p>
+        <p>Sign in to your <strong>{b.name}</strong> CRM — {b.tag}</p>
 
         {error && <div className="login-error">{error}</div>}
 
         <form onSubmit={handleSubmit}>
           <div className="input-group">
             <label>Username</label>
-            <input
-              type="text"
-              value={username}
-              onChange={e => setUsername(e.target.value)}
-              placeholder="Enter your username"
-              required
-              autoFocus
-            />
+            <input type="text" value={username} onChange={e => setUsername(e.target.value)} placeholder="Enter your username" required autoFocus />
           </div>
 
           <div className="input-group">
             <label>Password</label>
             <div className="password-wrap">
-              <input
-                type={showPassword ? 'text' : 'password'}
-                value={password}
-                onChange={e => setPassword(e.target.value)}
-                placeholder="Enter your password"
-                required
-              />
-              <button
-                type="button"
-                className="password-toggle"
-                onClick={() => setShowPassword(v => !v)}
-                title={showPassword ? 'Hide password' : 'Show password'}
-                aria-label={showPassword ? 'Hide password' : 'Show password'}
-              >
+              <input type={showPassword ? 'text' : 'password'} value={password} onChange={e => setPassword(e.target.value)} placeholder="Enter your password" required />
+              <button type="button" className="password-toggle" onClick={() => setShowPassword(v => !v)} title={showPassword ? 'Hide password' : 'Show password'} aria-label="Toggle password visibility">
                 <EyeIcon off={showPassword} />
               </button>
             </div>
@@ -97,7 +92,7 @@ export default function Login() {
           </div>
 
           <button type="submit" className="btn btn-primary" disabled={loading}>
-            {loading ? 'Signing in…' : 'Sign In'}
+            {loading ? 'Signing in…' : `Sign in to ${b.name}`}
           </button>
         </form>
       </div>

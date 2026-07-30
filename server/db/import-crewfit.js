@@ -185,9 +185,9 @@ function mapRow(h, r) {
     };
 }
 
-const DDL = `
+const buildDDL = (useSqlite) => `
 CREATE TABLE IF NOT EXISTS crewfit_orders (
-    id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+    id ${useSqlite ? 'INTEGER PRIMARY KEY AUTOINCREMENT' : 'INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY'},
     sl_no INTEGER UNIQUE,
     order_date DATE,
     customer_name TEXT,
@@ -250,30 +250,25 @@ async function main() {
 
     if (DRY) { console.log('\n[dry-run] No database changes.'); return; }
 
-    const { Pool } = require('pg');
-    const isLocal = /@(localhost|127\.0\.0\.1)[:/]/.test(process.env.DATABASE_URL || '');
-    const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: isLocal ? false : { rejectUnauthorized: false } });
-    const client = await pool.connect();
-    try {
-        await client.query(DDL);
-        const cols = ['sl_no','order_date','customer_name','contact_number','description','mock_folder','layout_status','color','size_breakdown','qty','advance_or_order_date','deadline_text','deadline_at','total_cost','notes','customer_type','so','payment_status','status','vendor','dispatch_date','mot','tracking_link'];
-        let n = 0;
-        for (const o of orders) {
-            const vals = cols.map(c => o[c] === '' ? null : o[c]);
-            const ph = cols.map((_, i) => `$${i + 1}`).join(',');
-            const upd = cols.filter(c => c !== 'sl_no').map(c => `${c}=EXCLUDED.${c}`).join(',');
-            await client.query(
-                `INSERT INTO crewfit_orders (${cols.join(',')}) VALUES (${ph})
-                 ON CONFLICT (sl_no) DO UPDATE SET ${upd}, updated_at=CURRENT_TIMESTAMP`,
-                vals
-            );
-            n++;
-        }
-        console.log(`\n✅ Imported/updated ${n} Crewfit orders into Postgres.`);
-    } finally {
-        client.release();
-        await pool.end();
+    // Shared PostgreSQL connection.
+    const db = require('./connection');
+    await db.exec(buildDDL(false));
+
+    const cols = ['sl_no','order_date','customer_name','contact_number','description','mock_folder','layout_status','color','size_breakdown','qty','advance_or_order_date','deadline_text','deadline_at','total_cost','notes','customer_type','so','payment_status','status','vendor','dispatch_date','mot','tracking_link'];
+    let n = 0;
+    for (const o of orders) {
+        const vals = cols.map(c => o[c] === '' ? null : o[c]);
+        const ph = cols.map((_, i) => `$${i + 1}`).join(',');
+        const upd = cols.filter(c => c !== 'sl_no').map(c => `${c}=EXCLUDED.${c}`).join(',');
+        await db.query(
+            `INSERT INTO crewfit_orders (${cols.join(',')}) VALUES (${ph})
+             ON CONFLICT (sl_no) DO UPDATE SET ${upd}, updated_at=CURRENT_TIMESTAMP`,
+            vals
+        );
+        n++;
     }
+    console.log(`\n✅ Imported/updated ${n} Crewfit orders into Postgres.`);
+    if (db.close) await db.close();
 }
 
 main().catch(e => { console.error('❌ Import failed:', e.message); process.exit(1); });

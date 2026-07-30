@@ -163,6 +163,7 @@ const orderRoutes = require('./routes/orders');
 const interactionRoutes = require('./routes/interactions');
 const dashboardRoutes = require('./routes/dashboard');
 const syncRoutes = require('./routes/sync');
+const crewfitRoutes = require('./routes/crewfit');
 
 // Public routes
 app.use('/api/auth', authRoutes);
@@ -176,6 +177,7 @@ app.use('/api/orders', authMiddleware, orderRoutes);
 app.use('/api/interactions', authMiddleware, interactionRoutes);
 app.use('/api/dashboard', authMiddleware, dashboardRoutes);
 app.use('/api/sync', authMiddleware, syncRoutes);
+app.use('/api/crewfit', authMiddleware, crewfitRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
