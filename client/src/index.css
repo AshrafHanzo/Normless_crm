@@ -314,7 +314,11 @@ select { cursor: pointer; appearance: none;
 .filters-row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 22px; }
 .search-bar { position: relative; flex: 1; min-width: 220px; }
 .search-bar input { padding-left: 42px; }
-.search-icon { position: absolute; left: 14px; top: 50%; transform: translateY(-50%); color: var(--text-muted); font-size: 15px; pointer-events: none; }
+.search-icon {
+  position: absolute; left: 14px; top: 50%; transform: translateY(-50%);
+  width: 16px; height: 16px; font-size: 0; pointer-events: none;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%238b93a1' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='8'/%3E%3Cpath d='m21 21-4.3-4.3'/%3E%3C/svg%3E") no-repeat center;
+}
 
 /* ============================================================
    TABLES
@@ -462,6 +466,10 @@ select { cursor: pointer; appearance: none;
 .chart-bar:hover { opacity: 0.7; }
 .chart-empty { display: grid; place-items: center; height: 220px; color: var(--text-muted); }
 .chart-axis { display: flex; justify-content: space-between; margin-top: 10px; font-size: 11px; color: var(--text-muted); }
+.area-chart { position: relative; }
+.chart-ymax { position: absolute; top: -2px; left: 0; font-size: 11px; color: var(--text-muted); font-weight: 700; }
+.area-chart svg circle { cursor: pointer; }
+.area-chart svg circle:hover { fill: var(--primary); }
 
 /* Status breakdown (semantic, labeled) */
 .status-list { display: flex; flex-direction: column; gap: 16px; }
@@ -609,13 +617,19 @@ select { cursor: pointer; appearance: none;
 .brand-toggle { margin-bottom: 26px; }
 .brand-switch { margin-bottom: 18px; }
 .brand-toggle button, .brand-switch button {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   padding: 9px 12px; border: none; background: transparent; color: var(--text-secondary);
   font-family: var(--font); font-weight: 600; font-size: 13px; border-radius: 8px; cursor: pointer; transition: all 0.15s ease;
 }
 .brand-toggle button.active { background: var(--primary); color: #fff; box-shadow: var(--shadow-glow); }
 .brand-switch button.active { background: var(--primary); color: #fff; }
 
-.theme-toggle-row { display: flex; align-items: center; gap: 8px; padding: 8px 12px; margin-bottom: 4px; border-radius: var(--radius-md); background: var(--surface); cursor: pointer; }
+/* Brand logo marks */
+.brand-mark { width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; color: #fff; box-shadow: var(--shadow-glow); flex-shrink: 0; }
+.brand-mark-normless { background: linear-gradient(135deg, #7c6cff, #9d92ff); }
+.brand-mark-crewfit { background: linear-gradient(135deg, #0f9e8e, #2dd4bf); }
+
+.theme-toggle-row { display: flex; align-items: center; gap: 8px; padding: 9px 12px; margin-bottom: 4px; border-radius: var(--radius-md); background: var(--surface); border: 1px solid var(--border); cursor: pointer; width: 100%; font-family: var(--font); color: var(--text-secondary); }
 .theme-toggle-row:hover { background: var(--surface-hover); }
 
 /* Reminders (Needs Attention) */

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../App'
+import Icon from '../components/Icon'
 
 function EyeIcon({ off }) {
   return off ? (
@@ -18,8 +19,8 @@ function EyeIcon({ off }) {
 }
 
 const BRANDS = {
-  normless: { name: 'Normless', tag: 'Shopify retail CRM', logo: 'N' },
-  crewfit: { name: 'Crewfit', tag: 'Bulk-order CRM', logo: 'C' },
+  normless: { name: 'Normless', tag: 'Shopify retail CRM', glyph: 'activity' },
+  crewfit: { name: 'Crewfit', tag: 'Bulk-order CRM', glyph: 'shirt' },
 }
 
 export default function Login() {
@@ -63,12 +64,12 @@ export default function Login() {
         <div className="brand-toggle">
           {Object.entries(BRANDS).map(([key, val]) => (
             <button key={key} type="button" className={selected === key ? 'active' : ''} onClick={() => setSelected(key)}>
-              {val.name}
+              <Icon name={val.glyph} size={15} strokeWidth={2.2} />{val.name}
             </button>
           ))}
         </div>
 
-        <div className={`login-logo brand-logo-${selected}`}>{b.logo}</div>
+        <div className={`login-logo brand-logo-${selected}`}><Icon name={b.glyph} size={30} strokeWidth={2.2} /></div>
         <h1>Welcome back</h1>
         <p>Sign in to your <strong>{b.name}</strong> CRM — {b.tag}</p>
 
