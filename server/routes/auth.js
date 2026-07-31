@@ -82,8 +82,13 @@ router.post('/login', async (req, res) => {
                 can_view_customers: user.can_view_customers,
                 can_view_orders: user.can_view_orders,
                 can_scan_orders: user.can_scan_orders,
-                can_sync_data: user.can_sync_data
-            } 
+                can_sync_data: user.can_sync_data,
+                can_access_normless: user.can_access_normless,
+                can_access_crewfit: user.can_access_crewfit,
+                can_view_crewfit_followups: user.can_view_crewfit_followups,
+                can_view_crewfit_orders: user.can_view_crewfit_orders,
+                can_view_crewfit_catalog: user.can_view_crewfit_catalog
+            }
         });
     } catch (error) {
         console.error('Login error:', error);
@@ -120,8 +125,13 @@ router.get('/verify', async (req, res) => {
                 can_view_customers: user.can_view_customers,
                 can_view_orders: user.can_view_orders,
                 can_scan_orders: user.can_scan_orders,
-                can_sync_data: user.can_sync_data
-            } 
+                can_sync_data: user.can_sync_data,
+                can_access_normless: user.can_access_normless,
+                can_access_crewfit: user.can_access_crewfit,
+                can_view_crewfit_followups: user.can_view_crewfit_followups,
+                can_view_crewfit_orders: user.can_view_crewfit_orders,
+                can_view_crewfit_catalog: user.can_view_crewfit_catalog
+            }
         });
     } catch {
         res.status(401).json({ valid: false });

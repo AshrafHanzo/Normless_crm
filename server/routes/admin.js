@@ -13,7 +13,9 @@ router.get('/users', async (req, res) => {
 
     const result = await db.query(`
       SELECT id, username, role, is_active, last_login, login_count, created_at,
-             can_view_dashboard, can_view_customers, can_view_orders, can_scan_orders, can_sync_data
+             can_view_dashboard, can_view_customers, can_view_orders, can_scan_orders, can_sync_data,
+             can_access_normless, can_access_crewfit,
+             can_view_crewfit_followups, can_view_crewfit_orders, can_view_crewfit_catalog
       FROM admin_users
       ORDER BY created_at DESC
     `);
@@ -40,19 +42,19 @@ router.post('/users', async (req, res) => {
 
     const salt = bcrypt.genSaltSync(10);
     const hash = bcrypt.hashSync(password, salt);
+    const p = permissions || {};
 
     await db.query(`
       INSERT INTO admin_users (
         username, password_hash, role, is_active,
-        can_view_dashboard, can_view_customers, can_view_orders, can_scan_orders, can_sync_data
-      ) VALUES ($1, $2, $3, true, $4, $5, $6, $7, $8)
+        can_view_dashboard, can_view_customers, can_view_orders, can_scan_orders, can_sync_data,
+        can_access_normless, can_access_crewfit,
+        can_view_crewfit_followups, can_view_crewfit_orders, can_view_crewfit_catalog
+      ) VALUES ($1, $2, $3, true, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
     `, [
       username, hash, role || 'operator',
-      permissions?.dashboard !== false ? true : false,
-      permissions?.customers !== false ? true : false,
-      permissions?.orders !== false ? true : false,
-      permissions?.scanner !== false ? true : false,
-      permissions?.sync !== false ? true : false
+      !!p.dashboard, !!p.customers, !!p.orders, !!p.scanner, !!p.sync,
+      !!p.normless, !!p.crewfit, !!p.crewfit_followups, !!p.crewfit_orders, !!p.crewfit_catalog
     ]);
 
     res.json({ success: true, message: 'User created' });
@@ -70,28 +72,22 @@ router.put('/users/:id', async (req, res) => {
     }
 
     const { role, is_active, permissions } = req.body;
+    const PERM_MAP = {
+      dashboard: 'can_view_dashboard', customers: 'can_view_customers', orders: 'can_view_orders',
+      scanner: 'can_scan_orders', sync: 'can_sync_data',
+      normless: 'can_access_normless', crewfit: 'can_access_crewfit',
+      crewfit_followups: 'can_view_crewfit_followups', crewfit_orders: 'can_view_crewfit_orders', crewfit_catalog: 'can_view_crewfit_catalog',
+    };
 
-    await db.query(`
-      UPDATE admin_users SET
-        role = COALESCE($1, role),
-        is_active = COALESCE($2, is_active),
-        can_view_dashboard = COALESCE($3, can_view_dashboard),
-        can_view_customers = COALESCE($4, can_view_customers),
-        can_view_orders = COALESCE($5, can_view_orders),
-        can_scan_orders = COALESCE($6, can_scan_orders),
-        can_sync_data = COALESCE($7, can_sync_data),
-        updated_at = CURRENT_TIMESTAMP
-      WHERE id = $8
-    `, [
-      role || null,
-      is_active !== undefined ? is_active : null,
-      permissions?.dashboard !== undefined ? permissions.dashboard : null,
-      permissions?.customers !== undefined ? permissions.customers : null,
-      permissions?.orders !== undefined ? permissions.orders : null,
-      permissions?.scanner !== undefined ? permissions.scanner : null,
-      permissions?.sync !== undefined ? permissions.sync : null,
-      req.params.id
-    ]);
+    const sets = [], vals = [];
+    if (role !== undefined) { vals.push(role); sets.push(`role = $${vals.length}`); }
+    if (is_active !== undefined) { vals.push(is_active); sets.push(`is_active = $${vals.length}`); }
+    if (permissions) for (const [k, col] of Object.entries(PERM_MAP)) {
+      if (permissions[k] !== undefined) { vals.push(!!permissions[k]); sets.push(`${col} = $${vals.length}`); }
+    }
+    if (!sets.length) return res.json({ success: true, message: 'No changes' });
+    vals.push(req.params.id);
+    await db.query(`UPDATE admin_users SET ${sets.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = $${vals.length}`, vals);
 
     res.json({ success: true, message: 'User updated' });
   } catch (err) {

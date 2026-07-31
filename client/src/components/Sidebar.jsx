@@ -15,12 +15,11 @@ const NAV = {
     { to: '/customers', icon: 'users', label: 'Customers', perm: 'can_view_customers' },
     { to: '/orders', icon: 'box', label: 'Orders', perm: 'can_view_orders' },
     { to: '/scan', icon: 'scan', label: 'Scan Order', perm: 'can_scan_orders' },
-    { to: '/settings', icon: 'settings', label: 'Settings & Sync', perm: 'can_sync_data', section: 'System' },
   ],
   crewfit: [
-    { to: '/crewfit', end: true, icon: 'bell', label: 'Follow-ups' },
-    { to: '/crewfit/orders', icon: 'box', label: 'Bulk Orders' },
-    { to: '/crewfit/catalog', icon: 'shirt', label: 'Catalog' },
+    { to: '/crewfit', end: true, icon: 'bell', label: 'Follow-ups', perm: 'can_view_crewfit_followups' },
+    { to: '/crewfit/orders', icon: 'box', label: 'Bulk Orders', perm: 'can_view_crewfit_orders' },
+    { to: '/crewfit/catalog', icon: 'shirt', label: 'Catalog', perm: 'can_view_crewfit_catalog' },
   ],
 }
 
@@ -49,13 +48,18 @@ export default function Sidebar() {
           <div className="brand-text"><h2>{b.name}</h2><span>{b.tag}</span></div>
         </div>
 
-        <div className="brand-switch">
-          {Object.entries(BRANDS).map(([key, val]) => (
-            <button key={key} className={brand === key ? 'active' : ''} onClick={() => switchBrand(key)}>
-              <Icon name={val.glyph} size={15} strokeWidth={2.2} />{val.name}
-            </button>
-          ))}
-        </div>
+        {(() => {
+          const brands = Object.entries(BRANDS).filter(([key]) => isAdmin || user?.[`can_access_${key}`])
+          return brands.length > 1 ? (
+            <div className="brand-switch">
+              {brands.map(([key, val]) => (
+                <button key={key} className={brand === key ? 'active' : ''} onClick={() => switchBrand(key)}>
+                  <Icon name={val.glyph} size={15} strokeWidth={2.2} />{val.name}
+                </button>
+              ))}
+            </div>
+          ) : null
+        })()}
 
         <nav className="sidebar-nav">
           <div className="sidebar-section">

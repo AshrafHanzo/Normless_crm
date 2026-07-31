@@ -128,8 +128,9 @@ export default function Dashboard() {
   )
 }
 
-// SVG area + line chart (single series, gradient fill)
+// Interactive SVG area + line chart (crosshair + floating tooltip)
 function AreaChart({ data, fmt }) {
+  const [hi, setHi] = useState(null)
   const W = 1000, H = 240, top = 16, bot = 24
   const max = Math.max(...data.map(d => d.revenue), 1)
   const n = data.length
@@ -138,9 +139,19 @@ function AreaChart({ data, fmt }) {
   const line = data.map((d, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(d.revenue).toFixed(1)}`).join(' ')
   const area = `${line} L${W},${H - bot} L0,${H - bot} Z`
   const grid = [0.25, 0.5, 0.75, 1].map(f => top + f * (H - top - bot))
+  const onMove = (e) => { const r = e.currentTarget.getBoundingClientRect(); let i = Math.round(((e.clientX - r.left) / r.width) * (n - 1)); setHi(Math.max(0, Math.min(n - 1, i))) }
+  const hd = hi != null ? data[hi] : null
+
   return (
-    <div className="area-chart">
+    <div className="area-chart" onMouseMove={onMove} onMouseLeave={() => setHi(null)}>
       <div className="chart-ymax">{fmt(max)}</div>
+      {hd && (
+        <div className="chart-tip" style={{ left: `${(hi / (n - 1)) * 100}%`, top: `${(y(hd.revenue) / H) * 230}px` }}>
+          <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>{hd.date}</span>
+          <b>{fmt(hd.revenue)}</b>
+          <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>{hd.order_count} orders</span>
+        </div>
+      )}
       <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ width: '100%', height: 230 }}>
         <defs>
           <linearGradient id="revfill" x1="0" y1="0" x2="0" y2="1">
@@ -151,7 +162,8 @@ function AreaChart({ data, fmt }) {
         {grid.map((gy, i) => <line key={i} x1="0" y1={gy} x2={W} y2={gy} stroke="var(--border)" strokeWidth="1" vectorEffect="non-scaling-stroke" />)}
         <path d={area} fill="url(#revfill)" />
         <path d={line} fill="none" stroke="var(--primary)" strokeWidth="2.5" vectorEffect="non-scaling-stroke" strokeLinejoin="round" />
-        {data.map((d, i) => <circle key={i} cx={x(i)} cy={y(d.revenue)} r="7" fill="transparent"><title>{`${d.date}: ${fmt(d.revenue)} (${d.order_count} orders)`}</title></circle>)}
+        {hd && <line x1={x(hi)} y1={top} x2={x(hi)} y2={H - bot} className="chart-crosshair" vectorEffect="non-scaling-stroke" />}
+        {hd && <circle cx={x(hi)} cy={y(hd.revenue)} r="4.5" fill="var(--primary)" stroke="var(--bg-secondary)" strokeWidth="2.5" vectorEffect="non-scaling-stroke" />}
       </svg>
       <div className="chart-axis"><span>{data[0]?.date}</span><span>{data[data.length - 1]?.date}</span></div>
     </div>

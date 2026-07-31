@@ -1,325 +1,149 @@
 import { useState, useEffect } from 'react'
 import { useApi, useAuth } from '../App'
+import Icon from '../components/Icon'
+
+const GROUPS = [
+  { brand: 'normless', label: 'Normless', glyph: 'activity', pages: [
+    { key: 'dashboard', label: 'Dashboard', icon: 'dashboard' },
+    { key: 'customers', label: 'Customers', icon: 'users' },
+    { key: 'orders', label: 'Orders', icon: 'box' },
+    { key: 'scanner', label: 'Scan Order', icon: 'scan' },
+  ] },
+  { brand: 'crewfit', label: 'Crewfit', glyph: 'shirt', pages: [
+    { key: 'crewfit_followups', label: 'Follow-ups', icon: 'bell' },
+    { key: 'crewfit_orders', label: 'Bulk Orders', icon: 'box' },
+    { key: 'crewfit_catalog', label: 'Catalog', icon: 'shirt' },
+  ] },
+]
+
+const blankForm = () => ({ username: '', password: '', role: 'operator', normless: true, dashboard: true, customers: true, orders: true, scanner: true, crewfit: false, crewfit_followups: false, crewfit_orders: false, crewfit_catalog: false })
+const fromUser = (u) => ({
+  id: u.id, username: u.username, password: '', role: u.role,
+  normless: !!u.can_access_normless, dashboard: !!u.can_view_dashboard, customers: !!u.can_view_customers, orders: !!u.can_view_orders, scanner: !!u.can_scan_orders,
+  crewfit: !!u.can_access_crewfit, crewfit_followups: !!u.can_view_crewfit_followups, crewfit_orders: !!u.can_view_crewfit_orders, crewfit_catalog: !!u.can_view_crewfit_catalog,
+})
+const buildPerms = (f) => {
+  if (f.role === 'admin') return { normless: true, crewfit: true, dashboard: true, customers: true, orders: true, scanner: true, crewfit_followups: true, crewfit_orders: true, crewfit_catalog: true, sync: false }
+  return {
+    normless: !!f.normless, crewfit: !!f.crewfit, sync: false,
+    dashboard: !!(f.normless && f.dashboard), customers: !!(f.normless && f.customers), orders: !!(f.normless && f.orders), scanner: !!(f.normless && f.scanner),
+    crewfit_followups: !!(f.crewfit && f.crewfit_followups), crewfit_orders: !!(f.crewfit && f.crewfit_orders), crewfit_catalog: !!(f.crewfit && f.crewfit_catalog),
+  }
+}
 
 export default function AdminManagement() {
   const apiFetch = useApi()
   const { user } = useAuth()
   const [users, setUsers] = useState([])
   const [loading, setLoading] = useState(true)
-  const [showCreateForm, setShowCreateForm] = useState(false)
-  const [editingUser, setEditingUser] = useState(null)
   const [stats, setStats] = useState(null)
+  const [form, setForm] = useState(null)
+  const [saving, setSaving] = useState(false)
 
-  // Form state
-  const [formData, setFormData] = useState({
-    username: '',
-    password: '',
-    role: 'operator',
-    permissions: {
-      dashboard: true,
-      customers: true,
-      orders: true,
-      scanner: true,
-      sync: false
-    }
-  })
+  useEffect(() => { loadUsers(); loadStats() }, [])
+  const loadUsers = async () => { setLoading(true); const r = await apiFetch('/api/admin/users'); if (r && !r.error) setUsers(r); setLoading(false) }
+  const loadStats = async () => { const r = await apiFetch('/api/admin/stats'); if (r) setStats(r) }
+  const setF = (patch) => setForm(f => ({ ...f, ...patch }))
 
-  useEffect(() => {
-    loadUsers()
-    loadStats()
-  }, [])
-
-  const loadUsers = async () => {
-    setLoading(true)
-    const result = await apiFetch('/api/admin/users')
-    if (result && !result.error) {
-      setUsers(result)
-    }
-    setLoading(false)
+  const save = async () => {
+    if (!form.username || (!form.id && !form.password)) { alert('Username and password are required'); return }
+    setSaving(true)
+    const permissions = buildPerms(form)
+    let res
+    if (form.id) res = await apiFetch(`/api/admin/users/${form.id}`, { method: 'PUT', body: JSON.stringify({ role: form.role, permissions }) })
+    else res = await apiFetch('/api/admin/users', { method: 'POST', body: JSON.stringify({ username: form.username, password: form.password, role: form.role, permissions }) })
+    setSaving(false)
+    if (res?.success) { setForm(null); loadUsers(); loadStats() } else alert(res?.error || 'Save failed')
   }
 
-  const loadStats = async () => {
-    const result = await apiFetch('/api/admin/stats')
-    if (result) setStats(result)
-  }
+  const del = async (id) => { if (!confirm('Delete this user? This cannot be undone.')) return; const r = await apiFetch(`/api/admin/users/${id}`, { method: 'DELETE' }); if (r?.success) { loadUsers(); loadStats() } }
 
-  const handleCreateUser = async () => {
-    if (!formData.username || !formData.password) {
-      alert('Username and password required')
-      return
-    }
-
-    const result = await apiFetch('/api/admin/users', {
-      method: 'POST',
-      body: JSON.stringify(formData)
-    })
-
-    if (result?.success) {
-      setFormData({
-        username: '',
-        password: '',
-        role: 'operator',
-        permissions: {
-          dashboard: true,
-          customers: true,
-          orders: true,
-          scanner: true,
-          sync: false
-        }
-      })
-      setShowCreateForm(false)
-      loadUsers()
-      loadStats()
-    }
-  }
-
-  const handleUpdateUser = async (userId, updates) => {
-    const result = await apiFetch(`/api/admin/users/${userId}`, {
-      method: 'PUT',
-      body: JSON.stringify(updates)
-    })
-
-    if (result?.success) {
-      loadUsers()
-      setEditingUser(null)
-    }
-  }
-
-  const handleDeleteUser = async (userId) => {
-    if (confirm('Are you sure? This cannot be undone.')) {
-      const result = await apiFetch(`/api/admin/users/${userId}`, {
-        method: 'DELETE'
-      })
-
-      if (result?.success) {
-        loadUsers()
-        loadStats()
-      }
-    }
-  }
-
-  const handlePermissionChange = (permission, value) => {
-    setFormData({
-      ...formData,
-      permissions: {
-        ...formData.permissions,
-        [permission]: value
-      }
-    })
-  }
+  const statCards = stats ? [
+    { icon: 'users', label: 'Total Users', value: stats.totalUsers, color: 'var(--primary)' },
+    { icon: 'check', label: 'Active', value: stats.activeUsers, color: 'var(--success)' },
+    { icon: 'shield', label: 'Operators', value: stats.operators, color: 'var(--info)' },
+  ] : []
 
   return (
     <div className="page-enter">
       <div className="admin-header">
-        <div className="admin-header-icon">⚙️</div>
-        <div className="admin-header-content">
-          <h2>Admin Management</h2>
-          <p>Manage users, permissions, and system settings</p>
-        </div>
+        <div className="admin-header-icon"><Icon name="shield" size={26} /></div>
+        <div className="admin-header-content"><h1>Team &amp; Access</h1><p>Create operators and control exactly which brand &amp; pages they can open</p></div>
       </div>
 
-      {/* Stats */}
       {stats && (
-        <div className="grid-3" style={{ marginBottom: '24px' }}>
-          <div className="glass-card" style={{ textAlign: 'center', padding: '20px' }}>
-            <div style={{ fontSize: '28px', fontWeight: '700', color: 'var(--primary)', marginBottom: '8px' }}>
-              {stats.totalUsers}
+        <div className="grid-3" style={{ marginBottom: 24 }}>
+          {statCards.map((s, i) => (
+            <div className="glass-card" key={i} style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+              <div className="stat-icon" style={{ color: s.color }}><Icon name={s.icon} size={22} /></div>
+              <div><div style={{ fontSize: 26, fontWeight: 800 }}>{s.value}</div><div style={{ fontSize: 12.5, color: 'var(--text-muted)' }}>{s.label}</div></div>
             </div>
-            <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>Total Users</div>
+          ))}
+        </div>
+      )}
+
+      {!form && <button className="btn btn-primary" onClick={() => setForm(blankForm())} style={{ marginBottom: 24 }}><Icon name="plus" size={16} /> New User</button>}
+
+      {form && (
+        <div className="glass-card" style={{ marginBottom: 24 }}>
+          <h3 style={{ marginBottom: 18 }}>{form.id ? `Edit ${form.username}` : 'Create New User'}</h3>
+          <div className="form-row" style={{ marginBottom: 18 }}>
+            <div className="input-group" style={{ marginBottom: 0 }}><label>Username</label><input value={form.username} disabled={!!form.id} onChange={e => setF({ username: e.target.value })} placeholder="e.g. anu@crewfit" /></div>
+            {!form.id && <div className="input-group" style={{ marginBottom: 0 }}><label>Password</label><input type="text" value={form.password} onChange={e => setF({ password: e.target.value })} placeholder="Set a password" /></div>}
+            <div className="input-group" style={{ marginBottom: 0 }}><label>Role</label><select value={form.role} onChange={e => setF({ role: e.target.value })}><option value="operator">Operator (limited)</option><option value="admin">Admin (full access)</option></select></div>
           </div>
-          <div className="glass-card" style={{ textAlign: 'center', padding: '20px' }}>
-            <div style={{ fontSize: '28px', fontWeight: '700', color: 'var(--success)', marginBottom: '8px' }}>
-              {stats.activeUsers}
+
+          {form.role === 'admin' ? (
+            <div className="admin-note"><Icon name="shield" size={16} /> Admins get full access to both brands and all pages.</div>
+          ) : (
+            <div className="access-grid">
+              {GROUPS.map(g => (
+                <div key={g.brand} className={`access-card ${form[g.brand] ? 'on' : ''}`}>
+                  <div className="access-head">
+                    <div className="access-brand"><span className={`brand-mark brand-mark-${g.brand}`} style={{ width: 30, height: 30, borderRadius: 8 }}><Icon name={g.glyph} size={16} /></span>{g.label}</div>
+                    <button className={`toggle ${form[g.brand] ? 'on' : ''}`} onClick={() => setF({ [g.brand]: !form[g.brand] })}><span /></button>
+                  </div>
+                  <div className="access-pages">
+                    {g.pages.map(p => (
+                      <label key={p.key} className={`page-check ${!form[g.brand] ? 'disabled' : ''}`}>
+                        <input type="checkbox" disabled={!form[g.brand]} checked={!!form[p.key]} onChange={e => setF({ [p.key]: e.target.checked })} />
+                        <Icon name={p.icon} size={15} /><span>{p.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              ))}
             </div>
-            <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>Active Users</div>
-          </div>
-          <div className="glass-card" style={{ textAlign: 'center', padding: '20px' }}>
-            <div style={{ fontSize: '28px', fontWeight: '700', color: 'var(--info)', marginBottom: '8px' }}>
-              {stats.operators}
-            </div>
-            <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>Operators</div>
+          )}
+
+          <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
+            <button className="btn btn-primary" onClick={save} disabled={saving}>{saving ? 'Saving…' : (form.id ? 'Save changes' : 'Create user')}</button>
+            <button className="btn btn-secondary" onClick={() => setForm(null)}>Cancel</button>
           </div>
         </div>
       )}
 
-      {/* Create User Form */}
-      {showCreateForm && (
-        <div className="glass-card" style={{ marginBottom: '24px' }}>
-          <h3 style={{ fontSize: '16px', fontWeight: '600', marginBottom: '16px' }}>➕ Create New User</h3>
-
-          <div className="form-row">
-            <div className="input-group" style={{ marginBottom: 0 }}>
-              <label>Username</label>
-              <input
-                type="text"
-                value={formData.username}
-                onChange={(e) => setFormData({ ...formData, username: e.target.value })}
-                placeholder="Enter username"
-              />
-            </div>
-            <div className="input-group" style={{ marginBottom: 0 }}>
-              <label>Password</label>
-              <input
-                type="password"
-                value={formData.password}
-                onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                placeholder="Enter password"
-              />
-            </div>
-          </div>
-
-          <div className="form-row">
-            <div className="input-group" style={{ marginBottom: 0 }}>
-              <label>Role</label>
-              <select
-                value={formData.role}
-                onChange={(e) => setFormData({ ...formData, role: e.target.value })}
-              >
-                <option value="operator">Operator (Limited Access)</option>
-                <option value="admin">Admin (Full Access)</option>
-              </select>
-            </div>
-          </div>
-
-          <div style={{ marginBottom: '16px' }}>
-            <h4 style={{ fontSize: '13px', fontWeight: '600', marginBottom: '12px', color: 'var(--text-secondary)' }}>
-              Permissions
-            </h4>
-            {['dashboard', 'customers', 'orders', 'scanner', 'sync'].map((perm) => (
-              <div key={perm} className="permission-item">
-                <input
-                  type="checkbox"
-                  className="permission-checkbox"
-                  checked={formData.permissions[perm] || false}
-                  onChange={(e) => handlePermissionChange(perm, e.target.checked)}
-                  id={`perm-${perm}`}
-                />
-                <label htmlFor={`perm-${perm}`} className="permission-label" style={{ marginBottom: 0 }}>
-                  {perm.charAt(0).toUpperCase() + perm.slice(1).replace('scanner', 'Barcode Scanner')}
-                </label>
-              </div>
-            ))}
-          </div>
-
-          <div style={{ display: 'flex', gap: '12px' }}>
-            <button className="btn btn-primary btn-sm" onClick={handleCreateUser}>
-              ✅ Create User
-            </button>
-            <button className="btn btn-secondary btn-sm" onClick={() => setShowCreateForm(false)}>
-              ❌ Cancel
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Create Button */}
-      {!showCreateForm && (
-        <button
-          className="btn btn-primary"
-          onClick={() => setShowCreateForm(true)}
-          style={{ marginBottom: '24px' }}
-        >
-          ➕ Create New User
-        </button>
-      )}
-
-      {/* Users List */}
       <div className="glass-card">
-        <h3 style={{ fontSize: '16px', fontWeight: '600', marginBottom: '16px' }}>👥 Users</h3>
-
-        {loading ? (
-          <div className="loader"><div className="spinner"></div></div>
-        ) : users.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--text-muted)' }}>
-            No users found
-          </div>
-        ) : (
+        <h3 style={{ marginBottom: 16 }}>Users</h3>
+        {loading ? <div className="loader"><div className="spinner" /></div> : (
           <div className="user-list">
-            {users.map((u) => (
+            {users.map(u => (
               <div key={u.id} className="user-card">
                 <div className="user-card-info">
                   <div className="user-card-avatar">{u.username.charAt(0).toUpperCase()}</div>
                   <div className="user-card-details">
                     <h4>{u.username}</h4>
-                    <p>
-                      Role: <strong>{u.role}</strong> • Last login: {u.last_login ? new Date(u.last_login).toLocaleDateString() : 'Never'}
-                    </p>
+                    <div className="user-badges">
+                      <span className="role-badge">{u.role}</span>
+                      {(u.role === 'owner' || u.role === 'admin' || u.can_access_normless) && <span className="brand-badge nb">Normless</span>}
+                      {(u.role === 'owner' || u.role === 'admin' || u.can_access_crewfit) && <span className="brand-badge cb">Crewfit</span>}
+                    </div>
                   </div>
                 </div>
-
-                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                  <div className="user-card-status">
-                    <span
-                      className={u.is_active ? 'status-active' : 'status-inactive'}
-                    >
-                      {u.is_active ? '✅ Active' : '🔴 Inactive'}
-                    </span>
-                  </div>
-                  <div className="user-card-actions">
-                    <button
-                      className="btn-icon"
-                      onClick={() => setEditingUser(u.id)}
-                      title="Edit"
-                    >
-                      ✏️
-                    </button>
-                    {u.id !== user.id && (
-                      <button
-                        className="btn-icon"
-                        onClick={() => handleDeleteUser(u.id)}
-                        title="Delete"
-                        style={{ color: 'var(--danger)' }}
-                      >
-                        🗑️
-                      </button>
-                    )}
-                  </div>
+                <div className="user-card-actions">
+                  <button className="btn-icon" onClick={() => setForm(fromUser(u))} title="Edit access"><Icon name="edit" size={15} /></button>
+                  {u.id !== user.id && u.role !== 'owner' && <button className="btn-icon" onClick={() => del(u.id)} title="Delete" style={{ color: 'var(--danger)' }}><Icon name="trash" size={15} /></button>}
                 </div>
-
-                {/* Edit Panel */}
-                {editingUser === u.id && (
-                  <div style={{ gridColumn: '1/-1', padding: '12px', background: 'var(--bg-secondary)', borderRadius: 'var(--radius-md)', marginTop: '12px' }}>
-                    <h4 style={{ fontSize: '13px', marginBottom: '12px' }}>Edit User</h4>
-
-                    <div style={{ marginBottom: '12px' }}>
-                      <label style={{ fontSize: '12px' }}>Status</label>
-                      <select
-                        value={u.is_active ? '1' : '0'}
-                        onChange={(e) => handleUpdateUser(u.id, { is_active: e.target.value === '1' })}
-                        style={{ width: '100%', padding: '8px', borderRadius: 'var(--radius-sm)' }}
-                      >
-                        <option value="1">Active</option>
-                        <option value="0">Inactive</option>
-                      </select>
-                    </div>
-
-                    <div style={{ marginBottom: '12px' }}>
-                      <label style={{ fontSize: '12px' }}>Permissions</label>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '8px' }}>
-                        {['dashboard', 'customers', 'orders', 'scanner', 'sync'].map((perm) => (
-                          <label key={perm} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', cursor: 'pointer' }}>
-                            <input
-                              type="checkbox"
-                              checked={u[`can_view_${perm}` === 'can_view_scanner' ? 'can_scan_orders' : perm === 'sync' ? 'can_sync_data' : `can_view_${perm}`] || false}
-                              onChange={(e) => {
-                                const permKey = perm === 'scanner' ? 'can_scan_orders' : perm === 'sync' ? 'can_sync_data' : `can_view_${perm}`
-                                handleUpdateUser(u.id, { permissions: { [permKey]: e.target.checked } })
-                              }}
-                            />
-                            {perm.charAt(0).toUpperCase() + perm.slice(1)}
-                          </label>
-                        ))}
-                      </div>
-                    </div>
-
-                    <button
-                      className="btn btn-secondary btn-sm"
-                      onClick={() => setEditingUser(null)}
-                    >
-                      Done
-                    </button>
-                  </div>
-                )}
               </div>
             ))}
           </div>

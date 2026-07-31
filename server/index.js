@@ -275,6 +275,20 @@ async function ensureCrewfitSchema() {
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         `);
+        // Per-brand + per-page access columns on admin_users
+        try {
+            await db.exec(`
+                ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_access_normless BOOLEAN DEFAULT false;
+                ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_access_crewfit BOOLEAN DEFAULT false;
+                ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_crewfit_followups BOOLEAN DEFAULT false;
+                ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_crewfit_orders BOOLEAN DEFAULT false;
+                ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_crewfit_catalog BOOLEAN DEFAULT false;
+            `);
+            await db.query(`UPDATE admin_users SET can_access_normless=true, can_access_crewfit=true,
+                can_view_crewfit_followups=true, can_view_crewfit_orders=true, can_view_crewfit_catalog=true
+                WHERE role IN ('owner','admin')`);
+        } catch (e) { console.error('admin perms ensure:', e.message); }
+
         try {
             await db.exec(`
                 ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS product TEXT;

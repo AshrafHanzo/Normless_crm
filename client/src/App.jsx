@@ -87,6 +87,16 @@ function App() {
     }
   }, [token])
 
+  // When the user loads, make sure the active brand is one they can access.
+  useEffect(() => {
+    if (!user) return
+    const isAdmin = user.role === 'owner' || user.role === 'admin'
+    const allowed = isAdmin ? ['normless', 'crewfit']
+      : [user.can_access_normless && 'normless', user.can_access_crewfit && 'crewfit'].filter(Boolean)
+    const list = allowed.length ? allowed : ['normless']
+    if (!list.includes(brand)) setBrand(list[0])
+  }, [user])
+
   const login = (newToken, userData) => { localStorage.setItem('crm_token', newToken); setToken(newToken); setUser(userData) }
   const logout = () => { localStorage.removeItem('crm_token'); setToken(null); setUser(null) }
 
