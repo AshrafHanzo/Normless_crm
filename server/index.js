@@ -275,7 +275,25 @@ async function ensureCrewfitSchema() {
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         `);
-        try { await db.exec('ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS product TEXT;'); } catch { /* orders table may not exist yet */ }
+        try {
+            await db.exec(`
+                ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS product TEXT;
+                ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS printing TEXT;
+                ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS delivery_location TEXT;
+                ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS billing_name TEXT;
+                ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS contact_person TEXT;
+                ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS billing_mobile TEXT;
+                ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS billing_email TEXT;
+                ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS gst_number TEXT;
+                ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS billing_address TEXT;
+                ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS product_total NUMERIC;
+                ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS shipping NUMERIC;
+                ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS gst_amount NUMERIC;
+                ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS grand_total NUMERIC;
+                ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS advance NUMERIC;
+                ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS balance NUMERIC;
+            `);
+        } catch { /* orders table may not exist yet */ }
 
         const c = await db.query('SELECT COUNT(*) AS n FROM crewfit_products');
         if (parseInt(c.rows[0].n, 10) === 0) {

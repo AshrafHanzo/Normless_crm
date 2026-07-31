@@ -693,6 +693,17 @@ select { cursor: pointer; appearance: none;
 .catalog-contact { display: flex; flex-direction: column; gap: 8px; }
 .catalog-contact .contact-row { display: flex; flex-wrap: wrap; gap: 18px; font-size: 12.5px; color: var(--text-secondary); }
 
+/* Crewfit order builder */
+.drawer-wide { width: min(680px, 96vw); }
+.form-section { font-size: 12px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; color: var(--primary-light); margin: 20px 0 12px; padding-bottom: 6px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+.unit-hint { font-size: 11px; font-weight: 500; color: var(--text-muted); text-transform: none; letter-spacing: 0; }
+.totals-bar { display: flex; gap: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 14px 16px; }
+.totals-bar > div { flex: 1; display: flex; flex-direction: column; gap: 3px; }
+.totals-bar span { font-size: 11px; color: var(--text-muted); }
+.totals-bar strong { font-size: 18px; letter-spacing: -0.02em; }
+.mini-btn { font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); color: var(--text-secondary); cursor: pointer; }
+.mini-btn:hover { color: var(--text-primary); border-color: var(--border-hover); }
+
 /* ============================================================
    RESPONSIVE
    ============================================================ */

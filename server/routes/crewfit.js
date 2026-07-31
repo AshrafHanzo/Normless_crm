@@ -108,9 +108,11 @@ router.get('/orders/:id', async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'Failed' }); }
 });
 
+const EXTRA = ['printing', 'delivery_location', 'billing_name', 'contact_person', 'billing_mobile', 'billing_email',
+  'gst_number', 'billing_address', 'product_total', 'shipping', 'gst_amount', 'grand_total', 'advance', 'balance'];
 const EDITABLE = ['status', 'payment_status', 'layout_status', 'customer_type', 'so', 'vendor', 'mot', 'tracking_link',
-  'deadline_at', 'deadline_text', 'dispatch_date', 'notes', 'total_cost', 'qty', 'color', 'size_breakdown',
-  'customer_name', 'contact_number', 'mock_folder', 'description', 'product'];
+  'deadline_at', 'deadline_text', 'dispatch_date', 'order_date', 'notes', 'total_cost', 'qty', 'color', 'size_breakdown',
+  'customer_name', 'contact_number', 'mock_folder', 'description', 'product', ...EXTRA];
 
 // PUT /api/crewfit/orders/:id — inline field / dropdown updates
 router.put('/orders/:id', async (req, res) => {
@@ -133,7 +135,7 @@ router.post('/orders', async (req, res) => {
   try {
     const cols = ['customer_name', 'contact_number', 'description', 'product', 'color', 'size_breakdown', 'qty', 'total_cost',
       'deadline_at', 'deadline_text', 'order_date', 'customer_type', 'so', 'vendor', 'mot', 'mock_folder', 'notes',
-      'layout_status', 'payment_status', 'status'];
+      'layout_status', 'payment_status', 'status', ...EXTRA];
     const provided = cols.filter(c => req.body[c] !== undefined && req.body[c] !== '');
     if (!req.body.customer_name) return res.status(400).json({ error: 'Customer name is required' });
     const nextRow = await db.query('SELECT COALESCE(MAX(sl_no), 0) + 1 AS next FROM crewfit_orders');
