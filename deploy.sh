@@ -20,6 +20,9 @@ cd ..
 echo "🗄️  Ensuring DB schema is up to date..."
 node server/db/init-postgres.js
 
+echo "📋 Importing Crewfit orders from the sheet..."
+node server/db/import-crewfit.js || echo "(crewfit import skipped)"
+
 echo "♻️  Reloading app (zero-downtime)..."
 pm2 reload ecosystem.config.js --update-env || pm2 start ecosystem.config.js
 pm2 save
