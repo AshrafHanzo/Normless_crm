@@ -19,6 +19,7 @@ const NAV = {
   crewfit: [
     { to: '/crewfit', end: true, icon: '🔔', label: 'Follow-ups' },
     { to: '/crewfit/orders', icon: '📦', label: 'Bulk Orders' },
+    { to: '/crewfit/catalog', icon: '🧵', label: 'Catalog' },
   ],
 }
 
