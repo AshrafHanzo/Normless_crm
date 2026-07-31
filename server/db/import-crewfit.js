@@ -154,6 +154,14 @@ function parseIntSafe(v) {
 }
 
 /* ---------- Map a raw row to a normalized order ---------- */
+function extractProduct(desc) {
+    if (!desc) return null;
+    const m = desc.match(/product:?\*?\s*([^\n]+)/i);
+    if (!m) return null;
+    const s = m[1].replace(/[*_]/g, '').trim();
+    return s ? s.slice(0, 120) : null;
+}
+
 function mapRow(h, r) {
     const g = (name) => { const i = h.findIndex(x => x.trim().toLowerCase() === name.toLowerCase()); return i >= 0 ? clean(r[i]) : ''; };
     const orderIso = parseDMY(g('Date'));
@@ -164,6 +172,7 @@ function mapRow(h, r) {
         customer_name: g('Customer Name') || null,
         contact_number: g('Contact number') || null,
         description: g('Order description') || null,
+        product: extractProduct(g('Order description')),
         mock_folder: g('Mock Folder') || null,
         layout_status: normLayout(g('Layout Status')),
         color: g('Color') || null,
@@ -193,6 +202,7 @@ CREATE TABLE IF NOT EXISTS crewfit_orders (
     customer_name TEXT,
     contact_number TEXT,
     description TEXT,
+    product TEXT,
     mock_folder TEXT,
     layout_status TEXT DEFAULT 'Pending',
     color TEXT,
@@ -254,7 +264,7 @@ async function main() {
     const db = require('./connection');
     await db.exec(buildDDL(false));
 
-    const cols = ['sl_no','order_date','customer_name','contact_number','description','mock_folder','layout_status','color','size_breakdown','qty','advance_or_order_date','deadline_text','deadline_at','total_cost','notes','customer_type','so','payment_status','status','vendor','dispatch_date','mot','tracking_link'];
+    const cols = ['sl_no','order_date','customer_name','contact_number','description','product','mock_folder','layout_status','color','size_breakdown','qty','advance_or_order_date','deadline_text','deadline_at','total_cost','notes','customer_type','so','payment_status','status','vendor','dispatch_date','mot','tracking_link'];
     let n = 0;
     for (const o of orders) {
         const vals = cols.map(c => o[c] === '' ? null : o[c]);

@@ -662,7 +662,10 @@ select { cursor: pointer; appearance: none;
 .product-head { position: relative; padding: 22px; color: #fff; }
 .product-head h3 { color: #fff; font-size: 19px; margin: 10px 0 4px; }
 .product-cat { font-size: 10.5px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.9; }
-.product-gsm { position: absolute; top: 20px; right: 20px; font-size: 11px; font-weight: 700; padding: 4px 10px; border-radius: 999px; background: rgba(0,0,0,0.22); }
+.product-gsm { position: absolute; bottom: 18px; right: 18px; font-size: 11px; font-weight: 700; padding: 4px 10px; border-radius: 999px; background: rgba(0,0,0,0.22); }
+.product-actions { position: absolute; top: 14px; right: 14px; display: flex; gap: 6px; }
+.product-actions button { width: 30px; height: 30px; border-radius: 8px; border: none; background: rgba(0,0,0,0.25); color: #fff; cursor: pointer; font-size: 13px; }
+.product-actions button:hover { background: rgba(0,0,0,0.42); }
 .product-fit { font-size: 12px; opacity: 0.92; }
 
 .product-body { padding: 20px; display: flex; flex-direction: column; gap: 14px; flex: 1; }

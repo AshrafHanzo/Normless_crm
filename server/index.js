@@ -260,12 +260,50 @@ async function ensureAdminUser() {
     }
 }
 
+// Ensure the Crewfit products catalog table exists + is seeded, and that the
+// orders table has the `product` column. Idempotent; safe on every boot.
+async function ensureCrewfitSchema() {
+    try {
+        await db.exec(`
+            CREATE TABLE IF NOT EXISTS crewfit_products (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                name TEXT, category TEXT, fit TEXT, gsm TEXT, material TEXT,
+                from_price NUMERIC, blurb TEXT,
+                features TEXT, colors TEXT, tiers TEXT,
+                active BOOLEAN DEFAULT true, sort_order INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        `);
+        try { await db.exec('ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS product TEXT;'); } catch { /* orders table may not exist yet */ }
+
+        const c = await db.query('SELECT COUNT(*) AS n FROM crewfit_products');
+        if (parseInt(c.rows[0].n, 10) === 0) {
+            const products = require('./data/crewfitProducts');
+            for (let i = 0; i < products.length; i++) {
+                const p = products[i];
+                await db.query(
+                    `INSERT INTO crewfit_products (name, category, fit, gsm, material, from_price, blurb, features, colors, tiers, sort_order)
+                     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+                    [p.name, p.category, p.fit, String(p.gsm), p.material, p.from, p.blurb,
+                     JSON.stringify(p.features), JSON.stringify(p.colors), JSON.stringify(p.tiers), i]
+                );
+            }
+            console.log(`✅ Seeded ${products.length} Crewfit products`);
+        }
+    } catch (err) {
+        console.error('ensureCrewfitSchema error:', err.message);
+    }
+}
+
 // Start Server
 app.listen(PORT, async () => {
     console.log(`🚀 Normless CRM Backend running on http://localhost:${PORT}`);
 
     // Ensure admin user exists
     await ensureAdminUser();
+    // Ensure Crewfit catalog schema + seed
+    await ensureCrewfitSchema();
 
     // START AUTO-SYNC IMMEDIATELY (no user action needed!)
     startAutoSync();

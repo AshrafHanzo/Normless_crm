@@ -110,7 +110,7 @@ router.get('/orders/:id', async (req, res) => {
 
 const EDITABLE = ['status', 'payment_status', 'layout_status', 'customer_type', 'so', 'vendor', 'mot', 'tracking_link',
   'deadline_at', 'deadline_text', 'dispatch_date', 'notes', 'total_cost', 'qty', 'color', 'size_breakdown',
-  'customer_name', 'contact_number', 'mock_folder', 'description'];
+  'customer_name', 'contact_number', 'mock_folder', 'description', 'product'];
 
 // PUT /api/crewfit/orders/:id — inline field / dropdown updates
 router.put('/orders/:id', async (req, res) => {
@@ -131,7 +131,7 @@ router.put('/orders/:id', async (req, res) => {
 // POST /api/crewfit/orders — create
 router.post('/orders', async (req, res) => {
   try {
-    const cols = ['customer_name', 'contact_number', 'description', 'color', 'size_breakdown', 'qty', 'total_cost',
+    const cols = ['customer_name', 'contact_number', 'description', 'product', 'color', 'size_breakdown', 'qty', 'total_cost',
       'deadline_at', 'deadline_text', 'order_date', 'customer_type', 'so', 'vendor', 'mot', 'mock_folder', 'notes',
       'layout_status', 'payment_status', 'status'];
     const provided = cols.filter(c => req.body[c] !== undefined && req.body[c] !== '');
@@ -154,6 +154,70 @@ router.delete('/orders/:id', async (req, res) => {
     await db.query('DELETE FROM crewfit_orders WHERE id = $1', [req.params.id]);
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: 'Failed to delete' }); }
+});
+
+/* ---------------- PRODUCTS (catalog, editable) ---------------- */
+const parseProduct = (r) => ({
+  ...r,
+  from_price: r.from_price != null ? Number(r.from_price) : null,
+  features: safeJson(r.features, []),
+  colors: safeJson(r.colors, []),
+  tiers: safeJson(r.tiers, []),
+});
+function safeJson(v, fallback) { try { return typeof v === 'string' ? JSON.parse(v) : (v || fallback); } catch { return fallback; } }
+
+// GET /api/crewfit/products
+router.get('/products', async (req, res) => {
+  try {
+    const r = await db.query('SELECT * FROM crewfit_products ORDER BY sort_order ASC, id ASC');
+    res.json({ products: r.rows.map(parseProduct) });
+  } catch (err) {
+    console.error('crewfit products error:', err); res.status(500).json({ error: 'Failed to load products' });
+  }
+});
+
+const PFIELDS = ['name', 'category', 'fit', 'gsm', 'material', 'from_price', 'blurb', 'features', 'colors', 'tiers', 'active', 'sort_order'];
+const encodeP = (body) => {
+  const out = {};
+  for (const f of PFIELDS) {
+    if (body[f] === undefined) continue;
+    out[f] = ['features', 'colors', 'tiers'].includes(f) ? JSON.stringify(body[f] || []) : body[f];
+  }
+  return out;
+};
+
+// POST /api/crewfit/products
+router.post('/products', async (req, res) => {
+  try {
+    const data = encodeP(req.body);
+    if (!data.name) return res.status(400).json({ error: 'Product name required' });
+    const keys = Object.keys(data);
+    const r = await db.query(
+      `INSERT INTO crewfit_products (${keys.join(',')}) VALUES (${keys.map((_, i) => `$${i + 1}`).join(',')}) RETURNING *`,
+      keys.map(k => data[k])
+    );
+    res.status(201).json(parseProduct(r.rows[0]));
+  } catch (err) { console.error('create product error:', err); res.status(500).json({ error: 'Failed to create product' }); }
+});
+
+// PUT /api/crewfit/products/:id
+router.put('/products/:id', async (req, res) => {
+  try {
+    const data = encodeP(req.body);
+    const keys = Object.keys(data);
+    if (!keys.length) return res.status(400).json({ error: 'Nothing to update' });
+    const set = keys.map((k, i) => `${k} = $${i + 1}`).join(', ');
+    const vals = keys.map(k => data[k]); vals.push(req.params.id);
+    await db.query(`UPDATE crewfit_products SET ${set}, updated_at = CURRENT_TIMESTAMP WHERE id = $${keys.length + 1}`, vals);
+    const r = await db.query('SELECT * FROM crewfit_products WHERE id = $1', [req.params.id]);
+    res.json(parseProduct(r.rows[0]));
+  } catch (err) { console.error('update product error:', err); res.status(500).json({ error: 'Failed to update product' }); }
+});
+
+// DELETE /api/crewfit/products/:id
+router.delete('/products/:id', async (req, res) => {
+  try { await db.query('DELETE FROM crewfit_products WHERE id = $1', [req.params.id]); res.json({ success: true }); }
+  catch (err) { res.status(500).json({ error: 'Failed to delete product' }); }
 });
 
 module.exports = router;
