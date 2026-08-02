@@ -49,13 +49,18 @@ const META = {
 };
 const CLOSED = ['Dispatched', 'Cancelled'];
 
+// Calendar dates must be formatted from local parts, never via toISOString(). These are DATE
+// columns, so pg hands back a Date at *local* midnight — in IST that is 18:30 UTC the previous
+// day, and toISOString() would report the wrong date. The same trap applies to "today": before
+// 05:30 IST, new Date().toISOString() still reads as yesterday.
+const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 const toDateStr = (v) => {
   if (!v) return null;
-  if (v instanceof Date) return v.toISOString().slice(0, 10);
+  if (v instanceof Date) return ymd(v);
   return String(v).slice(0, 10);
 };
-const todayStr = () => new Date().toISOString().slice(0, 10);
-const addDaysStr = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
+const todayStr = () => ymd(new Date());
+const addDaysStr = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return ymd(d); };
 
 function safeJson(v, fallback) { try { return typeof v === 'string' ? JSON.parse(v) : (v || fallback); } catch { return fallback; } }
 const parseOrder = (o) => ({ ...o, deadline_at: toDateStr(o.deadline_at), order_date: toDateStr(o.order_date), dispatch_date: toDateStr(o.dispatch_date), line_items: safeJson(o.line_items, []), invoices: safeJson(o.invoices, []) });
@@ -363,7 +368,7 @@ const EDITABLE = ['status', 'payment_status', 'layout_status', 'customer_type', 
 // PUT /api/crewfit/orders/:id — inline field / dropdown updates
 router.put('/orders/:id', async (req, res) => {
   try {
-    const current = (await db.query('SELECT status, payment_status, tracking_link, dispatch_date, mot FROM crewfit_orders WHERE id = $1', [req.params.id])).rows[0];
+    const current = (await db.query('SELECT status, payment_status, tracking_link, dispatch_date, mot, deadline_at FROM crewfit_orders WHERE id = $1', [req.params.id])).rows[0];
     if (!current) return res.status(404).json({ error: 'Not found' });
 
     const body = { ...req.body };
@@ -388,6 +393,13 @@ router.put('/orders/:id', async (req, res) => {
     if (current.status === 'Awaiting Payment' && statusUntouched
       && body.payment_status !== undefined && body.payment_status && body.payment_status !== 'Pending') {
       body.status = 'Pending';
+    }
+    // The production clock starts when the advance lands, not when the order was keyed in.
+    // Seed a 7-day deadline the first time payment is recorded — only when none exists and
+    // the caller isn't setting one, so an SO's own date is never overwritten.
+    if (!current.deadline_at && body.deadline_at === undefined
+      && current.payment_status === 'Pending' && body.payment_status && body.payment_status !== 'Pending') {
+      body.deadline_at = addDaysStr(7);
     }
     // Production is done and the balance has just been collected — the order is cleared to ship.
     // It parks in "Dispatch Pending" (print the label, hand it to the courier) and only becomes

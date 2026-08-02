@@ -3,6 +3,7 @@ const PDFDocument = require('pdfkit');
 const db = require('../db/connection');
 const { SHIP_ZONES, SHIP_REGIONS, shippingFor } = require('../data/crewfitShipping');
 const { renderQuote } = require('../services/invoice');
+const razorpay = require('../config/razorpay');
 
 const router = express.Router();
 
@@ -214,16 +215,15 @@ router.post('/:id/link-order', async (req, res) => {
 // usual "confirm now, invoice later" flow. Not part of the default quote flow.
 router.post('/:id/payment-link', async (req, res) => {
   try {
-    if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
-      return res.status(400).json({ error: 'Razorpay is not configured on this server' });
+    if (!razorpay.isConfigured) {
+      return res.status(400).json({ error: `Razorpay (${razorpay.MODE} mode) is not configured on this server — set ${razorpay.missingVars().join(' and ')}` });
     }
     const r = await db.query('SELECT * FROM crewfit_quotes WHERE id = $1', [req.params.id]);
     const quote = r.rows[0];
     if (!quote) return res.status(404).json({ error: 'Quote not found' });
     if (quote.converted_order_id) return res.status(400).json({ error: 'This quote was already converted to an order' });
 
-    const Razorpay = require('razorpay');
-    const rzp = new Razorpay({ key_id: process.env.RAZORPAY_KEY_ID, key_secret: process.env.RAZORPAY_KEY_SECRET });
+    const rzp = razorpay.client();
     const link = await rzp.paymentLink.create({
       amount: Math.round(Number(quote.grand_total) * 100),
       currency: 'INR',

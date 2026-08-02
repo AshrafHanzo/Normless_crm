@@ -61,8 +61,19 @@ function blankItem() {
     _sizeMode: 'standard', _sizes: {}, _pendingMock: [], _pendingProd: [],
   }
 }
+// Local calendar date (YYYY-MM-DD). toISOString() would report yesterday for any IST time
+// before 05:30, which is exactly when a late-night order would get the wrong date.
+const todayStr = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` }
+
 export function blankOrder() {
-  return { status: 'Pending', payment_status: 'Pending', layout_status: 'Pending', customer_type: 'New', _gstPct: 5, shipping: '', ship_region: 'Tamil Nadu', whatsapp_number: '', line_items: [blankItem()] }
+  // Order date defaults to today (still editable). The deadline is deliberately left blank —
+  // it's set to advance payment date + 7 days once the advance actually lands, since the
+  // production clock starts on payment, not on when the order was keyed in.
+  return {
+    status: 'Pending', payment_status: 'Pending', layout_status: 'Pending', customer_type: 'New',
+    order_date: todayStr(),
+    _gstPct: 5, shipping: '', ship_region: 'Tamil Nadu', whatsapp_number: '', line_items: [blankItem()],
+  }
 }
 const waSource = (order) => order.whatsapp_number || order.contact_number || order.billing_mobile
 
@@ -111,10 +122,59 @@ function buildDescription(f) {
   L.push(`💳 *Advance Payable (50%):* ₹${f.advance || 0}`)
   L.push(`💵 *Balance Payable Before Dispatch:* ₹${f.balance || 0}`, '')
   L.push('Please complete the advance payment using the link below to begin production:', '')
-  L.push(`🔗 ${PAYMENT_LINK_PLACEHOLDER}`, '')
+  // Once an advance link exists it goes straight into the summary; until then the placeholder
+  // stays so the SO can still paste a link in by hand.
+  L.push(`🔗 ${f._advanceLink || PAYMENT_LINK_PLACEHOLDER}`, '')
   L.push('Kindly verify all the above details before making the payment.', '')
   L.push('Once the payment is completed, please share the payment confirmation screenshot here.', '')
   L.push('Production will begin immediately after payment verification. 🚀')
+  return L.join('\n')
+}
+
+// The balance-collection message, sent once production photos have gone across. Mirrors the
+// order-summary template but recaps what's already been paid and asks only for the remainder —
+// so it reads as the closing step of the order rather than a fresh quote.
+function buildBalanceMessage(f, payment) {
+  const items = (f.line_items || []).filter(it => it.product || it.qty)
+  const grand = Number(f.grand_total) || 0
+  const balance = payment ? Number(payment.amount) : (Number(f.balance) || 0)
+  const paid = Math.max(0, grand - balance)
+
+  const L = [`Hi ${f.customer_name || 'there'}! 🎉`, '']
+  L.push(`Great news — your Crewfit order (Ref: CF-${f.sl_no}) is *production complete* and ready for dispatch! ✅`, '')
+  L.push('📸 Please check the production photos shared above.', '')
+  L.push('*— Order Summary —*')
+  items.forEach((it, i) => {
+    if (items.length > 1) L.push(`*Product ${i + 1}*`)
+    L.push(`📦 *Product:* ${dash(it.product)}${it.color ? ` (${it.color})` : ''}`)
+    L.push(`👕 *Quantity:* ${dash(it.qty)}`)
+    L.push(`🎨 *Printing:* ${dash(it.printing)}`)
+    L.push(`📏 *Size Breakdown:* ${dash(it.size_breakdown)}`)
+    L.push('')
+  })
+  L.push(`💵 *Grand Total:* ₹${grand.toLocaleString('en-IN')}`)
+  L.push(`✅ *Advance Already Paid:* ₹${paid.toLocaleString('en-IN')}`)
+  L.push(`💰 *Balance Payable Now:* ₹${balance.toLocaleString('en-IN')}`, '')
+  L.push('Kindly complete the balance payment using the secure link below so we can dispatch your order right away:', '')
+  L.push(`🔗 ${payment?.razorpay_short_url || PAYMENT_LINK_PLACEHOLDER}`, '')
+  L.push(`📍 *Delivery Address:* ${dash(f.delivery_location)}`, '')
+  L.push('Once the payment is confirmed, we will dispatch your order and share the tracking details with you. 🚚', '')
+  L.push('Thank you for choosing Crewfit! 🙌')
+  return L.join('\n')
+}
+
+// Short, standalone nudge for one payment link — used when chasing the advance or the
+// balance on its own, rather than resending the whole order summary.
+function buildPaymentMessage(order, payment) {
+  const half = payment.kind === 'advance' ? 'advance (50%)' : payment.kind === 'balance' ? 'balance' : 'payment';
+  const L = [`Hi ${order.customer_name || 'there'}! 👋`, '']
+  L.push(`Here's the secure payment link for the ${half} of your Crewfit order (Ref: CF-${order.sl_no}):`, '')
+  L.push(`💵 *Amount:* ₹${Number(payment.amount).toLocaleString('en-IN')}`)
+  L.push(`🔗 ${payment.razorpay_short_url}`, '')
+  L.push(payment.kind === 'balance'
+    ? 'Once this is paid we will dispatch your order right away. 🚚'
+    : 'Production begins as soon as this payment is confirmed. 🚀')
+  L.push('', 'Thank you for choosing Crewfit! 🙌')
   return L.join('\n')
 }
 
@@ -220,6 +280,50 @@ function ImageUploadGrid({ icon, label, thumbs, max = 5, busy, onUpload, onView,
   )
 }
 
+// One half of an order's payment: generate the Razorpay link, share it, then watch it settle.
+// "Check status" is the manual fallback for a webhook that never arrived.
+function PaymentCard({ title, amount, payment, busy, disabled, disabledLabel, onGenerate, onCopy, onSend, onCancel }) {
+  const state = payment?.status === 'Paid' ? 'issued' : payment ? 'ready' : disabled ? 'locked' : 'ready';
+  return (
+    <div className={`invoice-card invoice-card-${state}`}>
+      <div className="invoice-card-head">
+        <span className="invoice-card-icon">{payment?.status === 'Paid' ? '✅' : '🔗'}</span>
+        <div className="invoice-card-heading">
+          <div className="invoice-card-title">{title}</div>
+          <div className="invoice-card-amount">{fmt(amount)}</div>
+        </div>
+        <span className={`invoice-status-pill invoice-status-${state}`}>
+          {payment?.status === 'Paid' ? 'Paid' : payment ? 'Link sent' : disabled ? 'Locked' : 'Not sent'}
+        </span>
+      </div>
+      {payment && (
+        <div className="invoice-card-meta" style={{ display: 'block' }}>
+          <a href={payment.razorpay_short_url} target="_blank" rel="noreferrer" className="pay-link">{payment.razorpay_short_url}</a>
+          <div style={{ marginTop: 4 }}>
+            {payment.status === 'Paid'
+              ? `Paid ${payment.paid_at ? new Date(payment.paid_at).toLocaleString('en-IN') : ''}`
+              : payment.sent_at ? `Sent ${new Date(payment.sent_at).toLocaleDateString('en-IN')}` : 'Not shared yet'}
+          </div>
+        </div>
+      )}
+      {!payment ? (
+        <button type="button" className="btn btn-secondary invoice-card-btn" disabled={busy || disabled} onClick={onGenerate}>
+          {busy ? 'Creating…' : disabled ? disabledLabel : 'Generate payment link'}
+        </button>
+      ) : payment.status === 'Paid' ? (
+        <button type="button" className="btn btn-secondary invoice-card-btn" onClick={onCopy}>📋 Copy link</button>
+      ) : (
+        <div className="pay-card-actions">
+          <button type="button" className="btn btn-secondary btn-sm" onClick={onSend}>💬 WhatsApp</button>
+          <button type="button" className="mini-btn" onClick={onCopy}>📋 Copy</button>
+          <button type="button" className="mini-btn" onClick={onCancel} style={{ color: 'var(--danger)' }}>Cancel</button>
+          <span className="pay-live-dot" title="Checked with Razorpay every 10 seconds"><i />watching</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function InvoiceCard({ title, amount, invoice, busy, locked, lockedLabel, onGenerate }) {
   const status = invoice ? 'issued' : locked ? 'locked' : 'ready'
   return (
@@ -258,6 +362,8 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
   const [lightbox, setLightbox] = useState(null) // { idx, kind, images, index } | null
   const [bulkDownloading, setBulkDownloading] = useState(null) // key string while a "download all" is in flight
   const [labelBusy, setLabelBusy] = useState(false)
+  const [payments, setPayments] = useState([])
+  const [payBusy, setPayBusy] = useState(null) // 'advance' | 'balance' while a link call is in flight
 
   useEffect(() => {
     apiFetch('/api/crewfit/meta').then(m => setMeta(m && m.statuses ? m : null))
@@ -275,8 +381,45 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
     if (target === 'new') setForm(blankOrder())
     else if (target) openEdit(target)
     else setForm(null)
+    setPayments([])
+    if (target && target !== 'new' && target.id) loadPayments(target.id)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [target])
+
+  const loadPayments = async (orderId) => {
+    const res = await apiFetch(`/api/crewfit/payments/for-order/${orderId}`)
+    if (res && !res.error) setPayments(res.payments || [])
+    return res
+  }
+
+  // While an unpaid link is on screen, re-check it with Razorpay every 10s so the card flips to
+  // Paid on its own. Scoped to this order, paused when the tab is hidden, and the server applies
+  // its own per-link cooldown so this stays cheap even with the Payments tab open alongside.
+  const openLinkCount = payments.filter(p => p.status === 'Created').length
+  useEffect(() => {
+    if (!form?.id || !openLinkCount) return
+    let inFlight = false
+    const tick = async () => {
+      if (document.hidden || inFlight) return
+      inFlight = true
+      try {
+        const res = await apiFetch('/api/crewfit/payments/sync-pending', { method: 'POST', body: JSON.stringify({ orderId: form.id }) })
+        if (res && !res.error) {
+          await loadPayments(form.id)
+          // A settled payment may have moved the order's status/deadline — pull those back in.
+          if (res.nowPaid) {
+            const fresh = await apiFetch(`/api/crewfit/orders/${form.id}`)
+            if (fresh && !fresh.error) setF({ payment_status: fresh.payment_status, status: fresh.status, deadline_at: fresh.deadline_at })
+          }
+        }
+      } finally { inFlight = false }
+    }
+    const id = setInterval(tick, 10000)
+    const onVisible = () => { if (!document.hidden) tick() }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => { clearInterval(id); document.removeEventListener('visibilitychange', onVisible) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form?.id, openLinkCount])
 
   const openEdit = (o) => {
     const base = (Number(o.product_total) || 0) + (Number(o.shipping) || 0)
@@ -466,7 +609,7 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
     const patch = { tracking_link: v }
     if (v && !['Dispatched', 'Cancelled'].includes(form.status)) {
       patch.status = 'Dispatched'
-      if (!form.dispatch_date) patch.dispatch_date = new Date().toISOString().slice(0, 10)
+      if (!form.dispatch_date) patch.dispatch_date = todayStr()
     }
     setF(patch)
   }
@@ -480,7 +623,7 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
   }
   // Porter doesn't issue a tracking ID — this is the alternate path to Dispatched for that MOT.
   const markDispatchedViaPorter = () => {
-    setF({ status: 'Dispatched', dispatch_date: form.dispatch_date || new Date().toISOString().slice(0, 10) })
+    setF({ status: 'Dispatched', dispatch_date: form.dispatch_date || todayStr() })
   }
   const sendDispatchWhatsApp = async () => {
     const num = toWaNumber(waSource(form))
@@ -494,6 +637,36 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
   }
   const copyDispatchMessage = () => navigator.clipboard?.writeText(buildDispatchMessage(form))
   const printLabel = async () => { setLabelBusy(true); await openShippingLabel(apiFetch, form); setLabelBusy(false) }
+
+  // ---- Razorpay payment links -------------------------------------------------
+  const paymentFor = (kind) => payments.find(p => p.kind === kind && ['Created', 'Paid'].includes(p.status))
+  // Baked into the order summary so the SO shares one message carrying both the
+  // confirmation and the link to pay it.
+  const advanceLink = () => paymentFor('advance')?.razorpay_short_url
+  const generatePaymentLink = async (kind) => {
+    setPayBusy(kind)
+    const res = await apiFetch(`/api/crewfit/payments/order/${form.id}`, { method: 'POST', body: JSON.stringify({ kind }) })
+    setPayBusy(null)
+    if (!res || res.error) { alert(res?.error || 'Failed to create payment link'); return }
+    await loadPayments(form.id)
+  }
+  const copyPaymentLink = (payment) => navigator.clipboard?.writeText(payment.razorpay_short_url)
+  const sendPaymentLink = async (payment) => {
+    const num = toWaNumber(waSource(form))
+    // The balance goes out with the full production-complete template; the advance and any
+    // custom link use the short nudge, since the order summary already carries their context.
+    const body = payment.kind === 'balance' ? buildBalanceMessage(form, payment) : buildPaymentMessage(form, payment)
+    const msg = encodeURIComponent(body)
+    window.open(num ? `https://wa.me/${num}?text=${msg}` : `https://wa.me/?text=${msg}`, '_blank')
+    await apiFetch(`/api/crewfit/payments/${payment.id}/sent`, { method: 'POST' })
+    loadPayments(form.id)
+  }
+  const cancelPaymentLink = async (payment) => {
+    if (!confirm(`Cancel this ${payment.kind} payment link? The customer will no longer be able to pay through it.`)) return
+    const res = await apiFetch(`/api/crewfit/payments/${payment.id}/cancel`, { method: 'POST' })
+    if (!res || res.error) { alert(res?.error || 'Failed to cancel link'); return }
+    loadPayments(form.id)
+  }
   const sendPhotosWhatsApp = async () => {
     const num = toWaNumber(waSource(form))
     const msg = encodeURIComponent(buildPhotosMessage(form, API_URL))
@@ -544,7 +717,7 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
       size_breakdown: items.map(i => `${i.product || 'Item'}: ${i.size_breakdown}`).join(' | '),
       unit_price: items.length === 1 ? items[0].unit_price : null,
     }
-    payload.description = buildDescription(payload)
+    payload.description = buildDescription({ ...payload, _advanceLink: advanceLink() })
     delete payload._gstPct
     const isNew = !form.id
     const res = await apiFetch(`/api/crewfit/orders${isNew ? '' : '/' + form.id}`, { method: isNew ? 'POST' : 'PUT', body: JSON.stringify(payload) })
@@ -564,7 +737,8 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
     }
   }
 
-  const preview = form ? buildDescription({ ...form, ...recompute(form) }) : ''
+  const preview = form ? buildDescription({ ...form, ...recompute(form), _advanceLink: advanceLink() }) : ''
+  const balanceMessage = form ? buildBalanceMessage({ ...form, ...recompute(form) }, paymentFor('balance')) : ''
   const advInvoice = form?.invoices?.find(i => i.type === 'advance')
   const balInvoice = form?.invoices?.find(i => i.type === 'balance')
 
@@ -699,6 +873,29 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
 
           {form.id && (
             <>
+              <div className="form-section">Payment links
+                <span className="unit-hint">Razorpay · paid links update the order automatically</span>
+              </div>
+              <div className="invoice-grid">
+                <PaymentCard
+                  title="Advance (50%)" amount={form.advance} payment={paymentFor('advance')}
+                  busy={payBusy === 'advance'}
+                  onGenerate={() => generatePaymentLink('advance')}
+                  onCopy={() => copyPaymentLink(paymentFor('advance'))}
+                  onSend={() => sendPaymentLink(paymentFor('advance'))}
+                  onCancel={() => cancelPaymentLink(paymentFor('advance'))}
+                />
+                <PaymentCard
+                  title="Balance (50%)" amount={form.balance} payment={paymentFor('balance')}
+                  busy={payBusy === 'balance'}
+                  disabled={form.payment_status === 'Pending'} disabledLabel="Collect the advance first"
+                  onGenerate={() => generatePaymentLink('balance')}
+                  onCopy={() => copyPaymentLink(paymentFor('balance'))}
+                  onSend={() => sendPaymentLink(paymentFor('balance'))}
+                  onCancel={() => cancelPaymentLink(paymentFor('balance'))}
+                />
+              </div>
+
               <div className="form-section">GST Invoices</div>
               <div className="invoice-grid">
                 <InvoiceCard
@@ -810,6 +1007,21 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
             </span>
           </div>
           <div className="order-block">{preview || 'Fill product, qty and billing to generate the order block…'}</div>
+
+          {paymentFor('balance') && (
+            <>
+              <div className="form-section">Balance payment message
+                <span style={{ display: 'flex', gap: 8 }}>
+                  <button type="button" className="mini-btn" onClick={() => navigator.clipboard?.writeText(balanceMessage)}>📋 Copy</button>
+                  <button type="button" className="mini-btn" onClick={() => sendPaymentLink(paymentFor('balance'))}>💬 Send via WhatsApp</button>
+                </span>
+              </div>
+              <div className="img-upload-hint" style={{ marginBottom: 8 }}>
+                Send the production photos first, then share this — it recaps the order, shows what’s already paid and carries the balance link.
+              </div>
+              <div className="order-block">{balanceMessage}</div>
+            </>
+          )}
 
           <div className="input-group" style={{ marginTop: 14 }}><label>Internal notes</label><textarea rows={2} value={form.notes || ''} onChange={e => setF({ notes: e.target.value })} /></div>
 

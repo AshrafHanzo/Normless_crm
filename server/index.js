@@ -168,6 +168,9 @@ const syncRoutes = require('./routes/sync');
 const crewfitRoutes = require('./routes/crewfit');
 const crewfitQuotesRoutes = require('./routes/crewfit-quotes');
 const { convertQuoteToOrder } = crewfitQuotesRoutes;
+const razorpayConfig = require('./config/razorpay');
+const crewfitPaymentsRoutes = require('./routes/crewfit-payments');
+const { settlePayment } = crewfitPaymentsRoutes;
 
 // Public routes
 app.use('/api/auth', authRoutes);
@@ -179,7 +182,9 @@ app.use('/api/auth', authRoutes);
 app.post('/api/crewfit/webhooks/razorpay', async (req, res) => {
     const crypto = require('crypto');
     try {
-        const secret = process.env.RAZORPAY_WEBHOOK_SECRET;
+        // Must be the secret for the active mode — a Test-mode webhook is signed with the
+        // Test secret and would fail verification against the Live one.
+        const secret = razorpayConfig.webhookSecret;
         const signature = req.headers['x-razorpay-signature'];
         if (!secret || !signature || !req.rawBody) return res.status(400).json({ error: 'Missing webhook secret/signature' });
         const expected = crypto.createHmac('sha256', secret).update(req.rawBody).digest('hex');
@@ -190,6 +195,16 @@ app.post('/api/crewfit/webhooks/razorpay', async (req, res) => {
 
         const linkId = event.payload?.payment_link?.entity?.id;
         if (!linkId) return res.json({ received: true });
+        const rzpPaymentId = event.payload?.payment?.entity?.id;
+
+        // Order payments (advance / balance / custom) — settling one moves the order's
+        // payment_status and, where relevant, its pipeline status.
+        const pr = await db.query('SELECT * FROM crewfit_payments WHERE razorpay_payment_link_id = $1', [linkId]);
+        if (pr.rows[0]) {
+            const result = await settlePayment(pr.rows[0], { razorpayPaymentId: rzpPaymentId });
+            if (result.alreadySettled) console.log(`↩️  Razorpay re-delivery for payment #${pr.rows[0].id} — already settled`);
+            return res.json({ received: true });
+        }
 
         const qr = await db.query('SELECT * FROM crewfit_quotes WHERE razorpay_payment_link_id = $1', [linkId]);
         const quote = qr.rows[0];
@@ -221,6 +236,7 @@ app.use('/api/interactions', authMiddleware, interactionRoutes);
 app.use('/api/dashboard', authMiddleware, dashboardRoutes);
 app.use('/api/sync', authMiddleware, syncRoutes);
 app.use('/api/crewfit/quotes', authMiddleware, crewfitQuotesRoutes);
+app.use('/api/crewfit/payments', authMiddleware, crewfitPaymentsRoutes);
 app.use('/api/crewfit', authMiddleware, crewfitRoutes);
 
 // Health check
@@ -332,10 +348,11 @@ async function ensureCrewfitSchema() {
                 ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_crewfit_catalog BOOLEAN DEFAULT false;
                 ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_crewfit_analytics BOOLEAN DEFAULT false;
                 ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_crewfit_calculator BOOLEAN DEFAULT false;
+                ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_crewfit_payments BOOLEAN DEFAULT false;
             `);
             await db.query(`UPDATE admin_users SET can_access_normless=true, can_access_crewfit=true,
                 can_view_crewfit_followups=true, can_view_crewfit_orders=true, can_view_crewfit_catalog=true,
-                can_view_crewfit_analytics=true, can_view_crewfit_calculator=true
+                can_view_crewfit_analytics=true, can_view_crewfit_calculator=true, can_view_crewfit_payments=true
                 WHERE role IN ('owner','admin')`);
         } catch (e) { console.error('admin perms ensure:', e.message); }
 
@@ -385,6 +402,31 @@ async function ensureCrewfitSchema() {
                 ALTER TABLE crewfit_quotes ADD COLUMN IF NOT EXISTS gst_amount NUMERIC;
             `);
         } catch (e) { console.error('crewfit_quotes ensure:', e.message); }
+
+        // Razorpay payment links. One row per link ever generated — the advance and balance
+        // halves of an order, plus standalone "custom" links not tied to any order. Kept in
+        // its own table (rather than columns on the order) so the Payments tab can show the
+        // full transaction history, including cancelled and superseded links.
+        try {
+            await db.exec(`
+                CREATE TABLE IF NOT EXISTS crewfit_payments (
+                    id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                    order_id INTEGER, kind TEXT NOT NULL DEFAULT 'custom',
+                    customer_name TEXT, contact_number TEXT, email TEXT,
+                    amount NUMERIC NOT NULL, description TEXT, notes TEXT,
+                    status TEXT NOT NULL DEFAULT 'Created',
+                    razorpay_payment_link_id TEXT, razorpay_short_url TEXT,
+                    razorpay_payment_id TEXT, razorpay_mode TEXT,
+                    paid_at TIMESTAMP, cancelled_at TIMESTAMP,
+                    sent_at TIMESTAMP, created_by TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                ALTER TABLE crewfit_payments ADD COLUMN IF NOT EXISTS last_synced_at TIMESTAMP;
+                CREATE INDEX IF NOT EXISTS crewfit_payments_link_idx ON crewfit_payments (razorpay_payment_link_id);
+                CREATE INDEX IF NOT EXISTS crewfit_payments_order_idx ON crewfit_payments (order_id);
+            `);
+        } catch (e) { console.error('crewfit_payments ensure:', e.message); }
 
         const c = await db.query('SELECT COUNT(*) AS n FROM crewfit_products');
         if (parseInt(c.rows[0].n, 10) === 0) {

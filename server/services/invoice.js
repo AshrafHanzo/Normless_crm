@@ -5,7 +5,7 @@ const SELLER = {
   legalName: 'Normless',
   brandName: 'CREWFIT',
   tagline: 'A brand of Normless',
-  address: 'No 152, 1st Street, Vignesh Nagar, Gerugambakkam, Chennai - 600122, Tamil Nadu, India',
+  address: 'Plot no 2, Dhanalakshmi Nagar, Moulivakkam, Iyyappanthangal, Chennai, Tamil Nadu 600125',
   gstin: '33AAYFN3674M1ZF',
   stateCode: '33',
   state: 'Tamil Nadu',
