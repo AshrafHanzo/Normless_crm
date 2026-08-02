@@ -133,10 +133,10 @@ function App() {
             <Route path="/profile" element={<ProtectedRoute><AppLayout><Profile /></AppLayout></ProtectedRoute>} />
 
             {/* Crewfit CRM */}
-            <Route path="/crewfit" element={<ProtectedRoute><AppLayout><CrewfitDashboard /></AppLayout></ProtectedRoute>} />
-            <Route path="/crewfit/dashboard" element={<ProtectedRoute><AppLayout><CrewfitAnalytics /></AppLayout></ProtectedRoute>} />
-            <Route path="/crewfit/orders" element={<ProtectedRoute><AppLayout><CrewfitOrders /></AppLayout></ProtectedRoute>} />
-            <Route path="/crewfit/catalog" element={<ProtectedRoute><AppLayout><CrewfitCatalog /></AppLayout></ProtectedRoute>} />
+            <Route path="/crewfit" element={<ProtectedRoute permission="can_view_crewfit_followups"><AppLayout><CrewfitDashboard /></AppLayout></ProtectedRoute>} />
+            <Route path="/crewfit/dashboard" element={<ProtectedRoute permission="can_view_crewfit_analytics"><AppLayout><CrewfitAnalytics /></AppLayout></ProtectedRoute>} />
+            <Route path="/crewfit/orders" element={<ProtectedRoute permission="can_view_crewfit_orders"><AppLayout><CrewfitOrders /></AppLayout></ProtectedRoute>} />
+            <Route path="/crewfit/catalog" element={<ProtectedRoute permission="can_view_crewfit_catalog"><AppLayout><CrewfitCatalog /></AppLayout></ProtectedRoute>} />
           </Routes>
         </BrowserRouter>
       </AuthContext.Provider>

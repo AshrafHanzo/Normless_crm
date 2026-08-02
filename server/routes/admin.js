@@ -15,7 +15,7 @@ router.get('/users', async (req, res) => {
       SELECT id, username, role, is_active, last_login, login_count, created_at,
              can_view_dashboard, can_view_customers, can_view_orders, can_scan_orders, can_sync_data,
              can_access_normless, can_access_crewfit,
-             can_view_crewfit_followups, can_view_crewfit_orders, can_view_crewfit_catalog
+             can_view_crewfit_followups, can_view_crewfit_orders, can_view_crewfit_catalog, can_view_crewfit_analytics
       FROM admin_users
       ORDER BY created_at DESC
     `);
@@ -49,12 +49,12 @@ router.post('/users', async (req, res) => {
         username, password_hash, role, is_active,
         can_view_dashboard, can_view_customers, can_view_orders, can_scan_orders, can_sync_data,
         can_access_normless, can_access_crewfit,
-        can_view_crewfit_followups, can_view_crewfit_orders, can_view_crewfit_catalog
-      ) VALUES ($1, $2, $3, true, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        can_view_crewfit_followups, can_view_crewfit_orders, can_view_crewfit_catalog, can_view_crewfit_analytics
+      ) VALUES ($1, $2, $3, true, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
     `, [
       username, hash, role || 'operator',
       !!p.dashboard, !!p.customers, !!p.orders, !!p.scanner, !!p.sync,
-      !!p.normless, !!p.crewfit, !!p.crewfit_followups, !!p.crewfit_orders, !!p.crewfit_catalog
+      !!p.normless, !!p.crewfit, !!p.crewfit_followups, !!p.crewfit_orders, !!p.crewfit_catalog, !!p.crewfit_analytics
     ]);
 
     res.json({ success: true, message: 'User created' });
@@ -77,6 +77,7 @@ router.put('/users/:id', async (req, res) => {
       scanner: 'can_scan_orders', sync: 'can_sync_data',
       normless: 'can_access_normless', crewfit: 'can_access_crewfit',
       crewfit_followups: 'can_view_crewfit_followups', crewfit_orders: 'can_view_crewfit_orders', crewfit_catalog: 'can_view_crewfit_catalog',
+      crewfit_analytics: 'can_view_crewfit_analytics',
     };
 
     const sets = [], vals = [];

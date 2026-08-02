@@ -10,24 +10,25 @@ const GROUPS = [
     { key: 'scanner', label: 'Scan Order', icon: 'scan' },
   ] },
   { brand: 'crewfit', label: 'Crewfit', glyph: 'shirt', pages: [
+    { key: 'crewfit_analytics', label: 'Dashboard', icon: 'dashboard' },
     { key: 'crewfit_followups', label: 'Follow-ups', icon: 'bell' },
     { key: 'crewfit_orders', label: 'Bulk Orders', icon: 'box' },
     { key: 'crewfit_catalog', label: 'Catalog', icon: 'shirt' },
   ] },
 ]
 
-const blankForm = () => ({ username: '', password: '', role: 'operator', normless: true, dashboard: true, customers: true, orders: true, scanner: true, crewfit: false, crewfit_followups: false, crewfit_orders: false, crewfit_catalog: false })
+const blankForm = () => ({ username: '', password: '', role: 'operator', normless: true, dashboard: true, customers: true, orders: true, scanner: true, crewfit: false, crewfit_analytics: false, crewfit_followups: false, crewfit_orders: false, crewfit_catalog: false })
 const fromUser = (u) => ({
   id: u.id, username: u.username, password: '', role: u.role,
   normless: !!u.can_access_normless, dashboard: !!u.can_view_dashboard, customers: !!u.can_view_customers, orders: !!u.can_view_orders, scanner: !!u.can_scan_orders,
-  crewfit: !!u.can_access_crewfit, crewfit_followups: !!u.can_view_crewfit_followups, crewfit_orders: !!u.can_view_crewfit_orders, crewfit_catalog: !!u.can_view_crewfit_catalog,
+  crewfit: !!u.can_access_crewfit, crewfit_analytics: !!u.can_view_crewfit_analytics, crewfit_followups: !!u.can_view_crewfit_followups, crewfit_orders: !!u.can_view_crewfit_orders, crewfit_catalog: !!u.can_view_crewfit_catalog,
 })
 const buildPerms = (f) => {
-  if (f.role === 'admin') return { normless: true, crewfit: true, dashboard: true, customers: true, orders: true, scanner: true, crewfit_followups: true, crewfit_orders: true, crewfit_catalog: true, sync: false }
+  if (f.role === 'admin') return { normless: true, crewfit: true, dashboard: true, customers: true, orders: true, scanner: true, crewfit_analytics: true, crewfit_followups: true, crewfit_orders: true, crewfit_catalog: true, sync: false }
   return {
     normless: !!f.normless, crewfit: !!f.crewfit, sync: false,
     dashboard: !!(f.normless && f.dashboard), customers: !!(f.normless && f.customers), orders: !!(f.normless && f.orders), scanner: !!(f.normless && f.scanner),
-    crewfit_followups: !!(f.crewfit && f.crewfit_followups), crewfit_orders: !!(f.crewfit && f.crewfit_orders), crewfit_catalog: !!(f.crewfit && f.crewfit_catalog),
+    crewfit_analytics: !!(f.crewfit && f.crewfit_analytics), crewfit_followups: !!(f.crewfit && f.crewfit_followups), crewfit_orders: !!(f.crewfit && f.crewfit_orders), crewfit_catalog: !!(f.crewfit && f.crewfit_catalog),
   }
 }
 

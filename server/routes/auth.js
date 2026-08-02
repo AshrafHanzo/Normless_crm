@@ -87,7 +87,8 @@ router.post('/login', async (req, res) => {
                 can_access_crewfit: user.can_access_crewfit,
                 can_view_crewfit_followups: user.can_view_crewfit_followups,
                 can_view_crewfit_orders: user.can_view_crewfit_orders,
-                can_view_crewfit_catalog: user.can_view_crewfit_catalog
+                can_view_crewfit_catalog: user.can_view_crewfit_catalog,
+                can_view_crewfit_analytics: user.can_view_crewfit_analytics
             }
         });
     } catch (error) {
@@ -130,7 +131,8 @@ router.get('/verify', async (req, res) => {
                 can_access_crewfit: user.can_access_crewfit,
                 can_view_crewfit_followups: user.can_view_crewfit_followups,
                 can_view_crewfit_orders: user.can_view_crewfit_orders,
-                can_view_crewfit_catalog: user.can_view_crewfit_catalog
+                can_view_crewfit_catalog: user.can_view_crewfit_catalog,
+                can_view_crewfit_analytics: user.can_view_crewfit_analytics
             }
         });
     } catch {

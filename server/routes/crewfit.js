@@ -45,6 +45,7 @@ const META = {
   sos: ['Anu', 'Sadam'],
   vendors: ['Mubas Clothings', 'PTI', 'Ashna Garments', 'Print Wear', 'Dutees', 'TPR Garments'],
   mots: ['ST Courier', 'Porter', 'Self Pickup', 'DTDC', 'Professional Couriers', 'Delhivery', 'KRS Travels', 'AVK Cargo'],
+  photoStatuses: ['None', 'Partial', 'Complete'],
 };
 const CLOSED = ['Dispatched', 'Cancelled'];
 
@@ -62,6 +63,14 @@ const parseOrder = (o) => ({ ...o, deadline_at: toDateStr(o.deadline_at), order_
 async function fetchAll() {
   const r = await db.query('SELECT * FROM crewfit_orders ORDER BY sl_no DESC');
   return r.rows.map(parseOrder);
+}
+
+// 'None' / 'Partial' / 'Complete' — how many line items have at least one image of this kind.
+function photoStatus(items, field) {
+  if (!items.length) return 'None';
+  const n = items.filter(it => (it[field] || []).length > 0).length;
+  if (n === 0) return 'None';
+  return n === items.length ? 'Complete' : 'Partial';
 }
 
 // GET /api/crewfit/meta — dropdown options (merges defaults with values seen in data)
@@ -282,18 +291,50 @@ router.get('/reminders', async (req, res) => {
   }
 });
 
-// GET /api/crewfit/orders — list with filters
+// GET /api/crewfit/orders — list with filters + pagination
 router.get('/orders', async (req, res) => {
   try {
-    const { status, payment_status, layout_status, so, vendor, search } = req.query;
+    const {
+      status, payment_status, layout_status, so, vendor, search,
+      mock_status, prod_status, startDate, endDate,
+      page = 1, limit = 25,
+    } = req.query;
     let orders = await fetchAll();
+    orders = orders.map(o => ({
+      ...o,
+      mock_photo_status: photoStatus(o.line_items || [], 'mockImages'),
+      prod_photo_status: photoStatus(o.line_items || [], 'prodImages'),
+    }));
+
     const eq = (k, v) => { if (v) orders = orders.filter(o => (o[k] || '') === v); };
     eq('status', status); eq('payment_status', payment_status); eq('layout_status', layout_status); eq('so', so); eq('vendor', vendor);
+    if (mock_status) orders = orders.filter(o => o.mock_photo_status === mock_status);
+    if (prod_status) orders = orders.filter(o => o.prod_photo_status === prod_status);
+    if (startDate && endDate) orders = orders.filter(o => o.order_date && o.order_date >= startDate && o.order_date <= endDate);
     if (search) {
-      const s = search.toLowerCase();
-      orders = orders.filter(o => [o.customer_name, o.contact_number, o.description, String(o.sl_no)].some(x => (x || '').toLowerCase().includes(s)));
+      const raw = search.trim();
+      // "45", "CF-45", "CF 45", "cf45", "#45" all mean the same thing: order sl_no 45. Treat these
+      // as an exact order-number lookup instead of a fuzzy substring match — otherwise a short
+      // number like "45" also matches as a substring inside unrelated customers' phone numbers,
+      // which is why searches used to come back with a "random" list of unrelated orders.
+      const orderNoMatch = raw.match(/^#?\s*(?:cf)?[\s-]*(\d{1,6})$/i);
+      if (orderNoMatch) {
+        const n = parseInt(orderNoMatch[1], 10);
+        orders = orders.filter(o => Number(o.sl_no) === n);
+      } else {
+        const norm = (v) => (v || '').toString().toLowerCase().replace(/[^a-z0-9]/g, '');
+        const s = norm(raw);
+        orders = orders.filter(o => [o.customer_name, o.contact_number, o.description, o.product, o.vendor, o.so]
+          .map(norm).some(x => x.includes(s)));
+      }
     }
-    res.json({ orders, total: orders.length });
+
+    const total = orders.length;
+    const lim = Math.max(1, parseInt(limit) || 25);
+    const pg = Math.max(1, parseInt(page) || 1);
+    const start = (pg - 1) * lim;
+    const paged = orders.slice(start, start + lim);
+    res.json({ orders: paged, pagination: { total, page: pg, limit: lim, totalPages: Math.max(1, Math.ceil(total / lim)) } });
   } catch (err) {
     console.error('crewfit orders error:', err); res.status(500).json({ error: 'Failed to load orders' });
   }
