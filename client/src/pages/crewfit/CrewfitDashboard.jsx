@@ -66,13 +66,13 @@ export default function CrewfitDashboard() {
               <span className="reminder-count">{g.count}</span>
             </div>
             <div className="reminder-body">
-              {g.orders.length === 0 ? (
+              {(g.orders || []).length === 0 ? (
                 <div className="reminder-empty">✓ All clear</div>
-              ) : g.orders.slice(0, 8).map(o => {
+              ) : (g.orders || []).slice(0, 8).map(o => {
                 const dl = daysLabel(o.deadline_at)
                 const showDue = g.key === 'readyToCollect'
                 const due = o.payment_status === '50% Paid' ? o.balance : o.grand_total
-                const items = o.line_items || []
+                const items = Array.isArray(o.line_items) ? o.line_items : []
                 const photographed = items.filter(it => (it.prodImages || []).length > 0).length
                 return (
                   <div className="reminder-row" key={o.id} onClick={() => setTarget(o)}>
@@ -93,7 +93,7 @@ export default function CrewfitDashboard() {
                   </div>
                 )
               })}
-              {g.orders.length > 8 && <div className="reminder-more" onClick={() => navigate('/crewfit/orders')}>+{g.orders.length - 8} more →</div>}
+              {(g.orders || []).length > 8 && <div className="reminder-more" onClick={() => navigate('/crewfit/orders')}>+{(g.orders || []).length - 8} more →</div>}
             </div>
           </div>
         ))}

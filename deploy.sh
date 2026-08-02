@@ -6,6 +6,8 @@ set -e
 cd "$(dirname "$0")"
 
 echo "📥 Pulling latest code..."
+# npm install rewrites lockfiles on the server; discard that churn so the pull never aborts.
+git checkout -- package-lock.json client/package-lock.json 2>/dev/null || true
 git pull origin main
 
 echo "📦 Installing backend deps..."
