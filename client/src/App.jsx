@@ -31,12 +31,23 @@ export function useAuth() { return useContext(AuthContext) }
 export function useApi() {
   const { token } = useAuth()
   const apiFetch = async (endpoint, options = {}) => {
+    // FormData sets its own multipart Content-Type (with boundary) — never override it.
+    const isFormData = options.body instanceof FormData
     const res = await fetch(`${API_URL}${endpoint}`, {
       ...options,
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}`, ...options.headers },
+      headers: { ...(isFormData ? {} : { 'Content-Type': 'application/json' }), 'Authorization': `Bearer ${token}`, ...options.headers },
     })
     if (res.status === 401) { localStorage.removeItem('crm_token'); window.location.reload(); return null }
     const ct = res.headers.get('content-type')
+    if (options.responseType === 'blob') {
+      if (!res.ok) {
+        if (ct && ct.includes('application/json')) { const data = await res.json(); return { error: data.error || 'Request failed', status: res.status } }
+        return { error: `Server Error (${res.status})`, status: res.status }
+      }
+      const disposition = res.headers.get('content-disposition') || ''
+      const filename = disposition.match(/filename="?([^"]+)"?/)?.[1]
+      return { blob: await res.blob(), filename }
+    }
     if (ct && ct.includes('application/json')) {
       const data = await res.json()
       if (!res.ok) return { error: data.error || 'Request failed', status: res.status }

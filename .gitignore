@@ -1,6 +1,7 @@
 node_modules
 .env
 .env.local
+env
 shopify_token.json
 
 # Local SQLite database + WAL files (contains real customer data — never commit)
@@ -23,3 +24,6 @@ scratch_*.txt
 
 # Private setup notes (contains secrets — keep local only)
 SERVER_SETUP.md
+
+# User-uploaded design mocks / production photos (real customer files — never commit)
+server/uploads/

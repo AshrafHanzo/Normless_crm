@@ -190,6 +190,9 @@ app.use('/api', (req, res) => {
     res.status(404).json({ error: `API route not found: ${req.url}` });
 });
 
+// Uploaded design mocks / production photos (Crewfit orders)
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
 // Serve React frontend in production
 const clientBuildPath = path.join(__dirname, '..', 'client', 'dist');
 app.use(express.static(clientBuildPath));
@@ -300,12 +303,19 @@ async function ensureCrewfitSchema() {
                 ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS billing_email TEXT;
                 ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS gst_number TEXT;
                 ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS billing_address TEXT;
+                ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS unit_price NUMERIC;
+                ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS line_items TEXT;
+                ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS invoices TEXT;
+                CREATE SEQUENCE IF NOT EXISTS crewfit_invoice_seq START 1;
+                ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS whatsapp_number TEXT;
+                ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS tracking_sent_at TIMESTAMP;
                 ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS product_total NUMERIC;
                 ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS shipping NUMERIC;
                 ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS gst_amount NUMERIC;
                 ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS grand_total NUMERIC;
                 ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS advance NUMERIC;
                 ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS balance NUMERIC;
+                ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS photos_sent_at TIMESTAMP;
             `);
         } catch { /* orders table may not exist yet */ }
 

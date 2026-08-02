@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useApi } from '../../App'
+import CrewfitOrderDrawer from './CrewfitOrderDrawer'
 
 const fmt = (v) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(v || 0)
 const toneVar = { danger: 'var(--danger)', warning: 'var(--warning)', info: 'var(--info)', primary: 'var(--primary)', muted: 'var(--text-muted)' }
@@ -22,6 +23,7 @@ export default function CrewfitDashboard() {
   const [stats, setStats] = useState(null)
   const [reminders, setReminders] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [target, setTarget] = useState(null)
 
   useEffect(() => { load() }, [])
   const load = async () => {
@@ -68,14 +70,24 @@ export default function CrewfitDashboard() {
                 <div className="reminder-empty">✓ All clear</div>
               ) : g.orders.slice(0, 8).map(o => {
                 const dl = daysLabel(o.deadline_at)
+                const showDue = g.key === 'readyToCollect'
+                const due = o.payment_status === '50% Paid' ? o.balance : o.grand_total
+                const items = o.line_items || []
+                const photographed = items.filter(it => (it.prodImages || []).length > 0).length
                 return (
-                  <div className="reminder-row" key={o.id} onClick={() => navigate('/crewfit/orders?focus=' + o.id)}>
+                  <div className="reminder-row" key={o.id} onClick={() => setTarget(o)}>
                     <div className="reminder-cust">
                       <div className="reminder-name">{o.customer_name}</div>
                       <div className="reminder-sub">#{o.sl_no} · {o.status} · {o.payment_status}</div>
                     </div>
                     <div className="reminder-meta">
-                      <div className="reminder-amt">{fmt(o.total_cost)}</div>
+                      {g.key === 'trackingPending' ? (
+                        <div className="reminder-amt" style={{ fontSize: 12 }}>{o.tracking_link || '—'}{o.mot ? ` · ${o.mot}` : ''}</div>
+                      ) : g.key === 'photosPending' ? (
+                        <div className="reminder-amt" style={{ fontSize: 12 }}>📸 {photographed}/{items.length} products photographed</div>
+                      ) : (
+                        <div className="reminder-amt">{showDue ? `Due: ${fmt(due)}` : fmt(o.total_cost)}</div>
+                      )}
                       {dl && <span className="reminder-chip" style={{ color: toneVar[dl.tone], background: 'color-mix(in srgb,' + toneVar[dl.tone] + ' 14%, transparent)' }}>{dl.text}</span>}
                     </div>
                   </div>
@@ -86,6 +98,8 @@ export default function CrewfitDashboard() {
           </div>
         ))}
       </div>
+
+      <CrewfitOrderDrawer target={target} onClose={() => setTarget(null)} onSaved={() => { setTarget(null); load() }} />
     </div>
   )
 }

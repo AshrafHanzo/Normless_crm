@@ -1,7 +1,40 @@
 const express = require('express');
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+const multer = require('multer');
+const PDFDocument = require('pdfkit');
 const db = require('../db/connection');
+const { renderInvoice, nextInvoiceNumber } = require('../services/invoice');
 
 const router = express.Router();
+
+// Design mock / production photo uploads, stored on local disk under server/uploads/crewfit/<orderId>/
+// and served statically at /uploads/crewfit/... (mounted in server/index.js).
+const UPLOAD_ROOT = path.join(__dirname, '..', 'uploads', 'crewfit');
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => {
+      const dir = path.join(UPLOAD_ROOT, String(req.params.id));
+      fs.mkdirSync(dir, { recursive: true });
+      cb(null, dir);
+    },
+    filename: (req, file, cb) => {
+      const ext = path.extname(file.originalname).toLowerCase().replace(/[^a-z0-9.]/g, '');
+      cb(null, `${Date.now()}-${crypto.randomBytes(6).toString('hex')}${ext}`);
+    },
+  }),
+  limits: { fileSize: 8 * 1024 * 1024, files: 5 },
+  fileFilter: (req, file, cb) => {
+    if (/^image\/(jpeg|png|webp)$/.test(file.mimetype)) cb(null, true);
+    else cb(new Error('Only JPG, PNG or WEBP images are allowed'));
+  },
+});
+// multer's own errors land in next(err) — surface them as a normal 400 instead of a 500 crash.
+const uploadImages = (req, res, next) => upload.array('images', 5)(req, res, (err) => {
+  if (err) return res.status(400).json({ error: err.message || 'Upload failed' });
+  next();
+});
 
 // Clean dropdown picklists (source of truth for the UI).
 const META = {
@@ -23,9 +56,12 @@ const toDateStr = (v) => {
 const todayStr = () => new Date().toISOString().slice(0, 10);
 const addDaysStr = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
 
+function safeJson(v, fallback) { try { return typeof v === 'string' ? JSON.parse(v) : (v || fallback); } catch { return fallback; } }
+const parseOrder = (o) => ({ ...o, deadline_at: toDateStr(o.deadline_at), order_date: toDateStr(o.order_date), dispatch_date: toDateStr(o.dispatch_date), line_items: safeJson(o.line_items, []), invoices: safeJson(o.invoices, []) });
+
 async function fetchAll() {
   const r = await db.query('SELECT * FROM crewfit_orders ORDER BY sl_no DESC');
-  return r.rows.map(o => ({ ...o, deadline_at: toDateStr(o.deadline_at), order_date: toDateStr(o.order_date), dispatch_date: toDateStr(o.dispatch_date) }));
+  return r.rows.map(parseOrder);
 }
 
 // GET /api/crewfit/meta — dropdown options (merges defaults with values seen in data)
@@ -61,21 +97,39 @@ router.get('/reminders', async (req, res) => {
     const orders = await fetchAll();
     const today = todayStr(), soon = addDaysStr(2);
     const active = orders.filter(o => !CLOSED.includes(o.status));
-    const overdue = active.filter(o => o.deadline_at && o.deadline_at < today);
+    // Once an order has reached "Ready for Dispatch" (or beyond, i.e. Dispatched — already excluded
+    // via `active`), the production deadline is no longer the thing to chase — it's just awaiting
+    // photos/balance/tracking, which have their own reminder groups below.
+    const overdue = active.filter(o => o.deadline_at && o.deadline_at < today && o.status !== 'Ready for Dispatch');
+    // Every product on the order needs its post-production photo uploaded before the balance can
+    // be collected — partial photo sets (some products photographed, others not) don't count.
+    const hasAllProdPhotos = (o) => {
+      const items = o.line_items || [];
+      return items.length > 0 && items.every(it => (it.prodImages || []).length > 0);
+    };
+    const awaitingBalance = active.filter(o => o.status === 'Ready for Dispatch' && o.payment_status !== 'Fully Paid');
+    const photosPending = awaitingBalance.filter(o => !hasAllProdPhotos(o));
+    const readyToCollect = awaitingBalance.filter(o => hasAllProdPhotos(o));
+    // Dispatched orders are excluded from `active` (they're closed) — pull straight from `orders` instead.
+    // Scoped to the last 14 days so the backlog of pre-existing dispatches (never tracked before this
+    // field existed) doesn't flood the queue with old orders that were surely already followed up on.
+    const trackingCutoff = addDaysStr(-14);
+    const trackingPending = orders.filter(o => o.status === 'Dispatched' && !o.tracking_sent_at && o.dispatch_date && o.dispatch_date >= trackingCutoff);
     const dueSoon = active.filter(o => o.deadline_at && o.deadline_at >= today && o.deadline_at <= soon);
-    const balanceDue = active.filter(o => o.payment_status !== 'Fully Paid');
     const layoutPending = active.filter(o => o.layout_status === 'Pending');
     const noDeadline = active.filter(o => !o.deadline_at);
 
     const groups = [
-      { key: 'overdue', label: 'Overdue', icon: '🚨', tone: 'danger', orders: overdue },
+      { key: 'overdue', label: 'Production Overdue', icon: '🚨', tone: 'danger', orders: overdue },
+      { key: 'photosPending', label: 'Ready for dispatch — take production photos', icon: '📸', tone: 'warning', orders: photosPending },
+      { key: 'readyToCollect', label: 'Ready to dispatch — collect balance', icon: '💵', tone: 'warning', orders: readyToCollect },
+      { key: 'trackingPending', label: 'Dispatched — send tracking to customer', icon: '📨', tone: 'primary', orders: trackingPending },
       { key: 'dueSoon', label: 'Due within 2 days', icon: '⏰', tone: 'warning', orders: dueSoon },
-      { key: 'balanceDue', label: 'Balance payment due', icon: '💰', tone: 'info', orders: balanceDue },
       { key: 'layoutPending', label: 'Layout pending', icon: '🎨', tone: 'primary', orders: layoutPending },
       { key: 'noDeadline', label: 'No deadline set', icon: '📅', tone: 'muted', orders: noDeadline },
     ].map(g => ({ ...g, count: g.orders.length }));
 
-    const badge = new Set([...overdue, ...dueSoon, ...balanceDue, ...layoutPending].map(o => o.id)).size;
+    const badge = new Set([...overdue, ...photosPending, ...readyToCollect, ...trackingPending, ...dueSoon, ...layoutPending].map(o => o.id)).size;
     res.json({ groups, badge, activeCount: active.length });
   } catch (err) {
     console.error('crewfit reminders error:', err); res.status(500).json({ error: 'Failed to load reminders' });
@@ -104,12 +158,13 @@ router.get('/orders/:id', async (req, res) => {
   try {
     const r = await db.query('SELECT * FROM crewfit_orders WHERE id = $1', [req.params.id]);
     if (!r.rows[0]) return res.status(404).json({ error: 'Not found' });
-    res.json(r.rows[0]);
+    res.json(parseOrder(r.rows[0]));
   } catch (err) { res.status(500).json({ error: 'Failed' }); }
 });
 
 const EXTRA = ['printing', 'delivery_location', 'billing_name', 'contact_person', 'billing_mobile', 'billing_email',
-  'gst_number', 'billing_address', 'product_total', 'shipping', 'gst_amount', 'grand_total', 'advance', 'balance'];
+  'gst_number', 'billing_address', 'unit_price', 'product_total', 'shipping', 'gst_amount', 'grand_total', 'advance', 'balance',
+  'line_items', 'whatsapp_number', 'tracking_sent_at', 'photos_sent_at'];
 const EDITABLE = ['status', 'payment_status', 'layout_status', 'customer_type', 'so', 'vendor', 'mot', 'tracking_link',
   'deadline_at', 'deadline_text', 'dispatch_date', 'order_date', 'notes', 'total_cost', 'qty', 'color', 'size_breakdown',
   'customer_name', 'contact_number', 'mock_folder', 'description', 'product', ...EXTRA];
@@ -117,14 +172,30 @@ const EDITABLE = ['status', 'payment_status', 'layout_status', 'customer_type', 
 // PUT /api/crewfit/orders/:id — inline field / dropdown updates
 router.put('/orders/:id', async (req, res) => {
   try {
-    const fields = Object.keys(req.body).filter(k => EDITABLE.includes(k));
+    const current = (await db.query('SELECT status, tracking_link, dispatch_date, mot FROM crewfit_orders WHERE id = $1', [req.params.id])).rows[0];
+    if (!current) return res.status(404).json({ error: 'Not found' });
+
+    const body = { ...req.body };
+    // Status can only become "Dispatched" via a tracking ID being present — never a direct manual
+    // pick — except Porter, which doesn't issue tracking IDs at all.
+    const effectiveTracking = body.tracking_link !== undefined ? body.tracking_link : current.tracking_link;
+    const effectiveMot = body.mot !== undefined ? body.mot : current.mot;
+    if (body.status === 'Dispatched' && !effectiveTracking && effectiveMot !== 'Porter') {
+      return res.status(400).json({ error: 'Add a tracking ID before marking this order as Dispatched' });
+    }
+    if (effectiveTracking && !['Dispatched', 'Cancelled'].includes(current.status)) {
+      body.status = 'Dispatched';
+      if (!body.dispatch_date && !current.dispatch_date) body.dispatch_date = todayStr();
+    }
+
+    const fields = Object.keys(body).filter(k => EDITABLE.includes(k));
     if (!fields.length) return res.status(400).json({ error: 'No editable fields provided' });
     const set = fields.map((f, i) => `${f} = $${i + 1}`).join(', ');
-    const vals = fields.map(f => (req.body[f] === '' ? null : req.body[f]));
+    const vals = fields.map(f => f === 'line_items' ? JSON.stringify(body[f] || []) : (body[f] === '' ? null : body[f]));
     vals.push(req.params.id);
     await db.query(`UPDATE crewfit_orders SET ${set}, updated_at = CURRENT_TIMESTAMP WHERE id = $${fields.length + 1}`, vals);
     const r = await db.query('SELECT * FROM crewfit_orders WHERE id = $1', [req.params.id]);
-    res.json(r.rows[0]);
+    res.json(parseOrder(r.rows[0]));
   } catch (err) {
     console.error('crewfit update error:', err); res.status(500).json({ error: 'Failed to update order' });
   }
@@ -133,18 +204,26 @@ router.put('/orders/:id', async (req, res) => {
 // POST /api/crewfit/orders — create
 router.post('/orders', async (req, res) => {
   try {
+    const body = { ...req.body };
+    if (body.status === 'Dispatched' && !body.tracking_link && body.mot !== 'Porter') {
+      return res.status(400).json({ error: 'Add a tracking ID before marking this order as Dispatched' });
+    }
+    if (body.tracking_link && body.status !== 'Cancelled') {
+      body.status = 'Dispatched';
+      if (!body.dispatch_date) body.dispatch_date = todayStr();
+    }
     const cols = ['customer_name', 'contact_number', 'description', 'product', 'color', 'size_breakdown', 'qty', 'total_cost',
       'deadline_at', 'deadline_text', 'order_date', 'customer_type', 'so', 'vendor', 'mot', 'mock_folder', 'notes',
       'layout_status', 'payment_status', 'status', ...EXTRA];
-    const provided = cols.filter(c => req.body[c] !== undefined && req.body[c] !== '');
-    if (!req.body.customer_name) return res.status(400).json({ error: 'Customer name is required' });
+    const provided = cols.filter(c => body[c] !== undefined && body[c] !== '');
+    if (!body.customer_name) return res.status(400).json({ error: 'Customer name is required' });
     const nextRow = await db.query('SELECT COALESCE(MAX(sl_no), 0) + 1 AS next FROM crewfit_orders');
     const sl_no = nextRow.rows[0].next;
     const allCols = ['sl_no', ...provided];
-    const vals = [sl_no, ...provided.map(c => req.body[c])];
+    const vals = [sl_no, ...provided.map(c => c === 'line_items' ? JSON.stringify(body[c] || []) : body[c])];
     const ph = allCols.map((_, i) => `$${i + 1}`).join(',');
     const r = await db.query(`INSERT INTO crewfit_orders (${allCols.join(',')}) VALUES (${ph}) RETURNING *`, vals);
-    res.status(201).json(r.rows[0]);
+    res.status(201).json(parseOrder(r.rows[0]));
   } catch (err) {
     console.error('crewfit create error:', err); res.status(500).json({ error: 'Failed to create order' });
   }
@@ -158,6 +237,126 @@ router.delete('/orders/:id', async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'Failed to delete' }); }
 });
 
+// GET /api/crewfit/orders/:id/invoice/:type — type: 'advance' | 'balance'.
+// Issues the invoice (next sequence number, persisted) the first time it's requested,
+// then just re-renders the same stored invoice on every later request.
+router.get('/orders/:id/invoice/:type', async (req, res) => {
+  try {
+    const { type } = req.params;
+    if (!['advance', 'balance'].includes(type)) return res.status(400).json({ error: 'Invalid invoice type' });
+
+    const r = await db.query('SELECT * FROM crewfit_orders WHERE id = $1', [req.params.id]);
+    if (!r.rows[0]) return res.status(404).json({ error: 'Not found' });
+    const order = parseOrder(r.rows[0]);
+
+    if (!Number(order.grand_total)) {
+      return res.status(400).json({ error: 'Order pricing is not finalized yet — add products/qty and save the order before generating an invoice.' });
+    }
+    if (type === 'advance' && order.payment_status === 'Pending') {
+      return res.status(400).json({ error: 'Advance payment has not been recorded yet' });
+    }
+    if (type === 'balance' && order.payment_status !== 'Fully Paid') {
+      return res.status(400).json({ error: 'Order is not marked Fully Paid yet' });
+    }
+
+    const invoices = safeJson(order.invoices, []);
+    let invoice = invoices.find(i => i.type === type);
+    if (!invoice) {
+      // Older/imported orders may not have advance/balance columns populated — fall back to a 50/50
+      // split of the grand total rather than silently invoicing for Rs. 0.
+      const grand = Number(order.grand_total) || 0;
+      const advance = order.advance != null ? Number(order.advance) : Math.round(grand / 2);
+      const balance = order.balance != null ? Number(order.balance) : (grand - advance);
+      const amount = type === 'advance' ? advance : balance;
+      const gstPct = ((Number(order.product_total) || 0) + (Number(order.shipping) || 0)) > 0
+        ? Math.round((Number(order.gst_amount) || 0) / ((Number(order.product_total) || 0) + (Number(order.shipping) || 0)) * 100)
+        : 0;
+      const taxable = Math.round(amount / (1 + gstPct / 100));
+      invoice = {
+        number: await nextInvoiceNumber(db),
+        type,
+        date: new Date().toISOString().slice(0, 10),
+        amount, taxable_value: taxable, gst_pct: gstPct, gst_amount: amount - taxable,
+      };
+      invoices.push(invoice);
+      await db.query('UPDATE crewfit_orders SET invoices = $1 WHERE id = $2', [JSON.stringify(invoices), req.params.id]);
+    }
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${invoice.number.replace(/\//g, '-')}.pdf"`);
+    const doc = new PDFDocument({ size: 'A4', margin: 40 });
+    doc.pipe(res);
+    renderInvoice(doc, order, invoice, invoices);
+    doc.end();
+  } catch (err) {
+    console.error('crewfit invoice error:', err);
+    res.status(500).json({ error: 'Failed to generate invoice' });
+  }
+});
+
+// POST /api/crewfit/orders/:id/images — attach up to 5 images per product line item.
+// kind: 'mock' (designer mockups, pending client confirmation) | 'prod' (post-production photos).
+router.post('/orders/:id/images', uploadImages, async (req, res) => {
+  try {
+    const { kind, itemIndex } = req.body;
+    const idx = parseInt(itemIndex, 10);
+    if (!['mock', 'prod'].includes(kind) || Number.isNaN(idx)) {
+      (req.files || []).forEach(f => fs.unlink(f.path, () => {}));
+      return res.status(400).json({ error: 'Invalid image kind or product line' });
+    }
+    const r = await db.query('SELECT * FROM crewfit_orders WHERE id = $1', [req.params.id]);
+    if (!r.rows[0]) { (req.files || []).forEach(f => fs.unlink(f.path, () => {})); return res.status(404).json({ error: 'Not found' }); }
+    const order = parseOrder(r.rows[0]);
+    const items = order.line_items || [];
+    if (!items[idx]) { (req.files || []).forEach(f => fs.unlink(f.path, () => {})); return res.status(400).json({ error: 'Invalid product line' }); }
+
+    const field = kind === 'mock' ? 'mockImages' : 'prodImages';
+    const existing = items[idx][field] || [];
+    const incoming = (req.files || []).map(f => `/uploads/crewfit/${req.params.id}/${f.filename}`);
+    if (existing.length + incoming.length > 5) {
+      incoming.forEach(u => fs.unlink(path.join(UPLOAD_ROOT, String(req.params.id), path.basename(u)), () => {}));
+      return res.status(400).json({ error: `Max 5 ${kind === 'mock' ? 'mock' : 'production'} images per product (${existing.length} already uploaded)` });
+    }
+    items[idx] = { ...items[idx], [field]: [...existing, ...incoming] };
+    await db.query('UPDATE crewfit_orders SET line_items = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2', [JSON.stringify(items), req.params.id]);
+    const fresh = await db.query('SELECT * FROM crewfit_orders WHERE id = $1', [req.params.id]);
+    res.json(parseOrder(fresh.rows[0]));
+  } catch (err) {
+    console.error('crewfit image upload error:', err);
+    (req.files || []).forEach(f => fs.unlink(f.path, () => {}));
+    res.status(500).json({ error: 'Failed to upload images' });
+  }
+});
+
+// DELETE /api/crewfit/orders/:id/images — body: { kind, itemIndex, url }
+router.delete('/orders/:id/images', async (req, res) => {
+  try {
+    const { kind, itemIndex, url } = req.body;
+    const idx = parseInt(itemIndex, 10);
+    if (!['mock', 'prod'].includes(kind) || Number.isNaN(idx) || !url) return res.status(400).json({ error: 'Invalid request' });
+
+    const r = await db.query('SELECT * FROM crewfit_orders WHERE id = $1', [req.params.id]);
+    if (!r.rows[0]) return res.status(404).json({ error: 'Not found' });
+    const order = parseOrder(r.rows[0]);
+    const items = order.line_items || [];
+    if (!items[idx]) return res.status(400).json({ error: 'Invalid product line' });
+
+    const field = kind === 'mock' ? 'mockImages' : 'prodImages';
+    items[idx] = { ...items[idx], [field]: (items[idx][field] || []).filter(u => u !== url) };
+    await db.query('UPDATE crewfit_orders SET line_items = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2', [JSON.stringify(items), req.params.id]);
+
+    // url is our own /uploads/crewfit/<orderId>/<filename> path — safe to resolve directly under UPLOAD_ROOT.
+    const filename = path.basename(url);
+    fs.unlink(path.join(UPLOAD_ROOT, String(req.params.id), filename), () => {});
+
+    const fresh = await db.query('SELECT * FROM crewfit_orders WHERE id = $1', [req.params.id]);
+    res.json(parseOrder(fresh.rows[0]));
+  } catch (err) {
+    console.error('crewfit image delete error:', err);
+    res.status(500).json({ error: 'Failed to delete image' });
+  }
+});
+
 /* ---------------- PRODUCTS (catalog, editable) ---------------- */
 const parseProduct = (r) => ({
   ...r,
@@ -166,7 +365,6 @@ const parseProduct = (r) => ({
   colors: safeJson(r.colors, []),
   tiers: safeJson(r.tiers, []),
 });
-function safeJson(v, fallback) { try { return typeof v === 'string' ? JSON.parse(v) : (v || fallback); } catch { return fallback; } }
 
 // GET /api/crewfit/products
 router.get('/products', async (req, res) => {
