@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useApi } from '../../App'
 import Icon from '../../components/Icon'
+import DateRangeFilter from '../../components/DateRangeFilter'
 import { AreaChart } from '../Dashboard'
 
 const fmt = (v) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(v || 0)
@@ -38,6 +39,28 @@ function BarList({ rows, colorFor }) {
 
 const emptyRow = (colSpan) => <tr><td colSpan={colSpan} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '24px 0' }}>No data yet</td></tr>
 
+// Ranked leaderboard bars — top 3 get medal-style badges, bar width scales to the leader's revenue.
+function TopProductsChart({ products }) {
+  const max = Math.max(...products.map(p => p.revenue), 1)
+  return (
+    <div className="rank-bar-list">
+      {products.map((p, i) => (
+        <div className={`rank-bar-row rank-${i + 1}`} key={p.product}>
+          <span className="rank-badge">{i + 1}</span>
+          <div className="rank-bar-main">
+            <div className="rank-bar-head">
+              <span className="rank-bar-name" title={p.product}>{p.product}</span>
+              <span className="rank-bar-value">{fmt(p.revenue)}</span>
+            </div>
+            <div className="rank-bar-track"><div className="rank-bar-fill" style={{ width: `${(p.revenue / max) * 100}%` }} /></div>
+            <div className="rank-bar-sub">{p.qty} units sold</div>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 export default function CrewfitAnalytics() {
   const apiFetch = useApi()
   const [data, setData] = useState(null)
@@ -53,7 +76,7 @@ export default function CrewfitAnalytics() {
     setData(res && !res.error ? res : null)
     setLoading(false)
   }
-  const applyFilter = () => { if (startDate && endDate) load(`/api/crewfit/analytics?startDate=${startDate}&endDate=${endDate}`) }
+  const applyFilter = (s, e) => { setStartDate(s); setEndDate(e); load(`/api/crewfit/analytics?startDate=${s}&endDate=${e}`) }
   const clearFilter = () => { setStartDate(''); setEndDate(''); load('/api/crewfit/analytics') }
 
   if (loading) return <div className="loader"><div className="spinner" /><span>Loading dashboard…</span></div>
@@ -81,13 +104,7 @@ export default function CrewfitAnalytics() {
     <div className="page-enter">
       <div className="dash-toolbar">
         <div><h1>Crewfit · Dashboard</h1><p style={{ color: 'var(--text-muted)' }}>Revenue, delivery time, customers &amp; retention</p></div>
-        <div className="date-filter">
-          <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} />
-          <span style={{ color: 'var(--text-muted)' }}>→</span>
-          <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} />
-          <button className="btn btn-primary btn-sm" onClick={applyFilter} disabled={!startDate || !endDate}>Apply</button>
-          {(startDate || endDate) && <button className="btn btn-secondary btn-sm" onClick={clearFilter}>Clear</button>}
-        </div>
+        <DateRangeFilter startDate={startDate} endDate={endDate} onApply={applyFilter} onClear={clearFilter} />
       </div>
 
       <div className="kpi-grid">
@@ -159,19 +176,9 @@ export default function CrewfitAnalytics() {
       <div className="dash-row tables">
         <div className="panel">
           <div className="panel-head"><div className="panel-title">Top Products</div><span className="panel-sub">by revenue</span></div>
-          <table className="data-table">
-            <thead><tr><th>Product</th><th style={{ textAlign: 'center' }}>Qty</th><th style={{ textAlign: 'right' }}>Revenue</th></tr></thead>
-            <tbody>
-              {(data.topProducts || []).map((p, i) => (
-                <tr key={i}>
-                  <td style={{ fontWeight: 600, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.product}</td>
-                  <td style={{ textAlign: 'center' }}>{p.qty}</td>
-                  <td style={{ textAlign: 'right', fontWeight: 700, color: 'var(--success)' }}>{fmt(p.revenue)}</td>
-                </tr>
-              ))}
-              {!(data.topProducts || []).length && emptyRow(3)}
-            </tbody>
-          </table>
+          <div className="panel-body">
+            {(data.topProducts || []).length ? <TopProductsChart products={data.topProducts} /> : <div className="empty-state" style={{ padding: '30px 0' }}>No data yet</div>}
+          </div>
         </div>
         <div className="panel">
           <div className="panel-head"><div className="panel-title">Top Customers</div><span className="panel-sub">by spend</span></div>

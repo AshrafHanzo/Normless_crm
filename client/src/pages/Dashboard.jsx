@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useApi } from '../App'
 import Icon from '../components/Icon'
+import DateRangeFilter from '../components/DateRangeFilter'
 
 export default function Dashboard() {
   const apiFetch = useApi()
@@ -20,7 +21,7 @@ export default function Dashboard() {
     } catch { setError('Error loading dashboard') }
     setLoading(false)
   }
-  const applyFilter = () => { if (startDate && endDate) loadDashboard(`/api/dashboard?startDate=${startDate}&endDate=${endDate}`) }
+  const applyFilter = (s, e) => { setStartDate(s); setEndDate(e); loadDashboard(`/api/dashboard?startDate=${s}&endDate=${e}`) }
   const clearFilter = () => { setStartDate(''); setEndDate(''); loadDashboard('/api/dashboard') }
 
   const fmt = (v) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(v || 0)
@@ -47,13 +48,7 @@ export default function Dashboard() {
     <div className="page-enter">
       <div className="dash-toolbar">
         <div><h1>Dashboard</h1><p style={{ color: 'var(--text-muted)' }}>Real-time analytics &amp; insights</p></div>
-        <div className="date-filter">
-          <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} />
-          <span style={{ color: 'var(--text-muted)' }}>→</span>
-          <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} />
-          <button className="btn btn-primary btn-sm" onClick={applyFilter} disabled={!startDate || !endDate}>Apply</button>
-          {(startDate || endDate) && <button className="btn btn-secondary btn-sm" onClick={clearFilter}>Clear</button>}
-        </div>
+        <DateRangeFilter startDate={startDate} endDate={endDate} onApply={applyFilter} onClear={clearFilter} />
       </div>
 
       <div className="kpi-grid">

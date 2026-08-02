@@ -426,6 +426,65 @@ select { cursor: pointer; appearance: none;
 .date-filter { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .date-filter input[type="date"] { width: auto; padding: 9px 12px; font-size: 13px; }
 
+/* Shopify-admin-style date range filter (preset sidebar + dual calendar) */
+.drf { position: relative; display: inline-block; }
+.drf-trigger {
+  display: flex; align-items: center; gap: 8px; padding: 9px 14px; border-radius: var(--radius-md);
+  border: 1px solid var(--border); background: var(--surface); color: var(--text-primary); font-size: 13px;
+  font-weight: 600; cursor: pointer; white-space: nowrap;
+}
+.drf-trigger:hover { border-color: var(--border-hover); background: var(--surface-hover); }
+.drf-panel {
+  position: absolute; top: calc(100% + 8px); right: 0; z-index: 60; display: flex;
+  background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg); overflow: hidden; animation: fadeIn 0.15s ease;
+}
+.drf-sidebar { width: 180px; flex-shrink: 0; padding: 10px 0; border-right: 1px solid var(--border); overflow-y: auto; max-height: 480px; }
+.drf-preset {
+  display: block; width: 100%; text-align: left; padding: 9px 18px; font-size: 13px; border: none;
+  background: transparent; color: var(--text-secondary); cursor: pointer; white-space: nowrap;
+}
+.drf-preset:hover { background: var(--surface-hover); color: var(--text-primary); }
+.drf-preset.active { background: var(--primary-glow); color: var(--primary-light); font-weight: 700; }
+.drf-divider { height: 1px; background: var(--border); margin: 8px 0; }
+.drf-main { padding: 18px 22px; }
+.drf-fields { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+.drf-field {
+  min-width: 150px; padding: 9px 14px; border-radius: var(--radius-md); border: 1px solid var(--border);
+  background: var(--surface); font-size: 13px; font-weight: 600; color: var(--text-primary);
+}
+.drf-arrow { color: var(--text-muted); }
+.drf-calendars { position: relative; display: flex; gap: 28px; }
+.drf-nav {
+  position: absolute; top: 6px; width: 26px; height: 26px; border-radius: 50%; border: 1px solid var(--border);
+  background: var(--surface); color: var(--text-secondary); font-size: 15px; cursor: pointer; display: flex;
+  align-items: center; justify-content: center; z-index: 1;
+}
+.drf-nav:hover { background: var(--surface-hover); color: var(--text-primary); }
+.drf-nav-prev { left: -14px; }
+.drf-nav-next { right: -14px; }
+.cal-month { width: 240px; }
+.cal-month-title { text-align: center; font-size: 13.5px; font-weight: 700; margin-bottom: 12px; }
+.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+.cal-grid-head { margin-bottom: 4px; }
+.cal-weekday { text-align: center; font-size: 11px; font-weight: 700; color: var(--text-muted); }
+.cal-cell {
+  aspect-ratio: 1; display: flex; align-items: center; justify-content: center; font-size: 12.5px;
+  border: none; background: transparent; color: var(--text-primary); cursor: pointer; border-radius: 50%;
+}
+.cal-cell:hover:not(.cal-cell-empty):not(.cal-cell-edge) { background: var(--surface-hover); }
+.cal-cell-empty { cursor: default; }
+.cal-cell-inrange { background: var(--primary-glow); border-radius: 0; }
+.cal-cell-edge { background: var(--primary); color: #fff; font-weight: 700; }
+.drf-footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border); }
+.drf-summary { font-size: 12.5px; color: var(--text-muted); }
+@media (max-width: 720px) {
+  .drf-panel { position: fixed; inset: 12px; flex-direction: column; }
+  .drf-sidebar { width: 100%; max-height: 140px; border-right: none; border-bottom: 1px solid var(--border); display: flex; flex-wrap: wrap; }
+  .drf-calendars { flex-direction: column; gap: 20px; }
+  .drf-nav-next { right: 6px; }
+}
+
 .kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; margin-bottom: 22px; }
 .kpi-card {
   position: relative; overflow: hidden; padding: 22px; border-radius: var(--radius-lg);
@@ -479,6 +538,25 @@ select { cursor: pointer; appearance: none;
 .status-track { height: 8px; border-radius: 999px; background: var(--surface); overflow: hidden; }
 .status-fill { height: 100%; border-radius: 999px; transition: width 0.5s cubic-bezier(0.22,1,0.36,1); }
 .status-count { color: var(--text-muted); font-size: 12px; }
+
+/* Ranked leaderboard bars (e.g. Top Products) */
+.rank-bar-list { display: flex; flex-direction: column; gap: 18px; }
+.rank-bar-row { display: flex; align-items: flex-start; gap: 12px; }
+.rank-badge {
+  width: 26px; height: 26px; border-radius: 50%; background: var(--surface); border: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 800;
+  color: var(--text-secondary); flex-shrink: 0; margin-top: 1px;
+}
+.rank-1 .rank-badge { background: color-mix(in srgb, #f4b942 22%, transparent); border-color: #f4b942; color: #f4b942; }
+.rank-2 .rank-badge { background: color-mix(in srgb, #b8c0cc 22%, transparent); border-color: #b8c0cc; color: #b8c0cc; }
+.rank-3 .rank-badge { background: color-mix(in srgb, #c9884f 22%, transparent); border-color: #c9884f; color: #c9884f; }
+.rank-bar-main { flex: 1; min-width: 0; }
+.rank-bar-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 6px; }
+.rank-bar-name { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rank-bar-value { font-size: 13px; font-weight: 700; color: var(--success); white-space: nowrap; flex-shrink: 0; }
+.rank-bar-track { height: 8px; border-radius: 999px; background: var(--surface); overflow: hidden; }
+.rank-bar-fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--primary), var(--primary-light)); transition: width 0.5s cubic-bezier(0.22,1,0.36,1); }
+.rank-bar-sub { font-size: 11px; color: var(--text-muted); margin-top: 5px; }
 
 /* ============================================================
    SCAN HUB
