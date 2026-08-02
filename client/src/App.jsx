@@ -16,6 +16,7 @@ import Profile from './pages/Profile'
 import ForgotPassword from './pages/ForgotPassword'
 import ResetPassword from './pages/ResetPassword'
 import CrewfitDashboard from './pages/crewfit/CrewfitDashboard'
+import CrewfitAnalytics from './pages/crewfit/CrewfitAnalytics'
 import CrewfitOrders from './pages/crewfit/CrewfitOrders'
 import CrewfitCatalog from './pages/crewfit/CrewfitCatalog'
 
@@ -133,6 +134,7 @@ function App() {
 
             {/* Crewfit CRM */}
             <Route path="/crewfit" element={<ProtectedRoute><AppLayout><CrewfitDashboard /></AppLayout></ProtectedRoute>} />
+            <Route path="/crewfit/dashboard" element={<ProtectedRoute><AppLayout><CrewfitAnalytics /></AppLayout></ProtectedRoute>} />
             <Route path="/crewfit/orders" element={<ProtectedRoute><AppLayout><CrewfitOrders /></AppLayout></ProtectedRoute>} />
             <Route path="/crewfit/catalog" element={<ProtectedRoute><AppLayout><CrewfitCatalog /></AppLayout></ProtectedRoute>} />
           </Routes>
