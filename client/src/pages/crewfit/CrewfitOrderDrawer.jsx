@@ -157,6 +157,23 @@ function buildPhotosMessage(order, apiUrl) {
   return L.join('\n')
 }
 
+// The label PDF is served inline, so it opens in a new tab where the SO can print it straight
+// away. It's blob-fetched rather than plain-linked because the endpoint needs the auth header —
+// and popup blockers get a download fallback. Shared with the orders table.
+export async function openShippingLabel(apiFetch, order) {
+  const res = await apiFetch(`/api/crewfit/orders/${order.id}/shipping-label`, { responseType: 'blob' })
+  if (!res || res.error) { alert(res?.error || 'Failed to generate shipping label'); return }
+  const url = URL.createObjectURL(res.blob)
+  const win = window.open(url, '_blank')
+  if (!win) {
+    const a = document.createElement('a')
+    a.href = url; a.download = res.filename || `Shipping-Label-CF-${order.sl_no}.pdf`
+    document.body.appendChild(a); a.click(); a.remove()
+  }
+  // The new tab still needs the object URL alive — let it settle before releasing.
+  setTimeout(() => URL.revokeObjectURL(url), 60000)
+}
+
 // Uploaded (server-backed) + pending (picked but not saved yet, local blob preview) images for
 // one product line item's mock/production set — a homogeneous shape the grid and lightbox share.
 function imageThumbs(item, kind, apiUrl) {
@@ -240,6 +257,7 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
   const [imgBusy, setImgBusy] = useState(null) // `${idx}-mock` | `${idx}-prod` while an upload is in flight
   const [lightbox, setLightbox] = useState(null) // { idx, kind, images, index } | null
   const [bulkDownloading, setBulkDownloading] = useState(null) // key string while a "download all" is in flight
+  const [labelBusy, setLabelBusy] = useState(false)
 
   useEffect(() => {
     apiFetch('/api/crewfit/meta').then(m => setMeta(m && m.statuses ? m : null))
@@ -271,9 +289,11 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
         product_total: o.product_total ?? '', size_breakdown: o.size_breakdown || ''
       }] : [blankItem()]
     }
+    // _saved marks a row the server already knows about (or, for legacy flat orders, one it will
+    // materialize on first write) — only those can take image uploads by index right away.
     items = items.map(it => {
       const parsedSizes = parseSimpleSizeBreakdown(it.size_breakdown)
-      return { ...it, _sizeMode: parsedSizes ? 'standard' : 'manual', _sizes: parsedSizes || {} }
+      return { ...it, _saved: true, _sizeMode: parsedSizes ? 'standard' : 'manual', _sizes: parsedSizes || {} }
     })
     setForm({
       ...o,
@@ -348,10 +368,16 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
   // Merge the server's freshly-saved line_items (images, confirmation flags) back onto the
   // form without clobbering the UI-only _sizeMode/_sizes fields the server doesn't know about.
   const applyServerOrder = (res) => {
-    setForm(f => ({ ...f, line_items: (res.line_items || []).map((sv, i) => ({ ...(f.line_items[i] || {}), ...sv })), invoices: res.invoices }))
+    setForm(f => {
+      const saved = (res.line_items || []).map((sv, i) => ({ ...(f.line_items[i] || {}), ...sv, _saved: true }))
+      // Rows added in the drawer but not saved yet aren't in the server's copy — keep them.
+      const unsaved = f.line_items.slice(saved.length)
+      return { ...f, line_items: [...saved, ...unsaved], invoices: res.invoices }
+    })
   }
-  // Before the order has an id, picked files can't go anywhere server-side yet — queue them
-  // locally (with a blob preview) and they're uploaded for real right after order creation in save().
+  // Before the order has an id — or before a freshly added product row has been saved onto it —
+  // picked files can't go anywhere server-side yet. Queue them locally (with a blob preview) and
+  // they're uploaded for real right after the order is saved.
   const addPendingImages = (idx, kind, files) => {
     const uploadedKey = kind === 'mock' ? 'mockImages' : 'prodImages'
     const pendingKey = kind === 'mock' ? '_pendingMock' : '_pendingProd'
@@ -373,7 +399,7 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
   const uploadItemImages = async (idx, kind, fileList) => {
     const files = Array.from(fileList || [])
     if (!files.length) return
-    if (!form.id) { addPendingImages(idx, kind, files); return }
+    if (!form.id || !form.line_items[idx]?._saved) { addPendingImages(idx, kind, files); return }
     setImgBusy(`${idx}-${kind}`)
     const fd = new FormData()
     fd.append('kind', kind); fd.append('itemIndex', idx)
@@ -444,6 +470,14 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
     }
     setF(patch)
   }
+  // Payment-driven status moves, mirrored from the server so the drawer updates as you pick:
+  // recording the advance starts production, collecting the balance clears the order to ship.
+  const onPaymentChange = (v) => {
+    const patch = { payment_status: v }
+    if (form.status === 'Awaiting Payment' && v && v !== 'Pending') patch.status = 'Pending'
+    else if (form.status === 'Ready for Dispatch' && v === 'Fully Paid') patch.status = 'Dispatch Pending'
+    setF(patch)
+  }
   // Porter doesn't issue a tracking ID — this is the alternate path to Dispatched for that MOT.
   const markDispatchedViaPorter = () => {
     setF({ status: 'Dispatched', dispatch_date: form.dispatch_date || new Date().toISOString().slice(0, 10) })
@@ -459,6 +493,7 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
     }
   }
   const copyDispatchMessage = () => navigator.clipboard?.writeText(buildDispatchMessage(form))
+  const printLabel = async () => { setLabelBusy(true); await openShippingLabel(apiFetch, form); setLabelBusy(false) }
   const sendPhotosWhatsApp = async () => {
     const num = toWaNumber(waSource(form))
     const msg = encodeURIComponent(buildPhotosMessage(form, API_URL))
@@ -499,7 +534,7 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
   const save = async (e) => {
     e.preventDefault()
     setSaving(true)
-    const items = form.line_items.map(({ _sizeMode, _sizes, _pendingMock, _pendingProd, ...rest }) => rest)
+    const items = form.line_items.map(({ _sizeMode, _sizes, _saved, _pendingMock, _pendingProd, ...rest }) => rest)
     const merged = { ...form, ...recompute(form), line_items: items }
     const payload = {
       ...merged,
@@ -514,12 +549,15 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
     const isNew = !form.id
     const res = await apiFetch(`/api/crewfit/orders${isNew ? '' : '/' + form.id}`, { method: isNew ? 'POST' : 'PUT', body: JSON.stringify(payload) })
     if (res && !res.error) {
-      if (isNew) {
+      // Photos queued against a row that didn't exist server-side yet (a brand-new order, or a
+      // product row just added to an existing one) — now that it's saved, push them up for real.
+      const hasPending = form.line_items.some(it => (it._pendingMock || []).length || (it._pendingProd || []).length)
+      if (hasPending) {
         const failures = await uploadPendingImages(res.id, form.line_items)
-        if (failures.length) alert(`Order created, but these photo uploads failed: ${failures.join(', ')}. You can retry from the order's edit screen.`)
+        if (failures.length) alert(`Order saved, but these photo uploads failed: ${failures.join(', ')}. You can retry from the order's edit screen.`)
       }
       setSaving(false)
-      setForm(null); onSaved?.()
+      setForm(null); onSaved?.(res)
     } else {
       setSaving(false)
       alert(res?.error || 'Save failed — deploy the Crewfit API first')
@@ -696,7 +734,7 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
                 {(meta?.statuses || []).filter(v => v !== 'Dispatched' || form.status === 'Dispatched').map(v => <option key={v}>{v}</option>)}
               </select>
             </div>
-            <div className="input-group"><label>Payment</label><select value={form.payment_status || ''} onChange={e => setF({ payment_status: e.target.value })}>{(meta?.payments || []).map(v => <option key={v}>{v}</option>)}</select></div>
+            <div className="input-group"><label>Payment</label><select value={form.payment_status || ''} onChange={e => onPaymentChange(e.target.value)}>{(meta?.payments || []).map(v => <option key={v}>{v}</option>)}</select></div>
             <div className="input-group"><label>Layout</label><select value={form.layout_status || ''} onChange={e => setF({ layout_status: e.target.value })}>{(meta?.layouts || []).map(v => <option key={v}>{v}</option>)}</select></div>
             <div className="input-group"><label>Vendor</label><select value={form.vendor || ''} onChange={e => setF({ vendor: e.target.value })}><option value="">—</option>{(meta?.vendors || []).map(v => <option key={v}>{v}</option>)}</select></div>
           </div>
@@ -722,7 +760,22 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
                 <input value={form.tracking_link || ''} onChange={e => onTrackingChange(e.target.value)} placeholder="Filling this in marks the order Dispatched" />
               </div>
             )}
+            {form.id && (
+              <div className="input-group">
+                <label>Shipping label</label>
+                <button type="button" className="btn btn-secondary" onClick={printLabel} disabled={labelBusy}>{labelBusy ? 'Preparing…' : '🖨 Print shipping label'}</button>
+              </div>
+            )}
           </div>
+
+          {form.status === 'Dispatch Pending' && (
+            <div className="dispatch-banner">
+              <span>🚚 Balance collected — cleared for dispatch. Print the label, hand the parcel to {form.mot || 'the courier'}, then {form.mot === 'Porter' ? 'use the Porter button above' : 'add the tracking ID above'} to mark it Dispatched.</span>
+              <span style={{ display: 'flex', gap: 8 }}>
+                <button type="button" className="btn btn-secondary" onClick={printLabel} disabled={labelBusy}>{labelBusy ? 'Preparing…' : '🖨 Print shipping label'}</button>
+              </span>
+            </div>
+          )}
           {form.line_items.some(it => (it.prodImages || []).length > 0) && (
             <div className="dispatch-banner">
               <span>

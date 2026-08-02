@@ -5,7 +5,7 @@ const crypto = require('crypto');
 const multer = require('multer');
 const PDFDocument = require('pdfkit');
 const db = require('../db/connection');
-const { renderInvoice, nextInvoiceNumber } = require('../services/invoice');
+const { renderInvoice, renderShippingLabel, nextInvoiceNumber } = require('../services/invoice');
 
 const router = express.Router();
 
@@ -38,7 +38,7 @@ const uploadImages = (req, res, next) => upload.array('images', 5)(req, res, (er
 
 // Clean dropdown picklists (source of truth for the UI).
 const META = {
-  statuses: ['Pending', 'Consignment Ordered', 'Consignment Received', 'Ongoing Production', 'Ready for Dispatch', 'Dispatched', 'Cancelled'],
+  statuses: ['Awaiting Payment', 'Pending', 'Consignment Ordered', 'Consignment Received', 'Ongoing Production', 'Ready for Dispatch', 'Dispatch Pending', 'Dispatched', 'Cancelled'],
   payments: ['Pending', '50% Paid', 'Fully Paid'],
   layouts: ['Pending', 'Done'],
   customerTypes: ['New', 'Returning'],
@@ -255,7 +255,7 @@ router.get('/reminders', async (req, res) => {
     // Once an order has reached "Ready for Dispatch" (or beyond, i.e. Dispatched — already excluded
     // via `active`), the production deadline is no longer the thing to chase — it's just awaiting
     // photos/balance/tracking, which have their own reminder groups below.
-    const overdue = active.filter(o => o.deadline_at && o.deadline_at < today && o.status !== 'Ready for Dispatch');
+    const overdue = active.filter(o => o.deadline_at && o.deadline_at < today && !['Ready for Dispatch', 'Dispatch Pending'].includes(o.status));
     // Every product on the order needs its post-production photo uploaded before the balance can
     // be collected — partial photo sets (some products photographed, others not) don't count.
     const hasAllProdPhotos = (o) => {
@@ -265,6 +265,9 @@ router.get('/reminders', async (req, res) => {
     const awaitingBalance = active.filter(o => o.status === 'Ready for Dispatch' && o.payment_status !== 'Fully Paid');
     const photosPending = awaitingBalance.filter(o => !hasAllProdPhotos(o));
     const readyToCollect = awaitingBalance.filter(o => hasAllProdPhotos(o));
+    // Balance collected but not shipped yet — the only thing left is a tracking ID, which is
+    // what flips the order to Dispatched. Porter orders sit here until the Porter button is used.
+    const dispatchPending = active.filter(o => o.status === 'Dispatch Pending');
     // Dispatched orders are excluded from `active` (they're closed) — pull straight from `orders` instead.
     // Scoped to the last 14 days so the backlog of pre-existing dispatches (never tracked before this
     // field existed) doesn't flood the queue with old orders that were surely already followed up on.
@@ -278,13 +281,14 @@ router.get('/reminders', async (req, res) => {
       { key: 'overdue', label: 'Production Overdue', icon: '🚨', tone: 'danger', orders: overdue },
       { key: 'photosPending', label: 'Ready for dispatch — take production photos', icon: '📸', tone: 'warning', orders: photosPending },
       { key: 'readyToCollect', label: 'Ready to dispatch — collect balance', icon: '💵', tone: 'warning', orders: readyToCollect },
+      { key: 'dispatchPending', label: 'Dispatch pending — courier it & add tracking ID', icon: '🚚', tone: 'info', orders: dispatchPending },
       { key: 'trackingPending', label: 'Dispatched — send tracking to customer', icon: '📨', tone: 'primary', orders: trackingPending },
       { key: 'dueSoon', label: 'Due within 2 days', icon: '⏰', tone: 'warning', orders: dueSoon },
       { key: 'layoutPending', label: 'Layout pending', icon: '🎨', tone: 'primary', orders: layoutPending },
       { key: 'noDeadline', label: 'No deadline set', icon: '📅', tone: 'muted', orders: noDeadline },
     ].map(g => ({ ...g, count: g.orders.length }));
 
-    const badge = new Set([...overdue, ...photosPending, ...readyToCollect, ...trackingPending, ...dueSoon, ...layoutPending].map(o => o.id)).size;
+    const badge = new Set([...overdue, ...photosPending, ...readyToCollect, ...dispatchPending, ...trackingPending, ...dueSoon, ...layoutPending].map(o => o.id)).size;
     res.json({ groups, badge, activeCount: active.length });
   } catch (err) {
     console.error('crewfit reminders error:', err); res.status(500).json({ error: 'Failed to load reminders' });
@@ -359,7 +363,7 @@ const EDITABLE = ['status', 'payment_status', 'layout_status', 'customer_type', 
 // PUT /api/crewfit/orders/:id — inline field / dropdown updates
 router.put('/orders/:id', async (req, res) => {
   try {
-    const current = (await db.query('SELECT status, tracking_link, dispatch_date, mot FROM crewfit_orders WHERE id = $1', [req.params.id])).rows[0];
+    const current = (await db.query('SELECT status, payment_status, tracking_link, dispatch_date, mot FROM crewfit_orders WHERE id = $1', [req.params.id])).rows[0];
     if (!current) return res.status(404).json({ error: 'Not found' });
 
     const body = { ...req.body };
@@ -373,6 +377,24 @@ router.put('/orders/:id', async (req, res) => {
     if (effectiveTracking && !['Dispatched', 'Cancelled'].includes(current.status)) {
       body.status = 'Dispatched';
       if (!body.dispatch_date && !current.dispatch_date) body.dispatch_date = todayStr();
+    }
+    // Payment-driven status moves only fire when the caller isn't deliberately setting a status
+    // itself. The drawer saves the whole form (status included, unchanged), so "undefined" alone
+    // isn't enough — an unchanged status counts as "no explicit pick" too.
+    const statusUntouched = body.status === undefined || body.status === current.status;
+    // Orders confirmed from a quote start life as "Awaiting Payment" — the moment the SO
+    // records the advance (payment_status moves off "Pending"), it moves into the real
+    // production pipeline automatically.
+    if (current.status === 'Awaiting Payment' && statusUntouched
+      && body.payment_status !== undefined && body.payment_status && body.payment_status !== 'Pending') {
+      body.status = 'Pending';
+    }
+    // Production is done and the balance has just been collected — the order is cleared to ship.
+    // It parks in "Dispatch Pending" (print the label, hand it to the courier) and only becomes
+    // "Dispatched" once a tracking ID lands, per the rule above.
+    if (current.status === 'Ready for Dispatch' && statusUntouched
+      && body.payment_status === 'Fully Paid' && current.payment_status !== 'Fully Paid') {
+      body.status = 'Dispatch Pending';
     }
 
     const fields = Object.keys(body).filter(k => EDITABLE.includes(k));
@@ -481,6 +503,47 @@ router.get('/orders/:id/invoice/:type', async (req, res) => {
   }
 });
 
+// GET /api/crewfit/orders/:id/shipping-label — printable courier address label.
+// Inline (not an attachment) so the browser opens its own print dialog straight from the viewer.
+router.get('/orders/:id/shipping-label', async (req, res) => {
+  try {
+    const r = await db.query('SELECT * FROM crewfit_orders WHERE id = $1', [req.params.id]);
+    if (!r.rows[0]) return res.status(404).json({ error: 'Not found' });
+    const order = parseOrder(r.rows[0]);
+    if (!order.delivery_location && !order.billing_address) {
+      return res.status(400).json({ error: 'No delivery address on this order — add one before printing a shipping label.' });
+    }
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="Shipping-Label-CF-${order.sl_no}.pdf"`);
+    const doc = new PDFDocument({ size: 'A4', margin: 40 });
+    doc.pipe(res);
+    renderShippingLabel(doc, order);
+    doc.end();
+  } catch (err) {
+    console.error('crewfit shipping label error:', err);
+    if (!res.headersSent) res.status(500).json({ error: 'Failed to generate shipping label' });
+  }
+});
+
+// Imported/legacy orders were stored as flat product/color/qty columns with line_items NULL, but
+// the drawer still renders one product card for them (synthesized from those columns). Images are
+// addressed by line-item index, so materialize that same single item on first use — otherwise the
+// upload has nothing to attach to and fails with "Invalid product line".
+function ensureLineItems(order) {
+  const items = order.line_items || [];
+  if (items.length) return items;
+  if (!order.product && !order.qty && !order.product_total) return items;
+  return [{
+    product: order.product || '',
+    color: order.color || '',
+    printing: order.printing || 'Front & Back',
+    qty: order.qty || '',
+    unit_price: order.unit_price ?? (order.product_total && order.qty ? Math.round((order.product_total / order.qty) * 100) / 100 : ''),
+    product_total: order.product_total ?? '',
+    size_breakdown: order.size_breakdown || '',
+  }];
+}
+
 // POST /api/crewfit/orders/:id/images — attach up to 5 images per product line item.
 // kind: 'mock' (designer mockups, pending client confirmation) | 'prod' (post-production photos).
 router.post('/orders/:id/images', uploadImages, async (req, res) => {
@@ -494,8 +557,11 @@ router.post('/orders/:id/images', uploadImages, async (req, res) => {
     const r = await db.query('SELECT * FROM crewfit_orders WHERE id = $1', [req.params.id]);
     if (!r.rows[0]) { (req.files || []).forEach(f => fs.unlink(f.path, () => {})); return res.status(404).json({ error: 'Not found' }); }
     const order = parseOrder(r.rows[0]);
-    const items = order.line_items || [];
-    if (!items[idx]) { (req.files || []).forEach(f => fs.unlink(f.path, () => {})); return res.status(400).json({ error: 'Invalid product line' }); }
+    const items = ensureLineItems(order);
+    if (!items[idx]) {
+      (req.files || []).forEach(f => fs.unlink(f.path, () => {}));
+      return res.status(400).json({ error: 'Save the order first — this product row does not exist on the order yet.' });
+    }
 
     const field = kind === 'mock' ? 'mockImages' : 'prodImages';
     const existing = items[idx][field] || [];
@@ -525,7 +591,7 @@ router.delete('/orders/:id/images', async (req, res) => {
     const r = await db.query('SELECT * FROM crewfit_orders WHERE id = $1', [req.params.id]);
     if (!r.rows[0]) return res.status(404).json({ error: 'Not found' });
     const order = parseOrder(r.rows[0]);
-    const items = order.line_items || [];
+    const items = ensureLineItems(order);
     if (!items[idx]) return res.status(400).json({ error: 'Invalid product line' });
 
     const field = kind === 'mock' ? 'mockImages' : 'prodImages';

@@ -9,7 +9,8 @@ const pct = (v) => (v == null ? '—' : `${v.toFixed(0)}%`)
 
 const STATUS_COLORS = {
   'Pending': 'var(--text-muted)', 'Consignment Ordered': 'var(--info)', 'Consignment Received': 'var(--info)',
-  'Ongoing Production': 'var(--primary)', 'Ready for Dispatch': 'var(--warning)', 'Dispatched': 'var(--success)', 'Cancelled': 'var(--danger)',
+  'Ongoing Production': 'var(--primary)', 'Ready for Dispatch': 'var(--warning)', 'Dispatch Pending': 'var(--info)',
+  'Dispatched': 'var(--success)', 'Awaiting Payment': 'var(--warning)', 'Cancelled': 'var(--danger)',
 }
 const PAYMENT_COLORS = { 'Pending': 'var(--danger)', '50% Paid': 'var(--warning)', 'Fully Paid': 'var(--success)' }
 const TYPE_COLORS = { 'New': 'var(--primary)', 'Returning': 'var(--success)', 'Unknown': 'var(--text-muted)' }

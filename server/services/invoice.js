@@ -129,4 +129,161 @@ function renderInvoice(doc, order, invoice, allInvoices) {
     .text('This is a computer-generated invoice and does not require a physical signature.', 40, 780, { width: 515, align: 'center' });
 }
 
-module.exports = { renderInvoice, nextInvoiceNumber, SELLER };
+// Quotations aren't tax documents — no sequence number, no GSTIN requirement — just a clean,
+// shareable price breakdown for a Crewfit quote.
+function renderQuote(doc, quote) {
+  let headerX = 40;
+  if (fs.existsSync(LOGO_PATH)) {
+    doc.image(LOGO_PATH, 40, 40, { width: 46 });
+    headerX = 96;
+  }
+  doc.fontSize(20).fillColor('#1a1a1a').text(SELLER.brandName, headerX, 44);
+  doc.fontSize(9).fillColor('#666').text(SELLER.tagline, headerX, 68);
+
+  doc.fontSize(15).fillColor('#1a1a1a').text('QUOTATION', 300, 44, { width: 255, align: 'right' });
+  doc.fontSize(9).fillColor('#444')
+    .text(`Quote No: Q-${quote.id}`, 300, 68, { width: 255, align: 'right' })
+    .text(`Date: ${new Date(quote.created_at).toISOString().slice(0, 10)}`, 300, 82, { width: 255, align: 'right' });
+
+  doc.moveTo(40, 108).lineTo(555, 108).strokeColor('#ddd').stroke();
+
+  doc.fontSize(9).fillColor('#888').text('FROM', 40, 120);
+  doc.fontSize(10).fillColor('#1a1a1a').text(`${SELLER.legalName} (${SELLER.brandName})`, 40, 134);
+  doc.fontSize(9).fillColor('#444').text(SELLER.address, 40, 148, { width: 250 });
+
+  doc.fontSize(9).fillColor('#888').text('QUOTED FOR', 320, 120);
+  doc.fontSize(10).fillColor('#1a1a1a').text(quote.customer_name || '-', 320, 134);
+  doc.fontSize(9).fillColor('#444').text(`Phone: ${quote.contact_number || '-'}`, 320, 148);
+  doc.text(`Ship to: ${quote.zone_label || '-'}`, 320, 161);
+
+  let y = 200;
+  doc.moveTo(40, y).lineTo(555, y).strokeColor('#ddd').stroke();
+  y += 8;
+  doc.fontSize(9).fillColor('#888');
+  doc.text('#', 40, y, { width: 20 });
+  doc.text('Product', 65, y, { width: 260 });
+  doc.text('Qty', 335, y, { width: 40, align: 'right' });
+  doc.text('Rate', 380, y, { width: 75, align: 'right' });
+  doc.text('Amount', 460, y, { width: 95, align: 'right' });
+  y += 14;
+  doc.moveTo(40, y).lineTo(555, y).strokeColor('#ddd').stroke();
+  y += 8;
+
+  const items = Array.isArray(quote.line_items) ? quote.line_items : [];
+  doc.fontSize(9).fillColor('#1a1a1a');
+  items.forEach((it, i) => {
+    doc.text(String(i + 1), 40, y, { width: 20 });
+    doc.text(it.product_name || '-', 65, y, { width: 260 });
+    doc.text(String(it.qty || 0), 335, y, { width: 40, align: 'right' });
+    doc.text(it.needs_quote ? 'On request' : money(it.price_per_piece), 380, y, { width: 75, align: 'right' });
+    doc.text(it.needs_quote ? '-' : money(it.line_total), 460, y, { width: 95, align: 'right' });
+    y += 16;
+  });
+  y += 4;
+  doc.moveTo(40, y).lineTo(555, y).strokeColor('#ddd').stroke();
+  y += 10;
+
+  const rightX = 340;
+  const row = (label, val, bold) => {
+    doc.fontSize(9).fillColor(bold ? '#1a1a1a' : '#444').font(bold ? 'Helvetica-Bold' : 'Helvetica')
+      .text(label, rightX, y, { width: 120 })
+      .text(val, rightX + 120, y, { width: 95, align: 'right' });
+    y += 15;
+  };
+  row('Product Total', money(quote.product_total));
+  row('Shipping', money(quote.shipping_charge));
+  row('GST @ 5%', money(quote.gst_amount));
+  row('Grand Total', money(quote.grand_total), true);
+
+  if (quote.notes) {
+    y += 10;
+    doc.fontSize(8).fillColor('#888').text(`Notes: ${quote.notes}`, 40, y, { width: 515 });
+  }
+
+  doc.fontSize(8).fillColor('#999')
+    .text('This is a quotation, not a tax invoice, and is valid for 7 days from the date above. Prices are subject to change after that.', 40, 780, { width: 515, align: 'center' });
+}
+
+// A courier-ready address label. Sized to sit in the top portion of a plain A4 sheet so it prints
+// on any office printer and gets cut along the border — no thermal label printer assumed.
+function renderShippingLabel(doc, order) {
+  const L = 40, R = 555, W = R - L, PAD = 16;
+  const innerW = W - PAD * 2;
+  const shipTo = order.delivery_location || order.billing_address || '-';
+  const name = order.billing_name || order.customer_name || '-';
+  const phone = order.billing_mobile || order.contact_number || '-';
+  const top = 40;
+
+  const line = (y) => doc.moveTo(L, y).lineTo(R, y).strokeColor('#bbb').lineWidth(1).stroke();
+  let y = top + PAD;
+
+  // ── Header: brand on the left, order ref big on the right (what the warehouse matches on)
+  let headerX = L + PAD;
+  if (fs.existsSync(LOGO_PATH)) {
+    doc.image(LOGO_PATH, L + PAD, y, { width: 38 });
+    headerX = L + PAD + 48;
+  }
+  doc.font('Helvetica-Bold').fontSize(17).fillColor('#1a1a1a').text(SELLER.brandName, headerX, y + 2);
+  doc.font('Helvetica').fontSize(8).fillColor('#666').text(SELLER.tagline, headerX, y + 22);
+  doc.font('Helvetica').fontSize(8).fillColor('#888').text('ORDER REF', L + PAD, y, { width: innerW, align: 'right' });
+  doc.font('Helvetica-Bold').fontSize(20).fillColor('#1a1a1a').text(`CF-${order.sl_no}`, L + PAD, y + 11, { width: innerW, align: 'right' });
+  y += 44;
+  line(y);
+
+  // ── Deliver to — the block that actually matters, so it gets the largest type on the page
+  y += 12;
+  doc.font('Helvetica').fontSize(8).fillColor('#888').text('DELIVER TO', L + PAD, y);
+  y += 13;
+  doc.font('Helvetica-Bold').fontSize(16).fillColor('#000').text(name, L + PAD, y, { width: innerW });
+  y += doc.heightOfString(name, { width: innerW }) + 3;
+  if (order.contact_person && order.contact_person !== name) {
+    doc.font('Helvetica').fontSize(11).fillColor('#333').text(`Attn: ${order.contact_person}`, L + PAD, y, { width: innerW });
+    y += 16;
+  }
+  doc.font('Helvetica').fontSize(12).fillColor('#1a1a1a');
+  doc.text(shipTo, L + PAD, y, { width: innerW, lineGap: 2 });
+  y += doc.heightOfString(shipTo, { width: innerW, lineGap: 2 }) + 8;
+  doc.font('Helvetica-Bold').fontSize(13).fillColor('#000').text(`Phone: ${phone}`, L + PAD, y);
+  y += 22;
+  line(y);
+
+  // ── Return address
+  y += 12;
+  doc.font('Helvetica').fontSize(8).fillColor('#888').text('IF UNDELIVERED, RETURN TO', L + PAD, y);
+  y += 12;
+  doc.font('Helvetica-Bold').fontSize(10).fillColor('#1a1a1a').text(`${SELLER.legalName} (${SELLER.brandName})`, L + PAD, y);
+  y += 13;
+  doc.font('Helvetica').fontSize(9).fillColor('#444').text(SELLER.address, L + PAD, y, { width: innerW, lineGap: 1 });
+  y += doc.heightOfString(SELLER.address, { width: innerW, lineGap: 1 }) + 4;
+  doc.text(`GSTIN: ${SELLER.gstin}`, L + PAD, y);
+  y += 18;
+  line(y);
+
+  // ── Consignment strip: what the courier desk and the packer need at a glance
+  y += 11;
+  const cell = (label, val, x, w) => {
+    doc.font('Helvetica').fontSize(7.5).fillColor('#888').text(label, x, y, { width: w });
+    doc.font('Helvetica-Bold').fontSize(11).fillColor('#1a1a1a').text(val || '-', x, y + 11, { width: w });
+  };
+  const cw = innerW / 3;
+  cell('COURIER', order.mot, L + PAD, cw - 8);
+  cell('TRACKING ID', order.tracking_link, L + PAD + cw, cw - 8);
+  cell('TOTAL PIECES', order.qty ? `${order.qty} pcs` : '-', L + PAD + cw * 2, cw - 8);
+  y += 34;
+
+  const items = Array.isArray(order.line_items) ? order.line_items.filter(it => it.product) : [];
+  if (items.length) {
+    const contents = items.map(it => `${it.product}${it.color ? ` (${it.color})` : ''} x${it.qty || 0}`).join(' · ');
+    doc.font('Helvetica').fontSize(7.5).fillColor('#888').text('CONTENTS', L + PAD, y);
+    y += 10;
+    doc.font('Helvetica').fontSize(9).fillColor('#444').text(contents, L + PAD, y, { width: innerW, lineGap: 1 });
+    y += doc.heightOfString(contents, { width: innerW, lineGap: 1 }) + 4;
+  }
+  y += PAD;
+
+  doc.rect(L, top, W, y - top).strokeColor('#1a1a1a').lineWidth(1.5).stroke();
+  doc.font('Helvetica').fontSize(7.5).fillColor('#999')
+    .text('Cut along the border and paste on the parcel.', L, y + 8, { width: W, align: 'center' });
+}
+
+module.exports = { renderInvoice, renderQuote, renderShippingLabel, nextInvoiceNumber, SELLER };

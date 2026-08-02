@@ -167,6 +167,7 @@ const dashboardRoutes = require('./routes/dashboard');
 const syncRoutes = require('./routes/sync');
 const crewfitRoutes = require('./routes/crewfit');
 const crewfitQuotesRoutes = require('./routes/crewfit-quotes');
+const { convertQuoteToOrder } = crewfitQuotesRoutes;
 
 // Public routes
 app.use('/api/auth', authRoutes);
@@ -192,34 +193,17 @@ app.post('/api/crewfit/webhooks/razorpay', async (req, res) => {
 
         const qr = await db.query('SELECT * FROM crewfit_quotes WHERE razorpay_payment_link_id = $1', [linkId]);
         const quote = qr.rows[0];
-        if (!quote || quote.status === 'Paid') return res.json({ received: true }); // already processed / unknown link
+        if (!quote || quote.converted_order_id) return res.json({ received: true }); // already converted / unknown link
 
-        const lineItems = (() => { try { return JSON.parse(quote.line_items) || []; } catch { return []; } })();
-        const totalQty = lineItems.reduce((s, li) => s + (Number(li.qty) || 0), 0);
-        const orderLineItems = lineItems.map(li => ({
-            product: li.product_name, color: '', printing: 'Front & Back',
-            qty: li.qty, unit_price: li.price_per_piece, product_total: li.line_total, size_breakdown: '',
-        }));
-        const productNames = [...new Set(lineItems.map(li => li.product_name))].join(', ');
-
-        const nextRow = await db.query('SELECT COALESCE(MAX(sl_no), 0) + 1 AS next FROM crewfit_orders');
-        const orderIns = await db.query(
-            `INSERT INTO crewfit_orders
-               (sl_no, customer_name, contact_number, product, qty, line_items, product_total, shipping, grand_total, total_cost,
-                status, payment_status, layout_status, customer_type, order_date, notes)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'Pending','Fully Paid','Pending','New',CURRENT_DATE,$11)
-             RETURNING id`,
-            [nextRow.rows[0].next, quote.customer_name, quote.contact_number, productNames, totalQty,
-                JSON.stringify(orderLineItems), quote.product_total, quote.shipping_charge, quote.grand_total, quote.grand_total,
-                `Auto-created from Quick Calc quote #${quote.id} (paid via Razorpay)`]
-        );
+        quote.status = 'Paid'; // so convertQuoteToOrder marks the resulting order Fully Paid
+        const orderId = await convertQuoteToOrder(quote);
 
         await db.query(
             `UPDATE crewfit_quotes SET status = 'Paid', converted_order_id = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
-            [orderIns.rows[0].id, quote.id]
+            [orderId, quote.id]
         );
 
-        console.log(`✅ Razorpay payment_link.paid — quote #${quote.id} converted to order #${orderIns.rows[0].id}`);
+        console.log(`✅ Razorpay payment_link.paid — quote #${quote.id} converted to order #${orderId}`);
         res.json({ received: true });
     } catch (err) {
         console.error('Razorpay webhook error:', err);
@@ -382,7 +366,8 @@ async function ensureCrewfitSchema() {
             `);
         } catch { /* orders table may not exist yet */ }
 
-        // Quick Calc quotes — a quote becomes a real order automatically once its Razorpay
+        // Crewfit quotes — priced + sent on WhatsApp; becomes a real order once the customer
+        // confirms (manual, via the prefilled order form) or, optionally, once a Razorpay
         // payment link is paid (see the /api/crewfit/webhooks/razorpay handler).
         try {
             await db.exec(`
@@ -390,13 +375,14 @@ async function ensureCrewfitSchema() {
                     id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
                     customer_name TEXT, contact_number TEXT,
                     zone_id TEXT, zone_label TEXT,
-                    line_items TEXT, product_total NUMERIC, shipping_charge NUMERIC, grand_total NUMERIC,
+                    line_items TEXT, product_total NUMERIC, shipping_charge NUMERIC, gst_amount NUMERIC, grand_total NUMERIC,
                     notes TEXT, status TEXT DEFAULT 'Draft',
                     razorpay_payment_link_id TEXT, razorpay_short_url TEXT,
                     converted_order_id INTEGER, created_by TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
+                ALTER TABLE crewfit_quotes ADD COLUMN IF NOT EXISTS gst_amount NUMERIC;
             `);
         } catch (e) { console.error('crewfit_quotes ensure:', e.message); }
 

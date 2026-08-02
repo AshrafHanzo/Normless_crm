@@ -2,10 +2,12 @@ import { useState, useEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useApi } from '../../App'
 import DateRangeFilter from '../../components/DateRangeFilter'
-import CrewfitOrderDrawer from './CrewfitOrderDrawer'
+import CrewfitOrderDrawer, { openShippingLabel } from './CrewfitOrderDrawer'
+import Icon from '../../components/Icon'
 
 const fmt = (v) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(v || 0)
-const statusClass = (s) => { s = (s || '').toLowerCase(); if (s.includes('dispatch') && s.includes('ready')) return 'pending'; if (s.includes('dispatch')) return 'fulfilled'; if (s.includes('cancel')) return 'refunded'; return 'pending' }
+// Only "Dispatched" is a finished state — "Dispatch Pending" is still work in progress.
+const statusClass = (s) => { s = (s || '').toLowerCase(); if (s === 'dispatched') return 'fulfilled'; if (s.includes('cancel')) return 'refunded'; return 'pending' }
 const payClass = (s) => (s === 'Fully Paid' ? 'fulfilled' : s === 'Pending' ? 'refunded' : 'pending')
 const photoClass = (s) => (s === 'Complete' ? 'fulfilled' : s === 'Partial' ? 'pending' : '')
 
@@ -24,6 +26,7 @@ export default function CrewfitOrders() {
   const [endDate, setEndDate] = useState('')
   const [page, setPage] = useState(1)
   const [limit, setLimit] = useState(25)
+  const [labelBusy, setLabelBusy] = useState(null)
   const [target, setTarget] = useState(null) // null | 'new' | order object
 
   useEffect(() => {
@@ -54,6 +57,7 @@ export default function CrewfitOrders() {
   const applyDateFilter = (s, e) => { setStartDate(s); setEndDate(e); setPage(1) }
   const clearDateFilter = () => { setStartDate(''); setEndDate(''); setPage(1) }
 
+  const printLabel = async (o) => { setLabelBusy(o.id); await openShippingLabel(apiFetch, o); setLabelBusy(null) }
   const quickUpdate = async (id, patch) => { setOrders(os => os.map(o => o.id === id ? { ...o, ...patch } : o)); await apiFetch(`/api/crewfit/orders/${id}`, { method: 'PUT', body: JSON.stringify(patch) }) }
   const InlineSelect = ({ o, field, options, cls }) => {
     const opts = options || []
@@ -96,7 +100,7 @@ export default function CrewfitOrders() {
         ) : (
           <div style={{ overflowX: 'auto' }}>
             <table className="data-table">
-              <thead><tr><th>#</th><th>Date</th><th>Customer</th><th>Product</th><th style={{ textAlign: 'center' }}>Qty</th><th style={{ textAlign: 'right' }}>Total</th><th>Deadline</th><th>Status</th><th>Payment</th><th>Layout</th><th>Photos</th></tr></thead>
+              <thead><tr><th>#</th><th>Date</th><th>Customer</th><th>Product</th><th style={{ textAlign: 'center' }}>Qty</th><th style={{ textAlign: 'right' }}>Total</th><th>Deadline</th><th>Status</th><th>Payment</th><th>Layout</th><th>Photos</th><th style={{ textAlign: 'center' }}>Label</th></tr></thead>
               <tbody>
                 {orders.map(o => (
                   <tr key={o.id} onClick={() => setTarget(o)}>
@@ -115,6 +119,11 @@ export default function CrewfitOrders() {
                         <span className={`status-badge ${photoClass(o.mock_photo_status)}`}>Mock: {o.mock_photo_status}</span>
                         <span className={`status-badge ${photoClass(o.prod_photo_status)}`}>Prod: {o.prod_photo_status}</span>
                       </div>
+                    </td>
+                    <td style={{ textAlign: 'center' }} onClick={e => e.stopPropagation()}>
+                      <button className="btn-icon" title="Print shipping label" disabled={labelBusy === o.id} onClick={() => printLabel(o)}>
+                        <Icon name="printer" size={15} />
+                      </button>
                     </td>
                   </tr>
                 ))}

@@ -14,7 +14,7 @@ const GROUPS = [
     { key: 'crewfit_followups', label: 'Follow-ups', icon: 'bell' },
     { key: 'crewfit_orders', label: 'Bulk Orders', icon: 'box' },
     { key: 'crewfit_catalog', label: 'Catalog', icon: 'shirt' },
-    { key: 'crewfit_calculator', label: 'Quick Calc', icon: 'spark' },
+    { key: 'crewfit_calculator', label: 'Quotes', icon: 'spark' },
   ] },
 ]
 
