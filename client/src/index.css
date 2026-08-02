@@ -900,6 +900,20 @@ select { cursor: pointer; appearance: none;
 .search-bar input:hover { border-color: var(--border-hover); }
 .search-bar input:focus { background: var(--bg-secondary); box-shadow: 0 0 0 3px var(--primary-glow); border-color: var(--primary); }
 
+/* Quick Calc */
+.calc-item-row { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
+.calc-item-row select { flex: 1; }
+.calc-breakdown { display: flex; flex-direction: column; gap: 10px; }
+.calc-line { display: flex; justify-content: space-between; font-size: 13.5px; padding-bottom: 10px; border-bottom: 1px dashed var(--border); }
+.calc-line.calc-total { font-size: 16px; font-weight: 800; border-bottom: none; padding-top: 4px; }
+.calc-warning {
+  margin-top: 14px; padding: 10px 14px; border-radius: var(--radius-md); font-size: 12.5px;
+  background: color-mix(in srgb, var(--warning) 14%, transparent); color: var(--warning);
+}
+.quote-result { margin-top: 16px; padding: 16px; border-radius: var(--radius-lg); background: var(--surface); border: 1px solid var(--border); }
+.quote-result-head { display: flex; align-items: center; gap: 8px; font-weight: 700; color: var(--success); margin-bottom: 8px; }
+.quote-result-link { font-size: 13px; color: var(--text-secondary); word-break: break-all; }
+
 /* Access control (Admin) */
 .access-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
 .access-card { border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 18px; background: var(--surface); transition: all 0.2s ease; opacity: 0.55; }

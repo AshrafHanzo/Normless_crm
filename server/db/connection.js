@@ -16,6 +16,13 @@ const pool = new Pool({
     ssl: isLocalDb ? false : { rejectUnauthorized: false }
 });
 
+// pg requires an error listener on the pool — without one, an idle client hitting a
+// dropped connection (e.g. the local SSH tunnel blipping) throws unhandled and takes
+// down the whole Node process instead of just failing the next query.
+pool.on('error', (err) => {
+    console.error('⚠️  Unexpected error on idle PG client (pool recovers automatically):', err.message);
+});
+
 // Convert legacy `?` placeholders to Postgres `$1, $2, …`
 const toPg = (sql) => { let i = 1; return sql.replace(/\?/g, () => `$${i++}`); };
 

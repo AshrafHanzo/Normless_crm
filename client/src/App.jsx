@@ -19,6 +19,7 @@ import CrewfitDashboard from './pages/crewfit/CrewfitDashboard'
 import CrewfitAnalytics from './pages/crewfit/CrewfitAnalytics'
 import CrewfitOrders from './pages/crewfit/CrewfitOrders'
 import CrewfitCatalog from './pages/crewfit/CrewfitCatalog'
+import CrewfitQuickCalc from './pages/crewfit/CrewfitQuickCalc'
 
 // API base. In dev, VITE_API_URL (from .env.development.local) points at the
 // production backend + Postgres so previews use the real database.
@@ -137,6 +138,7 @@ function App() {
             <Route path="/crewfit/dashboard" element={<ProtectedRoute permission="can_view_crewfit_analytics"><AppLayout><CrewfitAnalytics /></AppLayout></ProtectedRoute>} />
             <Route path="/crewfit/orders" element={<ProtectedRoute permission="can_view_crewfit_orders"><AppLayout><CrewfitOrders /></AppLayout></ProtectedRoute>} />
             <Route path="/crewfit/catalog" element={<ProtectedRoute permission="can_view_crewfit_catalog"><AppLayout><CrewfitCatalog /></AppLayout></ProtectedRoute>} />
+            <Route path="/crewfit/calculator" element={<ProtectedRoute permission="can_view_crewfit_calculator"><AppLayout><CrewfitQuickCalc /></AppLayout></ProtectedRoute>} />
           </Routes>
         </BrowserRouter>
       </AuthContext.Provider>

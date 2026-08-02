@@ -13,7 +13,9 @@ const PORT = process.env.PORT || 5000;
 
 // Middleware
 app.use(cors());
-app.use(express.json());
+// Stash the raw bytes alongside the parsed body — the Razorpay webhook needs to HMAC-verify
+// the exact raw payload against its signature header, which is lost once JSON.parse runs.
+app.use(express.json({ verify: (req, res, buf) => { req.rawBody = buf; } }));
  
 // LOUD LOGGER
 app.use((req, res, next) => {
@@ -164,9 +166,66 @@ const interactionRoutes = require('./routes/interactions');
 const dashboardRoutes = require('./routes/dashboard');
 const syncRoutes = require('./routes/sync');
 const crewfitRoutes = require('./routes/crewfit');
+const crewfitQuotesRoutes = require('./routes/crewfit-quotes');
 
 // Public routes
 app.use('/api/auth', authRoutes);
+
+// Razorpay webhook — unauthenticated (Razorpay calls this directly, not a logged-in CRM user),
+// so it's registered ahead of the authMiddleware-gated /api/crewfit mount below. Verifies the
+// HMAC signature itself instead of relying on a bearer token. On a paid payment link, marks the
+// quote Paid and auto-creates the real order from it.
+app.post('/api/crewfit/webhooks/razorpay', async (req, res) => {
+    const crypto = require('crypto');
+    try {
+        const secret = process.env.RAZORPAY_WEBHOOK_SECRET;
+        const signature = req.headers['x-razorpay-signature'];
+        if (!secret || !signature || !req.rawBody) return res.status(400).json({ error: 'Missing webhook secret/signature' });
+        const expected = crypto.createHmac('sha256', secret).update(req.rawBody).digest('hex');
+        if (expected !== signature) return res.status(400).json({ error: 'Invalid signature' });
+
+        const event = req.body;
+        if (event.event !== 'payment_link.paid') return res.json({ received: true });
+
+        const linkId = event.payload?.payment_link?.entity?.id;
+        if (!linkId) return res.json({ received: true });
+
+        const qr = await db.query('SELECT * FROM crewfit_quotes WHERE razorpay_payment_link_id = $1', [linkId]);
+        const quote = qr.rows[0];
+        if (!quote || quote.status === 'Paid') return res.json({ received: true }); // already processed / unknown link
+
+        const lineItems = (() => { try { return JSON.parse(quote.line_items) || []; } catch { return []; } })();
+        const totalQty = lineItems.reduce((s, li) => s + (Number(li.qty) || 0), 0);
+        const orderLineItems = lineItems.map(li => ({
+            product: li.product_name, color: '', printing: 'Front & Back',
+            qty: li.qty, unit_price: li.price_per_piece, product_total: li.line_total, size_breakdown: '',
+        }));
+        const productNames = [...new Set(lineItems.map(li => li.product_name))].join(', ');
+
+        const nextRow = await db.query('SELECT COALESCE(MAX(sl_no), 0) + 1 AS next FROM crewfit_orders');
+        const orderIns = await db.query(
+            `INSERT INTO crewfit_orders
+               (sl_no, customer_name, contact_number, product, qty, line_items, product_total, shipping, grand_total, total_cost,
+                status, payment_status, layout_status, customer_type, order_date, notes)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'Pending','Fully Paid','Pending','New',CURRENT_DATE,$11)
+             RETURNING id`,
+            [nextRow.rows[0].next, quote.customer_name, quote.contact_number, productNames, totalQty,
+                JSON.stringify(orderLineItems), quote.product_total, quote.shipping_charge, quote.grand_total, quote.grand_total,
+                `Auto-created from Quick Calc quote #${quote.id} (paid via Razorpay)`]
+        );
+
+        await db.query(
+            `UPDATE crewfit_quotes SET status = 'Paid', converted_order_id = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+            [orderIns.rows[0].id, quote.id]
+        );
+
+        console.log(`✅ Razorpay payment_link.paid — quote #${quote.id} converted to order #${orderIns.rows[0].id}`);
+        res.json({ received: true });
+    } catch (err) {
+        console.error('Razorpay webhook error:', err);
+        res.status(500).json({ error: 'Webhook processing failed' });
+    }
+});
 
 // Admin routes (require auth)
 app.use('/api/admin', authMiddleware, adminRoutes);
@@ -177,6 +236,7 @@ app.use('/api/orders', authMiddleware, orderRoutes);
 app.use('/api/interactions', authMiddleware, interactionRoutes);
 app.use('/api/dashboard', authMiddleware, dashboardRoutes);
 app.use('/api/sync', authMiddleware, syncRoutes);
+app.use('/api/crewfit/quotes', authMiddleware, crewfitQuotesRoutes);
 app.use('/api/crewfit', authMiddleware, crewfitRoutes);
 
 // Health check
@@ -287,10 +347,11 @@ async function ensureCrewfitSchema() {
                 ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_crewfit_orders BOOLEAN DEFAULT false;
                 ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_crewfit_catalog BOOLEAN DEFAULT false;
                 ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_crewfit_analytics BOOLEAN DEFAULT false;
+                ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_crewfit_calculator BOOLEAN DEFAULT false;
             `);
             await db.query(`UPDATE admin_users SET can_access_normless=true, can_access_crewfit=true,
                 can_view_crewfit_followups=true, can_view_crewfit_orders=true, can_view_crewfit_catalog=true,
-                can_view_crewfit_analytics=true
+                can_view_crewfit_analytics=true, can_view_crewfit_calculator=true
                 WHERE role IN ('owner','admin')`);
         } catch (e) { console.error('admin perms ensure:', e.message); }
 
@@ -320,6 +381,24 @@ async function ensureCrewfitSchema() {
                 ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS photos_sent_at TIMESTAMP;
             `);
         } catch { /* orders table may not exist yet */ }
+
+        // Quick Calc quotes — a quote becomes a real order automatically once its Razorpay
+        // payment link is paid (see the /api/crewfit/webhooks/razorpay handler).
+        try {
+            await db.exec(`
+                CREATE TABLE IF NOT EXISTS crewfit_quotes (
+                    id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                    customer_name TEXT, contact_number TEXT,
+                    zone_id TEXT, zone_label TEXT,
+                    line_items TEXT, product_total NUMERIC, shipping_charge NUMERIC, grand_total NUMERIC,
+                    notes TEXT, status TEXT DEFAULT 'Draft',
+                    razorpay_payment_link_id TEXT, razorpay_short_url TEXT,
+                    converted_order_id INTEGER, created_by TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            `);
+        } catch (e) { console.error('crewfit_quotes ensure:', e.message); }
 
         const c = await db.query('SELECT COUNT(*) AS n FROM crewfit_products');
         if (parseInt(c.rows[0].n, 10) === 0) {
