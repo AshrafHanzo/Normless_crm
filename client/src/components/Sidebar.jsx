@@ -17,6 +17,7 @@ const NAV = {
     { to: '/scan', icon: 'scan', label: 'Scan Order', perm: 'can_scan_orders' },
   ],
   crewfit: [
+    { to: '/crewfit/dashboard', icon: 'dashboard', label: 'Dashboard', perm: 'can_view_crewfit_analytics' },
     { to: '/crewfit', end: true, icon: 'bell', label: 'Follow-ups', perm: 'can_view_crewfit_followups' },
     { to: '/crewfit/orders', icon: 'box', label: 'Bulk Orders', perm: 'can_view_crewfit_orders' },
     { to: '/crewfit/catalog', icon: 'shirt', label: 'Catalog', perm: 'can_view_crewfit_catalog' },

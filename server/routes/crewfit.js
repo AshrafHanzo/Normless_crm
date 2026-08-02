@@ -38,7 +38,7 @@ const uploadImages = (req, res, next) => upload.array('images', 5)(req, res, (er
 
 // Clean dropdown picklists (source of truth for the UI).
 const META = {
-  statuses: ['Enquiry', 'Consignment Ordered', 'Ongoing Production', 'Ready for Dispatch', 'Dispatched', 'Cancelled'],
+  statuses: ['Pending', 'Consignment Ordered', 'Consignment Received', 'Ongoing Production', 'Ready for Dispatch', 'Dispatched', 'Cancelled'],
   payments: ['Pending', '50% Paid', 'Fully Paid'],
   layouts: ['Pending', 'Done'],
   customerTypes: ['New', 'Returning'],
@@ -88,6 +88,152 @@ router.get('/stats', async (req, res) => {
     res.json({ total: orders.length, active, dispatched: byStatus['Dispatched'] || 0, totalValue, pendingPayments, byStatus });
   } catch (err) {
     console.error('crewfit stats error:', err); res.status(500).json({ error: 'Failed to load stats' });
+  }
+});
+
+// GET /api/crewfit/analytics?startDate&endDate — revenue, fulfillment time, customers & retention.
+// All aggregation happens in JS over fetchAll() (mirrors /stats and /reminders) since per-product
+// figures live inside the line_items JSON blob and can't be GROUP BY'd in SQL anyway.
+router.get('/analytics', async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query;
+    let orders = await fetchAll();
+    if (startDate && endDate) {
+      orders = orders.filter(o => o.order_date && o.order_date >= startDate && o.order_date <= endDate);
+    }
+
+    const nonCancelled = orders.filter(o => o.status !== 'Cancelled');
+    const dispatched = orders.filter(o => o.status === 'Dispatched');
+    const dayDiff = (a, b) => Math.round((new Date(b) - new Date(a)) / 86400000);
+    // Orders imported from the old sheet only ever got `total_cost` populated, not the newer
+    // grand_total/advance/product_total breakdown fields added later — fall back so historical
+    // orders aren't silently excluded from revenue.
+    const orderValue = (o) => Number(o.grand_total) || Number(o.total_cost) || 0;
+
+    // --- Revenue ---
+    const totalRevenue = nonCancelled.reduce((s, o) => s + orderValue(o), 0);
+    const collectedRevenue = nonCancelled.reduce((s, o) => {
+      const val = orderValue(o);
+      if (o.payment_status === 'Fully Paid') return s + val;
+      if (o.payment_status === '50% Paid') return s + (Number(o.advance) || Math.round(val / 2));
+      return s;
+    }, 0);
+    const pendingRevenue = Math.max(0, totalRevenue - collectedRevenue);
+    const avgOrderValue = nonCancelled.length ? totalRevenue / nonCancelled.length : 0;
+
+    // --- Customers & retention (keyed by phone, falling back to name) ---
+    const custKey = (o) => (o.contact_number || o.customer_name || '').trim().toLowerCase();
+    const custMap = new Map();
+    nonCancelled.forEach(o => {
+      const key = custKey(o);
+      if (!key) return;
+      const c = custMap.get(key) || { customer_name: o.customer_name, contact_number: o.contact_number, orders: 0, revenue: 0 };
+      c.orders += 1; c.revenue += orderValue(o);
+      custMap.set(key, c);
+    });
+    const customers = Array.from(custMap.values());
+    const totalCustomers = customers.length;
+    const repeatCustomers = customers.filter(c => c.orders > 1).length;
+    const repeatRate = totalCustomers ? (repeatCustomers / totalCustomers) * 100 : 0;
+    const topCustomers = [...customers].sort((a, b) => b.revenue - a.revenue).slice(0, 8);
+
+    const typeCounts = {};
+    nonCancelled.forEach(o => { const t = o.customer_type || 'Unknown'; typeCounts[t] = (typeCounts[t] || 0) + 1; });
+    const customerTypeBreakdown = Object.entries(typeCounts).map(([type, count]) => ({ type, count }));
+
+    // --- Fulfillment / delivery time ---
+    const fulfilled = dispatched.filter(o => o.order_date && o.dispatch_date);
+    const fulfillmentDays = fulfilled.map(o => dayDiff(o.order_date, o.dispatch_date));
+    const avgFulfillmentDays = fulfillmentDays.length ? fulfillmentDays.reduce((s, d) => s + d, 0) / fulfillmentDays.length : null;
+    const onTimeEligible = fulfilled.filter(o => o.deadline_at);
+    const onTimeCount = onTimeEligible.filter(o => o.dispatch_date <= o.deadline_at).length;
+    const onTimeRate = onTimeEligible.length ? (onTimeCount / onTimeEligible.length) * 100 : null;
+    const fulfillmentBuckets = [
+      { label: '≤ 3 days', min: 0, max: 3 },
+      { label: '4–7 days', min: 4, max: 7 },
+      { label: '8–14 days', min: 8, max: 14 },
+      { label: '15+ days', min: 15, max: Infinity },
+    ].map(b => ({ label: b.label, count: fulfillmentDays.filter(d => d >= b.min && d <= b.max).length }));
+
+    // --- Status / payment breakdowns ---
+    const statusBreakdown = META.statuses
+      .map(s => ({ status: s, count: orders.filter(o => o.status === s).length }))
+      .filter(s => s.count > 0);
+    const paymentBreakdown = META.payments.map(p => {
+      const rows = nonCancelled.filter(o => o.payment_status === p);
+      return { status: p, count: rows.length, amount: rows.reduce((s, o) => s + orderValue(o), 0) };
+    }).filter(p => p.count > 0);
+
+    // --- Sales officer performance ---
+    const soMap = new Map();
+    nonCancelled.forEach(o => {
+      const key = o.so || 'Unassigned';
+      const s = soMap.get(key) || { so: key, orders: 0, revenue: 0, fulfillmentDays: [] };
+      s.orders += 1; s.revenue += orderValue(o);
+      if (o.status === 'Dispatched' && o.order_date && o.dispatch_date) s.fulfillmentDays.push(dayDiff(o.order_date, o.dispatch_date));
+      soMap.set(key, s);
+    });
+    const soPerformance = Array.from(soMap.values())
+      .map(s => ({
+        so: s.so, orders: s.orders, revenue: s.revenue,
+        avgFulfillmentDays: s.fulfillmentDays.length ? Math.round(s.fulfillmentDays.reduce((a, b) => a + b, 0) / s.fulfillmentDays.length) : null,
+      }))
+      .sort((a, b) => b.revenue - a.revenue);
+
+    // --- Top products (aggregated from each order's line_items) ---
+    const prodMap = new Map();
+    nonCancelled.forEach(o => {
+      const items = o.line_items || [];
+      items.forEach(it => {
+        if (!it.product) return;
+        const p = prodMap.get(it.product) || { product: it.product, qty: 0, revenue: 0 };
+        p.qty += parseInt(it.qty) || 0;
+        // Legacy single-product orders often have no per-line product_total (only the order-level
+        // total_cost) — attribute the whole order value to that one line rather than losing it.
+        p.revenue += Number(it.product_total) || (items.length === 1 ? orderValue(o) : 0);
+        prodMap.set(it.product, p);
+      });
+    });
+    const topProducts = Array.from(prodMap.values()).sort((a, b) => b.revenue - a.revenue).slice(0, 8);
+
+    // --- Revenue trend (daily, zero-filled — default last 30 days) ---
+    const revByDate = {};
+    nonCancelled.forEach(o => {
+      if (!o.order_date) return;
+      const d = revByDate[o.order_date] || { date: o.order_date, revenue: 0, order_count: 0 };
+      d.revenue += orderValue(o); d.order_count += 1;
+      revByDate[o.order_date] = d;
+    });
+    const rangeStart = startDate && endDate ? startDate : addDaysStr(-29);
+    const rangeEnd = startDate && endDate ? endDate : todayStr();
+    const revenueSeries = [];
+    for (let d = new Date(rangeStart); d <= new Date(rangeEnd); d.setDate(d.getDate() + 1)) {
+      const key = d.toISOString().slice(0, 10);
+      revenueSeries.push(revByDate[key] || { date: key, revenue: 0, order_count: 0 });
+    }
+
+    res.json({
+      range: { startDate: startDate || null, endDate: endDate || null },
+      kpis: {
+        totalOrders: orders.length,
+        activeOrders: orders.filter(o => !CLOSED.includes(o.status)).length,
+        dispatchedOrders: dispatched.length,
+        cancelledOrders: orders.length - nonCancelled.length,
+        totalRevenue, collectedRevenue, pendingRevenue, avgOrderValue,
+        totalCustomers, repeatCustomers, repeatRate,
+        avgFulfillmentDays, onTimeRate,
+      },
+      revenueSeries,
+      statusBreakdown,
+      paymentBreakdown,
+      customerTypeBreakdown,
+      fulfillmentBuckets,
+      soPerformance,
+      topProducts,
+      topCustomers,
+    });
+  } catch (err) {
+    console.error('crewfit analytics error:', err); res.status(500).json({ error: 'Failed to load analytics' });
   }
 });
 

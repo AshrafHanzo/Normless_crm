@@ -129,7 +129,7 @@ export default function Dashboard() {
 }
 
 // Interactive SVG area + line chart (crosshair + floating tooltip)
-function AreaChart({ data, fmt }) {
+export function AreaChart({ data, fmt }) {
   const [hi, setHi] = useState(null)
   const W = 1000, H = 240, top = 16, bot = 24
   const max = Math.max(...data.map(d => d.revenue), 1)

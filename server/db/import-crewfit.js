@@ -49,13 +49,14 @@ const clean = (s) => (s || '').trim();
 
 function normStatus(v) {
     const s = clean(v).toLowerCase();
-    if (!s) return 'Enquiry';
+    if (!s) return 'Pending';
     if (s.includes('dispatch') && s.includes('ready')) return 'Ready for Dispatch';
     if (s.includes('dispatch')) return 'Dispatched';
     if (s.includes('production') || s.includes('ongoing')) return 'Ongoing Production';
+    if (s.includes('consignment') && s.includes('received')) return 'Consignment Received';
     if (s.includes('consignment') || s.includes('ordered')) return 'Consignment Ordered';
     if (s.includes('cancel')) return 'Cancelled';
-    return 'Enquiry';
+    return 'Pending';
 }
 function normPayment(v) {
     const s = clean(v).toLowerCase();
@@ -216,7 +217,7 @@ CREATE TABLE IF NOT EXISTS crewfit_orders (
     customer_type TEXT,
     so TEXT,
     payment_status TEXT DEFAULT 'Pending',
-    status TEXT DEFAULT 'Enquiry',
+    status TEXT DEFAULT 'Pending',
     vendor TEXT,
     dispatch_date DATE,
     mot TEXT,

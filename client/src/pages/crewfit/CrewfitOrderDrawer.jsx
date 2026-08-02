@@ -56,10 +56,13 @@ function shippingFor(region, qty) {
 }
 
 function blankItem() {
-  return { product: '', color: '', printing: 'Front & Back', qty: '', unit_price: '', product_total: '', size_breakdown: '', _sizeMode: 'standard', _sizes: {} }
+  return {
+    product: '', color: '', printing: 'Front & Back', qty: '', unit_price: '', product_total: '', size_breakdown: '',
+    _sizeMode: 'standard', _sizes: {}, _pendingMock: [], _pendingProd: [],
+  }
 }
 export function blankOrder() {
-  return { status: 'Enquiry', payment_status: 'Pending', layout_status: 'Pending', customer_type: 'New', _gstPct: 5, shipping: '', ship_region: 'Tamil Nadu', whatsapp_number: '', line_items: [blankItem()] }
+  return { status: 'Pending', payment_status: 'Pending', layout_status: 'Pending', customer_type: 'New', _gstPct: 5, shipping: '', ship_region: 'Tamil Nadu', whatsapp_number: '', line_items: [blankItem()] }
 }
 const waSource = (order) => order.whatsapp_number || order.contact_number || order.billing_mobile
 
@@ -154,37 +157,46 @@ function buildPhotosMessage(order, apiUrl) {
   return L.join('\n')
 }
 
-// Instagram-style tile grid: existing thumbnails + a dashed "add" tile, up to `max`.
+// Uploaded (server-backed) + pending (picked but not saved yet, local blob preview) images for
+// one product line item's mock/production set — a homogeneous shape the grid and lightbox share.
+function imageThumbs(item, kind, apiUrl) {
+  const uploadedKey = kind === 'mock' ? 'mockImages' : 'prodImages'
+  const pendingKey = kind === 'mock' ? '_pendingMock' : '_pendingProd'
+  const uploaded = (item[uploadedKey] || []).map(url => ({ src: `${apiUrl}${url}`, pending: false, ref: url }))
+  const pending = (item[pendingKey] || []).map(p => ({ src: p.previewUrl, pending: true, ref: p }))
+  return [...uploaded, ...pending]
+}
+
+// Instagram-style tile grid: existing thumbnails + a dashed "add" tile, up to `max`. Uploads are
+// always available, even before the order is first saved — new orders queue picks as "pending"
+// (dashed amber outline) and they're pushed to the server right after the order is created.
 // Clicking a thumbnail hands off to the parent's lightbox instead of opening a new tab.
-function ImageUploadGrid({ icon, label, images, max = 5, apiUrl, busy, canUpload, onUpload, onView, onDownloadAll, downloadBusy }) {
+function ImageUploadGrid({ icon, label, thumbs, max = 5, busy, onUpload, onView, onDownloadAll, downloadBusy }) {
+  const uploadedCount = thumbs.filter(t => !t.pending).length
   return (
     <div className="img-upload-block">
       <div className="img-upload-head">
         <span className="img-upload-label">{icon} {label}</span>
         <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          {images.length > 1 && (
+          {uploadedCount > 1 && (
             <button type="button" className="mini-btn" onClick={onDownloadAll} disabled={downloadBusy}>{downloadBusy ? 'Downloading…' : '⬇ Download all'}</button>
           )}
-          <span className="img-count-badge">{images.length}/{max}</span>
+          <span className="img-count-badge">{thumbs.length}/{max}</span>
         </span>
       </div>
-      {!canUpload && <div className="img-upload-hint">Save the order to attach images</div>}
       <div className="img-thumb-grid">
-        {images.map((url, i) => (
-          <div className="img-thumb" key={url} onClick={() => onView(i)} title="Click to view">
-            <img src={`${apiUrl}${url}`} alt={label} />
+        {thumbs.map((t, i) => (
+          <div className={`img-thumb ${t.pending ? 'img-thumb-pending' : ''}`} key={t.pending ? t.src : t.ref} onClick={() => onView(i)} title={t.pending ? 'Pending upload — click to view' : 'Click to view'}>
+            <img src={t.src} alt={label} />
+            {t.pending && <span className="img-pending-badge" title="Will upload once the order is saved" />}
           </div>
         ))}
-        {images.length < max && (
-          canUpload ? (
-            <label className={`img-thumb img-thumb-add ${busy ? 'img-thumb-busy' : ''}`}>
-              {busy ? <span className="img-spinner" /> : <span className="img-thumb-add-icon">+</span>}
-              <input type="file" accept="image/png,image/jpeg,image/webp" multiple hidden disabled={busy}
-                onChange={e => { onUpload(e.target.files); e.target.value = '' }} />
-            </label>
-          ) : (
-            <div className="img-thumb img-thumb-add img-thumb-disabled"><span className="img-thumb-add-icon">+</span></div>
-          )
+        {thumbs.length < max && (
+          <label className={`img-thumb img-thumb-add ${busy ? 'img-thumb-busy' : ''}`}>
+            {busy ? <span className="img-spinner" /> : <span className="img-thumb-add-icon">+</span>}
+            <input type="file" accept="image/png,image/jpeg,image/webp" multiple hidden disabled={busy}
+              onChange={e => { onUpload(e.target.files); e.target.value = '' }} />
+          </label>
         )}
       </div>
     </div>
@@ -271,7 +283,16 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
     })
   }
 
-  const closeDrawer = () => { setForm(null); setLightbox(null); onClose?.() }
+  const revokePendingUrls = (items) => {
+    items.forEach(it => {
+      ;(it._pendingMock || []).forEach(p => URL.revokeObjectURL(p.previewUrl))
+      ;(it._pendingProd || []).forEach(p => URL.revokeObjectURL(p.previewUrl))
+    })
+  }
+  const closeDrawer = () => {
+    if (form) revokePendingUrls(form.line_items)
+    setForm(null); setLightbox(null); onClose?.()
+  }
 
   // set order-level fields + recompute money
   const setF = (patch, recalc = false) => setForm(f => { const nf = { ...f, ...patch }; return recalc ? { ...nf, ...recompute(nf) } : nf })
@@ -320,6 +341,7 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
   }
   const addItem = () => setF({ line_items: [...form.line_items, blankItem()] })
   const removeItem = (idx) => {
+    revokePendingUrls([form.line_items[idx]])
     const items = form.line_items.filter((_, i) => i !== idx)
     setF({ line_items: items.length ? items : [blankItem()] }, true)
   }
@@ -328,10 +350,30 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
   const applyServerOrder = (res) => {
     setForm(f => ({ ...f, line_items: (res.line_items || []).map((sv, i) => ({ ...(f.line_items[i] || {}), ...sv })), invoices: res.invoices }))
   }
+  // Before the order has an id, picked files can't go anywhere server-side yet — queue them
+  // locally (with a blob preview) and they're uploaded for real right after order creation in save().
+  const addPendingImages = (idx, kind, files) => {
+    const uploadedKey = kind === 'mock' ? 'mockImages' : 'prodImages'
+    const pendingKey = kind === 'mock' ? '_pendingMock' : '_pendingProd'
+    const item = form.line_items[idx]
+    const room = 5 - (item[uploadedKey] || []).length - (item[pendingKey] || []).length
+    if (room <= 0) { alert(`Max 5 ${kind === 'mock' ? 'mock' : 'production'} images per product`); return }
+    const accepted = files.slice(0, room)
+    if (accepted.length < files.length) alert(`Only ${accepted.length} of ${files.length} file(s) added — max 5 images per product`)
+    const withPreview = accepted.map(file => ({ file, previewUrl: URL.createObjectURL(file) }))
+    const items = form.line_items.map((it, i) => i === idx ? { ...it, [pendingKey]: [...(it[pendingKey] || []), ...withPreview] } : it)
+    setF({ line_items: items })
+  }
+  const removePendingImage = (idx, kind, pendingRef) => {
+    const pendingKey = kind === 'mock' ? '_pendingMock' : '_pendingProd'
+    URL.revokeObjectURL(pendingRef.previewUrl)
+    const items = form.line_items.map((it, i) => i === idx ? { ...it, [pendingKey]: (it[pendingKey] || []).filter(p => p !== pendingRef) } : it)
+    setF({ line_items: items })
+  }
   const uploadItemImages = async (idx, kind, fileList) => {
     const files = Array.from(fileList || [])
     if (!files.length) return
-    if (!form.id) { alert('Save the order first, then attach images.'); return }
+    if (!form.id) { addPendingImages(idx, kind, files); return }
     setImgBusy(`${idx}-${kind}`)
     const fd = new FormData()
     fd.append('kind', kind); fd.append('itemIndex', idx)
@@ -372,11 +414,12 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
   const removeLightboxImage = async () => {
     if (!lightbox) return
     const { idx, kind, images, index } = lightbox
-    const url = images[index]
+    const img = images[index]
     const rest = images.filter((_, i) => i !== index)
     if (!rest.length) setLightbox(null)
     else setLightbox(l => ({ ...l, images: rest, index: Math.min(l.index, rest.length - 1) }))
-    await deleteItemImage(idx, kind, url)
+    if (img.pending) removePendingImage(idx, kind, img.ref)
+    else await deleteItemImage(idx, kind, img.ref)
   }
   const toggleMockConfirmed = async (idx) => {
     const items = form.line_items.map((it, i) => i === idx ? { ...it, mockConfirmed: !it.mockConfirmed } : it)
@@ -433,10 +476,30 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
     window.open(num ? `https://wa.me/${num}?text=${msg}` : `https://wa.me/?text=${msg}`, '_blank')
   }
 
+  // Design mock / production photos picked before the order existed are queued on the line item
+  // as _pendingMock/_pendingProd; once the order is created and has a real id, push them up for real.
+  const uploadPendingImages = async (orderId, items) => {
+    const failures = []
+    for (let idx = 0; idx < items.length; idx++) {
+      for (const kind of ['mock', 'prod']) {
+        const pendingKey = kind === 'mock' ? '_pendingMock' : '_pendingProd'
+        const pending = items[idx][pendingKey] || []
+        if (!pending.length) continue
+        const fd = new FormData()
+        fd.append('kind', kind); fd.append('itemIndex', idx)
+        pending.forEach(p => fd.append('images', p.file))
+        const res = await apiFetch(`/api/crewfit/orders/${orderId}/images`, { method: 'POST', body: fd })
+        if (!res || res.error) failures.push(`${kind === 'mock' ? 'design mock' : 'production'} photos for product ${idx + 1}`)
+        pending.forEach(p => URL.revokeObjectURL(p.previewUrl))
+      }
+    }
+    return failures
+  }
+
   const save = async (e) => {
     e.preventDefault()
     setSaving(true)
-    const items = form.line_items.map(({ _sizeMode, _sizes, ...rest }) => rest)
+    const items = form.line_items.map(({ _sizeMode, _sizes, _pendingMock, _pendingProd, ...rest }) => rest)
     const merged = { ...form, ...recompute(form), line_items: items }
     const payload = {
       ...merged,
@@ -450,8 +513,17 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
     delete payload._gstPct
     const isNew = !form.id
     const res = await apiFetch(`/api/crewfit/orders${isNew ? '' : '/' + form.id}`, { method: isNew ? 'POST' : 'PUT', body: JSON.stringify(payload) })
-    setSaving(false)
-    if (res && !res.error) { setForm(null); onSaved?.() } else alert(res?.error || 'Save failed — deploy the Crewfit API first')
+    if (res && !res.error) {
+      if (isNew) {
+        const failures = await uploadPendingImages(res.id, form.line_items)
+        if (failures.length) alert(`Order created, but these photo uploads failed: ${failures.join(', ')}. You can retry from the order's edit screen.`)
+      }
+      setSaving(false)
+      setForm(null); onSaved?.()
+    } else {
+      setSaving(false)
+      alert(res?.error || 'Save failed — deploy the Crewfit API first')
+    }
   }
 
   const preview = form ? buildDescription({ ...form, ...recompute(form) }) : ''
@@ -547,10 +619,10 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
                 </div>
 
                 <ImageUploadGrid
-                  icon="🎨" label="Design mock" images={item.mockImages || []} apiUrl={API_URL}
-                  busy={imgBusy === `${idx}-mock`} canUpload={!!form.id}
+                  icon="🎨" label="Design mock" thumbs={imageThumbs(item, 'mock', API_URL)}
+                  busy={imgBusy === `${idx}-mock`}
                   onUpload={files => uploadItemImages(idx, 'mock', files)}
-                  onView={i => openLightbox(idx, 'mock', item.mockImages || [], i)}
+                  onView={i => openLightbox(idx, 'mock', imageThumbs(item, 'mock', API_URL), i)}
                   onDownloadAll={() => downloadImages(item.mockImages || [], `${idx}-mock-all`)}
                   downloadBusy={bulkDownloading === `${idx}-mock-all`}
                 />
@@ -559,10 +631,10 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
                 </label>
 
                 <ImageUploadGrid
-                  icon="📷" label="Production photos" images={item.prodImages || []} apiUrl={API_URL}
-                  busy={imgBusy === `${idx}-prod`} canUpload={!!form.id}
+                  icon="📷" label="Production photos" thumbs={imageThumbs(item, 'prod', API_URL)}
+                  busy={imgBusy === `${idx}-prod`}
                   onUpload={files => uploadItemImages(idx, 'prod', files)}
-                  onView={i => openLightbox(idx, 'prod', item.prodImages || [], i)}
+                  onView={i => openLightbox(idx, 'prod', imageThumbs(item, 'prod', API_URL), i)}
                   onDownloadAll={() => downloadImages(item.prodImages || [], `${idx}-prod-all`)}
                   downloadBusy={bulkDownloading === `${idx}-prod-all`}
                 />
@@ -700,10 +772,13 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
           <div className="image-modal-content" onClick={e => e.stopPropagation()}>
             <button className="image-modal-close" onClick={() => setLightbox(null)}>✕</button>
             <div className="image-modal-toolbar">
-              <button className="image-modal-action" onClick={() => downloadImage(lightbox.images[lightbox.index])}>⬇ Download</button>
+              {!lightbox.images[lightbox.index].pending && (
+                <button className="image-modal-action" onClick={() => downloadImage(lightbox.images[lightbox.index].ref)}>⬇ Download</button>
+              )}
               <button className="image-modal-action image-modal-action-danger" onClick={removeLightboxImage}>🗑 Remove</button>
             </div>
-            <img src={`${API_URL}${lightbox.images[lightbox.index]}`} alt="Preview" className="full-image" />
+            {lightbox.images[lightbox.index].pending && <div className="image-modal-pending-tag">Pending upload — will be saved with the order</div>}
+            <img src={lightbox.images[lightbox.index].src} alt="Preview" className="full-image" />
             {lightbox.images.length > 1 && (
               <>
                 <button className="modal-carousel-nav-btn modal-carousel-prev" onClick={() => setLightbox(l => ({ ...l, index: (l.index - 1 + l.images.length) % l.images.length }))}>‹</button>
