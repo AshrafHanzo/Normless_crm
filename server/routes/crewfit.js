@@ -49,6 +49,16 @@ const META = {
 };
 const CLOSED = ['Dispatched', 'Cancelled'];
 
+// Destructive/structural actions — deleting an order, and creating, editing or deleting a
+// catalog product — are the owner's alone. Enforced here rather than only hiding buttons,
+// since the routes are otherwise callable by anyone holding a valid token.
+const ownerOnly = (req, res, next) => {
+  if (req.user?.role !== 'owner') {
+    return res.status(403).json({ error: 'Only the account owner can do this' });
+  }
+  next();
+};
+
 // Calendar dates must be formatted from local parts, never via toISOString(). These are DATE
 // columns, so pg hands back a Date at *local* midnight — in IST that is 18:30 UTC the previous
 // day, and toISOString() would report the wrong date. The same trap applies to "today": before
@@ -450,12 +460,25 @@ router.post('/orders', async (req, res) => {
   }
 });
 
-// DELETE /api/crewfit/orders/:id
-router.delete('/orders/:id', async (req, res) => {
+// DELETE /api/crewfit/orders/:id — owner only.
+// Also drops the order's uploaded mock/production photos; without this the image folder is
+// orphaned on disk forever, since nothing else ever references it once the row is gone.
+router.delete('/orders/:id', ownerOnly, async (req, res) => {
   try {
-    await db.query('DELETE FROM crewfit_orders WHERE id = $1', [req.params.id]);
+    const r = await db.query('DELETE FROM crewfit_orders WHERE id = $1 RETURNING sl_no', [req.params.id]);
+    if (!r.rows[0]) return res.status(404).json({ error: 'Order not found' });
+
+    const dir = path.join(UPLOAD_ROOT, String(req.params.id));
+    fs.rm(dir, { recursive: true, force: true }, (err) => {
+      if (err) console.error(`could not remove uploads for order ${req.params.id}:`, err.message);
+    });
+
+    console.log(`🗑️  Order CF-${r.rows[0].sl_no} deleted by ${req.user?.username}`);
     res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: 'Failed to delete' }); }
+  } catch (err) {
+    console.error('crewfit order delete error:', err);
+    res.status(500).json({ error: 'Failed to delete order' });
+  }
 });
 
 // GET /api/crewfit/orders/:id/invoice/:type — type: 'advance' | 'balance'.
@@ -652,7 +675,7 @@ const encodeP = (body) => {
 };
 
 // POST /api/crewfit/products
-router.post('/products', async (req, res) => {
+router.post('/products', ownerOnly, async (req, res) => {
   try {
     const data = encodeP(req.body);
     if (!data.name) return res.status(400).json({ error: 'Product name required' });
@@ -666,7 +689,7 @@ router.post('/products', async (req, res) => {
 });
 
 // PUT /api/crewfit/products/:id
-router.put('/products/:id', async (req, res) => {
+router.put('/products/:id', ownerOnly, async (req, res) => {
   try {
     const data = encodeP(req.body);
     const keys = Object.keys(data);
@@ -680,7 +703,7 @@ router.put('/products/:id', async (req, res) => {
 });
 
 // DELETE /api/crewfit/products/:id
-router.delete('/products/:id', async (req, res) => {
+router.delete('/products/:id', ownerOnly, async (req, res) => {
   try { await db.query('DELETE FROM crewfit_products WHERE id = $1', [req.params.id]); res.json({ success: true }); }
   catch (err) { res.status(500).json({ error: 'Failed to delete product' }); }
 });

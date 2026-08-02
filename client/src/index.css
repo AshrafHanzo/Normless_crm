@@ -1175,8 +1175,80 @@ html, body { max-width: 100%; overflow-x: hidden; }
 }
 .pay-live-dot i { width: 7px; height: 7px; border-radius: 50%; background: var(--success); animation: payPulse 1.8s ease-in-out infinite; }
 @keyframes payPulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.35; transform: scale(0.8); } }
-.pay-toast {
-  margin-bottom: 16px; padding: 12px 16px; border-radius: var(--radius-md); font-size: 13.5px; font-weight: 600;
-  background: color-mix(in srgb, var(--success) 14%, transparent); color: var(--success);
-  border: 1px solid color-mix(in srgb, var(--success) 45%, transparent); animation: fadeIn 0.25s ease;
+
+/* ============================================================
+   TOASTS & CONFIRM DIALOG (replaces native alert/confirm/prompt)
+   ============================================================ */
+.toast-stack {
+  position: fixed; z-index: 500; bottom: max(20px, env(safe-area-inset-bottom));
+  right: 20px; display: flex; flex-direction: column; gap: 10px;
+  width: min(380px, calc(100vw - 32px)); pointer-events: none;
+}
+.toast {
+  position: relative; overflow: hidden; pointer-events: auto;
+  display: flex; align-items: flex-start; gap: 11px; padding: 13px 14px;
+  border-radius: var(--radius-md); border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-secondary) 96%, transparent);
+  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+  box-shadow: var(--shadow-md);
+  animation: toastIn 0.26s cubic-bezier(0.22, 1, 0.36, 1);
+}
+@keyframes toastIn { from { opacity: 0; transform: translateX(18px) scale(0.97); } to { opacity: 1; transform: none; } }
+.toast-leaving { animation: toastOut 0.18s ease forwards; }
+@keyframes toastOut { to { opacity: 0; transform: translateX(18px) scale(0.97); } }
+
+.toast::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--tone); }
+.toast-success { --tone: var(--success); }
+.toast-error   { --tone: var(--danger); }
+.toast-warning { --tone: var(--warning); }
+.toast-info    { --tone: var(--info); }
+
+.toast-icon {
+  flex-shrink: 0; width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center;
+  color: var(--tone); background: color-mix(in srgb, var(--tone) 16%, transparent);
+}
+.toast-body { flex: 1; min-width: 0; }
+.toast-title { font-size: 13px; font-weight: 700; margin-bottom: 2px; }
+.toast-msg { font-size: 13px; color: var(--text-secondary); line-height: 1.45; overflow-wrap: anywhere; }
+.toast-close {
+  flex-shrink: 0; width: 24px; height: 24px; display: grid; place-items: center; border: none;
+  background: transparent; color: var(--text-muted); cursor: pointer; border-radius: 6px; padding: 0;
+}
+.toast-close:hover { background: var(--surface-hover); color: var(--text-primary); }
+.toast-progress {
+  position: absolute; left: 0; bottom: 0; height: 2px; width: 100%; background: var(--tone);
+  opacity: 0.5; transform-origin: left; animation: toastProgress linear forwards;
+}
+@keyframes toastProgress { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+
+.confirm-overlay {
+  position: fixed; inset: 0; z-index: 520; display: grid; place-items: center; padding: 20px;
+  background: rgba(0,0,0,0.55); backdrop-filter: blur(4px); animation: fadeIn 0.18s ease;
+}
+.confirm-card {
+  width: min(430px, 100%); padding: 26px 24px 20px; text-align: center;
+  background: var(--bg-secondary); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); box-shadow: var(--shadow-lg);
+  animation: confirmIn 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+}
+@keyframes confirmIn { from { opacity: 0; transform: translateY(10px) scale(0.97); } to { opacity: 1; transform: none; } }
+.confirm-icon {
+  width: 48px; height: 48px; margin: 0 auto 14px; border-radius: 14px; display: grid; place-items: center;
+  color: var(--primary-light); background: color-mix(in srgb, var(--primary) 16%, transparent);
+}
+.confirm-icon-danger { color: var(--danger); background: var(--danger-bg); }
+.confirm-title { font-size: 17px; margin-bottom: 8px; }
+.confirm-message { font-size: 13.5px; color: var(--text-secondary); line-height: 1.55; white-space: pre-line; }
+.confirm-input { margin: 18px 0 4px; text-align: left; }
+.confirm-input label { font-weight: 500; }
+.confirm-actions { display: flex; gap: 10px; margin-top: 20px; }
+.confirm-actions .btn { flex: 1; }
+
+@media (max-width: 720px) {
+  .toast-stack {
+    right: 12px; left: 12px; width: auto;
+    bottom: max(14px, env(safe-area-inset-bottom));
+  }
+  .confirm-card { padding: 22px 18px 18px; }
+  .confirm-actions { flex-direction: column-reverse; }
 }

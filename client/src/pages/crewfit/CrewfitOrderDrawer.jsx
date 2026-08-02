@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useApi, useAuth } from '../../App'
+import { useToast } from '../../components/Toast'
 
 const fmt = (v) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(v || 0)
 const PRINTING = ['Front', 'Back', 'Front & Back', 'Front Chest & Back', 'No Print']
@@ -220,9 +221,9 @@ function buildPhotosMessage(order, apiUrl) {
 // The label PDF is served inline, so it opens in a new tab where the SO can print it straight
 // away. It's blob-fetched rather than plain-linked because the endpoint needs the auth header —
 // and popup blockers get a download fallback. Shared with the orders table.
-export async function openShippingLabel(apiFetch, order) {
+export async function openShippingLabel(apiFetch, order, toast) {
   const res = await apiFetch(`/api/crewfit/orders/${order.id}/shipping-label`, { responseType: 'blob' })
-  if (!res || res.error) { alert(res?.error || 'Failed to generate shipping label'); return }
+  if (!res || res.error) { toast?.error(res?.error || 'Failed to generate shipping label'); return }
   const url = URL.createObjectURL(res.blob)
   const win = window.open(url, '_blank')
   if (!win) {
@@ -352,7 +353,11 @@ function InvoiceCard({ title, amount, invoice, busy, locked, lockedLabel, onGene
 // target: null (closed) | 'new' (blank order) | an order object to edit.
 export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
   const apiFetch = useApi()
-  const { API_URL } = useAuth()
+  const { API_URL, user } = useAuth()
+  const toast = useToast()
+  // Deleting an order is unrecoverable and takes its photos with it — owner only, matching
+  // the server-side guard on DELETE /orders/:id.
+  const isOwner = user?.role === 'owner'
   const [meta, setMeta] = useState(null)
   const [products, setProducts] = useState([])
   const [form, setForm] = useState(null)
@@ -364,6 +369,7 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
   const [labelBusy, setLabelBusy] = useState(false)
   const [payments, setPayments] = useState([])
   const [payBusy, setPayBusy] = useState(null) // 'advance' | 'balance' while a link call is in flight
+  const [deleting, setDeleting] = useState(false)
 
   useEffect(() => {
     apiFetch('/api/crewfit/meta').then(m => setMeta(m && m.statuses ? m : null))
@@ -526,9 +532,9 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
     const pendingKey = kind === 'mock' ? '_pendingMock' : '_pendingProd'
     const item = form.line_items[idx]
     const room = 5 - (item[uploadedKey] || []).length - (item[pendingKey] || []).length
-    if (room <= 0) { alert(`Max 5 ${kind === 'mock' ? 'mock' : 'production'} images per product`); return }
+    if (room <= 0) { toast.warning(`Max 5 ${kind === 'mock' ? 'mock' : 'production'} images per product`); return }
     const accepted = files.slice(0, room)
-    if (accepted.length < files.length) alert(`Only ${accepted.length} of ${files.length} file(s) added — max 5 images per product`)
+    if (accepted.length < files.length) toast.warning(`Only ${accepted.length} of ${files.length} file(s) added — max 5 images per product`)
     const withPreview = accepted.map(file => ({ file, previewUrl: URL.createObjectURL(file) }))
     const items = form.line_items.map((it, i) => i === idx ? { ...it, [pendingKey]: [...(it[pendingKey] || []), ...withPreview] } : it)
     setF({ line_items: items })
@@ -550,20 +556,20 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
     const res = await apiFetch(`/api/crewfit/orders/${form.id}/images`, { method: 'POST', body: fd })
     setImgBusy(null)
     if (res && !res.error) applyServerOrder(res)
-    else alert(res?.error || 'Upload failed')
+    else toast.error(res?.error || 'Upload failed')
   }
   const deleteItemImage = async (idx, kind, url) => {
     if (!form.id) return
     const res = await apiFetch(`/api/crewfit/orders/${form.id}/images`, { method: 'DELETE', body: JSON.stringify({ kind, itemIndex: idx, url }) })
     if (res && !res.error) applyServerOrder(res)
-    else alert(res?.error || 'Failed to delete image')
+    else toast.error(res?.error || 'Failed to delete image')
   }
   // Fetched as a blob (not a plain <a href download>) so it downloads reliably even when the
   // frontend and backend are on different origins in dev — a cross-origin `download` attribute
   // is silently ignored by browsers, but a same-origin blob: URL always forces the save dialog.
   const downloadImage = async (url) => {
     const res = await apiFetch(url, { responseType: 'blob' })
-    if (!res || res.error) { alert(res?.error || 'Failed to download image'); return }
+    if (!res || res.error) { toast.error(res?.error || 'Failed to download image'); return }
     const blobUrl = URL.createObjectURL(res.blob)
     const a = document.createElement('a')
     a.href = blobUrl; a.download = res.filename || url.split('/').pop()
@@ -636,7 +642,7 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
     }
   }
   const copyDispatchMessage = () => navigator.clipboard?.writeText(buildDispatchMessage(form))
-  const printLabel = async () => { setLabelBusy(true); await openShippingLabel(apiFetch, form); setLabelBusy(false) }
+  const printLabel = async () => { setLabelBusy(true); await openShippingLabel(apiFetch, form, toast); setLabelBusy(false) }
 
   // ---- Razorpay payment links -------------------------------------------------
   const paymentFor = (kind) => payments.find(p => p.kind === kind && ['Created', 'Paid'].includes(p.status))
@@ -647,7 +653,8 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
     setPayBusy(kind)
     const res = await apiFetch(`/api/crewfit/payments/order/${form.id}`, { method: 'POST', body: JSON.stringify({ kind }) })
     setPayBusy(null)
-    if (!res || res.error) { alert(res?.error || 'Failed to create payment link'); return }
+    if (!res || res.error) { toast.error(res?.error || 'Failed to create payment link'); return }
+    toast.success(`${kind === 'advance' ? 'Advance' : 'Balance'} payment link created`)
     await loadPayments(form.id)
   }
   const copyPaymentLink = (payment) => navigator.clipboard?.writeText(payment.razorpay_short_url)
@@ -661,10 +668,34 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
     await apiFetch(`/api/crewfit/payments/${payment.id}/sent`, { method: 'POST' })
     loadPayments(form.id)
   }
+  // Two-step confirm: an order carries invoices, payments and photos, and nothing here is
+  // recoverable. Typing the order number is deliberate friction against a mis-click.
+  const deleteOrder = async () => {
+    const ref = `CF-${form.sl_no}`
+    const paid = payments.some(p => p.status === 'Paid')
+    if (!await toast.confirm({
+      title: `Delete order ${ref}?`,
+      message: `${form.customer_name}\n\nThis permanently removes the order, its production photos and its payment records${paid ? ' — including a payment already marked PAID' : ''}. It cannot be undone.`,
+      requireText: String(form.sl_no), confirmLabel: 'Delete order', danger: true,
+    })) return
+
+    setDeleting(true)
+    const res = await apiFetch(`/api/crewfit/orders/${form.id}`, { method: 'DELETE' })
+    setDeleting(false)
+    if (!res || res.error) { toast.error(res?.error || 'Failed to delete order'); return }
+    toast.success(`Order ${ref} deleted`)
+    setForm(null); onSaved?.()
+  }
+
   const cancelPaymentLink = async (payment) => {
-    if (!confirm(`Cancel this ${payment.kind} payment link? The customer will no longer be able to pay through it.`)) return
+    if (!await toast.confirm({
+      title: `Cancel the ${payment.kind} payment link?`,
+      message: 'The customer will no longer be able to pay through it.',
+      confirmLabel: 'Cancel link', cancelLabel: 'Keep it', danger: true,
+    })) return
     const res = await apiFetch(`/api/crewfit/payments/${payment.id}/cancel`, { method: 'POST' })
-    if (!res || res.error) { alert(res?.error || 'Failed to cancel link'); return }
+    if (!res || res.error) { toast.error(res?.error || 'Failed to cancel link'); return }
+    toast.success('Payment link cancelled')
     loadPayments(form.id)
   }
   const sendPhotosWhatsApp = async () => {
@@ -727,13 +758,14 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
       const hasPending = form.line_items.some(it => (it._pendingMock || []).length || (it._pendingProd || []).length)
       if (hasPending) {
         const failures = await uploadPendingImages(res.id, form.line_items)
-        if (failures.length) alert(`Order saved, but these photo uploads failed: ${failures.join(', ')}. You can retry from the order's edit screen.`)
+        if (failures.length) toast.error(`These photo uploads failed: ${failures.join(', ')}. You can retry from the order's edit screen.`, { title: 'Order saved, photos did not upload', duration: 0 })
       }
       setSaving(false)
+      toast.success(isNew ? `Order CF-${res.sl_no} created` : `Order CF-${res.sl_no} saved`)
       setForm(null); onSaved?.(res)
     } else {
       setSaving(false)
-      alert(res?.error || 'Save failed — deploy the Crewfit API first')
+      toast.error(res?.error || 'Save failed')
     }
   }
 
@@ -745,7 +777,7 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
   const downloadInvoice = async (type) => {
     setInvoiceBusy(type)
     const res = await apiFetch(`/api/crewfit/orders/${form.id}/invoice/${type}`, { responseType: 'blob' })
-    if (!res || res.error) { setInvoiceBusy(null); alert(res?.error || 'Failed to generate invoice'); return }
+    if (!res || res.error) { setInvoiceBusy(null); toast.error(res?.error || 'Failed to generate invoice'); return }
     const url = URL.createObjectURL(res.blob)
     const a = document.createElement('a')
     a.href = url; a.download = res.filename || `invoice-${type}-${form.sl_no}.pdf`
@@ -1028,6 +1060,11 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
           <div style={{ display: 'flex', gap: 10, position: 'sticky', bottom: 0, background: 'var(--bg-secondary)', padding: '12px 0' }}>
             <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? 'Saving…' : (form.id ? 'Save changes' : 'Create order')}</button>
             <button type="button" className="btn btn-secondary" onClick={closeDrawer}>Cancel</button>
+            {isOwner && form.id && (
+              <button type="button" className="btn btn-danger" style={{ marginLeft: 'auto' }} disabled={deleting} onClick={deleteOrder}>
+                {deleting ? 'Deleting…' : '🗑 Delete order'}
+              </button>
+            )}
           </div>
         </form>
       </div>

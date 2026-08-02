@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useApi } from '../../App'
+import { useToast } from '../../components/Toast'
 import Icon from '../../components/Icon'
 import CrewfitOrderDrawer from './CrewfitOrderDrawer'
 
@@ -44,6 +45,7 @@ const statusClass = (s) => (s === 'Paid' || s === 'Converted' ? 'fulfilled' : s 
 
 export default function CrewfitQuotes() {
   const apiFetch = useApi()
+  const toast = useToast()
   const navigate = useNavigate()
   const [meta, setMeta] = useState(null)
   const [items, setItems] = useState([blankItem()])
@@ -110,6 +112,7 @@ export default function CrewfitQuotes() {
     })
     setSaving(false)
     if (r?.error) { setError(r.error); return }
+    toast.success(`Quote for ${r.customer_name} saved — ${fmt(r.grand_total)}`)
     setActiveQuote(r)
     loadQuotes()
   }
@@ -132,7 +135,7 @@ export default function CrewfitQuotes() {
 
   const downloadQuotePdf = async (quote) => {
     const res = await apiFetch(`/api/crewfit/quotes/${quote.id}/pdf`, { responseType: 'blob' })
-    if (!res || res.error) { alert(res?.error || 'Failed to generate PDF'); return }
+    if (!res || res.error) { toast.error(res?.error || 'Failed to generate PDF'); return }
     const url = URL.createObjectURL(res.blob)
     const a = document.createElement('a')
     a.href = url; a.download = res.filename || `Quote-${quote.id}.pdf`
@@ -155,7 +158,7 @@ export default function CrewfitQuotes() {
       await apiFetch(`/api/crewfit/quotes/${qid}/link-order`, { method: 'POST', body: JSON.stringify({ orderId: order.id }) })
       if (activeQuote?.id === qid) setActiveQuote(null)
       loadQuotes()
-      if (confirm('Order created! Open it in Bulk Orders now?')) navigate(`/crewfit/orders?focus=${order.id}`)
+      if (await toast.confirm({ title: 'Order created', message: `Order CF-${order.sl_no ?? ''} has been created from this quote.`, confirmLabel: 'Open in Bulk Orders', cancelLabel: 'Stay here' })) navigate(`/crewfit/orders?focus=${order.id}`)
     } else {
       loadQuotes()
     }
@@ -166,9 +169,14 @@ export default function CrewfitQuotes() {
   }
 
   const deleteQuote = async (quote) => {
-    if (!confirm(`Delete the quote for ${quote.customer_name}? This can't be undone.${quote.converted_order_id ? ' (The order it was converted to is not affected.)' : ''}`)) return
+    if (!await toast.confirm({
+      title: `Delete the quote for ${quote.customer_name}?`,
+      message: `This can't be undone.${quote.converted_order_id ? '\nThe order it was converted to is not affected.' : ''}`,
+      confirmLabel: 'Delete quote', danger: true,
+    })) return
     const r = await apiFetch(`/api/crewfit/quotes/${quote.id}`, { method: 'DELETE' })
-    if (r?.error) { alert(r.error); return }
+    if (r?.error) { toast.error(r.error); return }
+    toast.success('Quote deleted')
     if (activeQuote?.id === quote.id) setActiveQuote(null)
     loadQuotes()
   }

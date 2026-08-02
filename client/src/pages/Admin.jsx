@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useApi, useAuth } from '../App'
+import { useToast } from '../components/Toast'
 import Icon from '../components/Icon'
 
 const GROUPS = [
@@ -37,6 +38,7 @@ const buildPerms = (f) => {
 export default function AdminManagement() {
   const apiFetch = useApi()
   const { user } = useAuth()
+  const toast = useToast()
   const [users, setUsers] = useState([])
   const [loading, setLoading] = useState(true)
   const [stats, setStats] = useState(null)
@@ -49,17 +51,21 @@ export default function AdminManagement() {
   const setF = (patch) => setForm(f => ({ ...f, ...patch }))
 
   const save = async () => {
-    if (!form.username || (!form.id && !form.password)) { alert('Username and password are required'); return }
+    if (!form.username || (!form.id && !form.password)) { toast.error('Username and password are required'); return }
     setSaving(true)
     const permissions = buildPerms(form)
     let res
     if (form.id) res = await apiFetch(`/api/admin/users/${form.id}`, { method: 'PUT', body: JSON.stringify({ role: form.role, permissions }) })
     else res = await apiFetch('/api/admin/users', { method: 'POST', body: JSON.stringify({ username: form.username, password: form.password, role: form.role, permissions }) })
     setSaving(false)
-    if (res?.success) { setForm(null); loadUsers(); loadStats() } else alert(res?.error || 'Save failed')
+    if (res?.success) { setForm(null); loadUsers(); loadStats(); toast.success(form.id ? 'User updated' : 'User created') } else toast.error(res?.error || 'Save failed')
   }
 
-  const del = async (id) => { if (!confirm('Delete this user? This cannot be undone.')) return; const r = await apiFetch(`/api/admin/users/${id}`, { method: 'DELETE' }); if (r?.success) { loadUsers(); loadStats() } }
+  const del = async (id) => {
+    if (!await toast.confirm({ title: 'Delete this user?', message: 'They will lose access immediately. This cannot be undone.', confirmLabel: 'Delete user', danger: true })) return
+    const r = await apiFetch(`/api/admin/users/${id}`, { method: 'DELETE' })
+    if (r?.success) { loadUsers(); loadStats(); toast.success('User deleted') } else toast.error(r?.error || 'Failed to delete user')
+  }
 
   const statCards = stats ? [
     { icon: 'users', label: 'Total Users', value: stats.totalUsers, color: 'var(--primary)' },

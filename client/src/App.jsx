@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-route
 import './index.css'
 
 import { ThemeProvider } from './components/ThemeProvider'
+import ToastProvider from './components/Toast'
 import Sidebar from './components/Sidebar'
 import ErrorBoundary from './components/ErrorBoundary'
 import Login from './pages/Login'
@@ -118,7 +119,8 @@ function App() {
 
   return (
     <ThemeProvider>
-      <AuthContext.Provider value={{ token, user, login, logout, API_URL, brand, setBrand }}>
+      <ToastProvider>
+        <AuthContext.Provider value={{ token, user, login, logout, API_URL, brand, setBrand }}>
         <BrowserRouter>
           <Routes>
             <Route path="/login" element={token ? <Navigate to={homeFor(brand)} replace /> : <Login />} />
@@ -143,7 +145,8 @@ function App() {
             <Route path="/crewfit/payments" element={<ProtectedRoute permission="can_view_crewfit_payments"><AppLayout><CrewfitPayments /></AppLayout></ProtectedRoute>} />
           </Routes>
         </BrowserRouter>
-      </AuthContext.Provider>
+        </AuthContext.Provider>
+      </ToastProvider>
     </ThemeProvider>
   )
 }

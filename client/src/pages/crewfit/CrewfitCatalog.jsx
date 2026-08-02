@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
-import { useApi } from '../../App'
+import { useApi, useAuth } from '../../App'
+import { useToast } from '../../components/Toast'
 import { CATALOG, COLOR_HEX, CONTACT } from './catalog'
 
 const CATS = ['All', 'Polos', 'T-Shirts', 'Kids']
@@ -12,6 +13,11 @@ const priceOf = (p) => p.from_price ?? p.from
 
 export default function CrewfitCatalog() {
   const apiFetch = useApi()
+  const { user } = useAuth()
+  const toast = useToast()
+  // Catalog pricing is commercially sensitive — only the owner may add, edit or remove
+  // products. The server enforces the same rule; this just keeps the buttons honest.
+  const isOwner = user?.role === 'owner'
   const [cat, setCat] = useState('All')
   const [q, setQ] = useState('')
   const [products, setProducts] = useState(null)
@@ -43,11 +49,11 @@ export default function CrewfitCatalog() {
     const isNew = !edit.id
     const res = await apiFetch(`/api/crewfit/products${isNew ? '' : '/' + edit.id}`, { method: isNew ? 'POST' : 'PUT', body: JSON.stringify(body) })
     setSaving(false)
-    if (res && !res.error) { setEdit(null); load() } else alert(res?.error || 'Save failed (deploy the Crewfit API first)')
+    if (res && !res.error) { setEdit(null); load(); toast.success(edit.id ? 'Product updated' : 'Product added') } else toast.error(res?.error || 'Save failed')
   }
 
   const del = async (p) => {
-    if (!confirm(`Delete "${p.name}"?`)) return
+    if (!await toast.confirm({ title: `Delete "${p.name}"?`, message: 'This removes the product from the catalog. Existing orders are unaffected.', confirmLabel: 'Delete product', danger: true })) return
     await apiFetch(`/api/crewfit/products/${p.id}`, { method: 'DELETE' }); load()
   }
 
@@ -55,7 +61,7 @@ export default function CrewfitCatalog() {
     <div className="page-enter">
       <div className="dash-toolbar">
         <div><h1>Crewfit · Catalog</h1><p style={{ color: 'var(--text-muted)' }}>{list.length} products · prices include printing</p></div>
-        <button className="btn btn-primary" onClick={openNew}>+ Add Product</button>
+        {isOwner && <button className="btn btn-primary" onClick={openNew}>+ Add Product</button>}
       </div>
 
       <div className="filters-row">
@@ -71,7 +77,7 @@ export default function CrewfitCatalog() {
               <span className="product-gsm">{p.gsm} GSM</span>
               <h3>{p.name}</h3>
               <span className="product-fit">{p.fit}</span>
-              {p.id && <div className="product-actions"><button onClick={() => openEdit(p)} title="Edit">✏️</button><button onClick={() => del(p)} title="Delete">🗑️</button></div>}
+              {isOwner && p.id && <div className="product-actions"><button onClick={() => openEdit(p)} title="Edit">✏️</button><button onClick={() => del(p)} title="Delete">🗑️</button></div>}
             </div>
             <div className="product-body">
               <p className="product-blurb">{p.blurb}</p>

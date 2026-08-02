@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useApi } from '../../App'
+import { useToast } from '../../components/Toast'
 import DateRangeFilter from '../../components/DateRangeFilter'
 import Icon from '../../components/Icon'
 
@@ -33,6 +34,7 @@ const blankForm = { customer_name: '', contact_number: '', email: '', amount: ''
 
 export default function CrewfitPayments() {
   const apiFetch = useApi()
+  const toast = useToast()
   const navigate = useNavigate()
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -47,7 +49,6 @@ export default function CrewfitPayments() {
   const [form, setForm] = useState(blankForm)
   const [saving, setSaving] = useState(false)
   const [copiedId, setCopiedId] = useState(null)
-  const [justPaid, setJustPaid] = useState(null)
   const pollRef = useRef(null)
   const inFlight = useRef(false)
 
@@ -79,8 +80,7 @@ export default function CrewfitPayments() {
         const res = await apiFetch('/api/crewfit/payments/sync-pending', { method: 'POST', body: JSON.stringify({}) })
         if (res && !res.error && res.nowPaid) {
           const total = (res.settled || []).reduce((s, p) => s + p.amount, 0)
-          setJustPaid(`${res.nowPaid} payment${res.nowPaid === 1 ? '' : 's'} received — ${fmt(total)}`)
-          setTimeout(() => setJustPaid(null), 6000)
+          toast.success(`${fmt(total)} received across ${res.nowPaid} payment${res.nowPaid === 1 ? '' : 's'}.`, { title: 'Payment received' })
         }
         if (res && !res.error) await load({ silent: true })
       } finally { inFlight.current = false }
@@ -98,7 +98,8 @@ export default function CrewfitPayments() {
     setSaving(true)
     const res = await apiFetch('/api/crewfit/payments', { method: 'POST', body: JSON.stringify(form) })
     setSaving(false)
-    if (!res || res.error) { alert(res?.error || 'Failed to create payment link'); return }
+    if (!res || res.error) { toast.error(res?.error || 'Failed to create payment link'); return }
+    toast.success(`${fmt(res.amount)} link created for ${res.customer_name}`, { title: 'Payment link ready' })
     setForm(blankForm); setCreating(false); setPage(1); load()
   }
 
@@ -113,9 +114,14 @@ export default function CrewfitPayments() {
   }
 
   const cancelLink = async (p) => {
-    if (!confirm(`Cancel the ${fmt(p.amount)} link for ${p.customer_name}? They will no longer be able to pay through it.`)) return
+    if (!await toast.confirm({
+      title: `Cancel this ${fmt(p.amount)} link?`,
+      message: `${p.customer_name} will no longer be able to pay through it.`,
+      confirmLabel: 'Cancel link', cancelLabel: 'Keep it', danger: true,
+    })) return
     const res = await apiFetch(`/api/crewfit/payments/${p.id}/cancel`, { method: 'POST' })
-    if (!res || res.error) { alert(res?.error || 'Failed to cancel'); return }
+    if (!res || res.error) { toast.error(res?.error || 'Failed to cancel'); return }
+    toast.success('Payment link cancelled')
     load()
   }
 
@@ -140,8 +146,6 @@ export default function CrewfitPayments() {
           <button className="btn btn-primary" onClick={() => setCreating(v => !v)}>+ New Payment Link</button>
         </div>
       </div>
-
-      {justPaid && <div className="pay-toast">✅ {justPaid}</div>}
 
       {data && !data.configured && (
         <div className="calc-warning" style={{ marginBottom: 18 }}>
