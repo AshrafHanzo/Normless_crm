@@ -104,23 +104,23 @@ export default function CrewfitOrders() {
               <tbody>
                 {orders.map(o => (
                   <tr key={o.id} onClick={() => setTarget(o)}>
-                    <td style={{ color: 'var(--text-muted)' }}>{o.sl_no}</td>
-                    <td style={{ fontSize: 12.5 }}>{(o.order_date || '').slice(0, 10) || '—'}</td>
-                    <td><div style={{ fontWeight: 600 }}>{o.customer_name}</div><div style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>{o.contact_number}</div></td>
-                    <td style={{ fontSize: 12.5, maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.product || '—'}</td>
-                    <td style={{ textAlign: 'center' }}>{o.qty || '—'}</td>
-                    <td style={{ textAlign: 'right', fontWeight: 700 }}>{o.total_cost ? fmt(o.total_cost) : '—'}</td>
-                    <td style={{ fontSize: 12.5 }}>{(o.deadline_at || '').slice(0, 10) || <span style={{ color: 'var(--text-muted)' }}>{o.deadline_text || '—'}</span>}</td>
-                    <td>{meta && <InlineSelect o={o} field="status" options={meta.statuses.filter(s => s !== 'Dispatched')} cls={statusClass} />}</td>
-                    <td>{meta && <InlineSelect o={o} field="payment_status" options={meta.payments} cls={payClass} />}</td>
-                    <td>{meta && <InlineSelect o={o} field="layout_status" options={meta.layouts} cls={(v) => v === 'Done' ? 'fulfilled' : 'refunded'} />}</td>
-                    <td onClick={e => e.stopPropagation()}>
+                    <td data-label="Order #" style={{ color: 'var(--text-muted)' }}>{o.sl_no}</td>
+                    <td data-label="Date" style={{ fontSize: 12.5 }}>{(o.order_date || '').slice(0, 10) || '—'}</td>
+                    <td className="cell-primary"><div style={{ fontWeight: 600 }}>{o.customer_name}</div><div style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>{o.contact_number}</div></td>
+                    <td data-label="Product" style={{ fontSize: 12.5, maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.product || '—'}</td>
+                    <td data-label="Qty" style={{ textAlign: 'center' }}>{o.qty || '—'}</td>
+                    <td data-label="Total" style={{ textAlign: 'right', fontWeight: 700 }}>{o.total_cost ? fmt(o.total_cost) : '—'}</td>
+                    <td data-label="Deadline" style={{ fontSize: 12.5 }}>{(o.deadline_at || '').slice(0, 10) || <span style={{ color: 'var(--text-muted)' }}>{o.deadline_text || '—'}</span>}</td>
+                    <td data-label="Status">{meta && <InlineSelect o={o} field="status" options={meta.statuses.filter(s => s !== 'Dispatched')} cls={statusClass} />}</td>
+                    <td data-label="Payment">{meta && <InlineSelect o={o} field="payment_status" options={meta.payments} cls={payClass} />}</td>
+                    <td data-label="Layout">{meta && <InlineSelect o={o} field="layout_status" options={meta.layouts} cls={(v) => v === 'Done' ? 'fulfilled' : 'refunded'} />}</td>
+                    <td data-label="Photos" onClick={e => e.stopPropagation()}>
                       <div className="photo-status-badges">
                         <span className={`status-badge ${photoClass(o.mock_photo_status)}`}>Mock: {o.mock_photo_status}</span>
                         <span className={`status-badge ${photoClass(o.prod_photo_status)}`}>Prod: {o.prod_photo_status}</span>
                       </div>
                     </td>
-                    <td style={{ textAlign: 'center' }} onClick={e => e.stopPropagation()}>
+                    <td className="cell-actions" data-label="Shipping label" style={{ textAlign: 'center' }} onClick={e => e.stopPropagation()}>
                       <button className="btn-icon" title="Print shipping label" disabled={labelBusy === o.id} onClick={() => printLabel(o)}>
                         <Icon name="printer" size={15} />
                       </button>

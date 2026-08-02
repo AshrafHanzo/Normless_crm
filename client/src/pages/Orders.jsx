@@ -116,23 +116,23 @@ export default function Orders() {
                 {orders.map(o => (
                   <>
                     <tr key={o.id} onClick={() => toggleExpand(o.id)}>
-                      <td style={{ fontWeight: 600, color: 'var(--primary-light)' }}>{o.order_number}</td>
-                      <td>
+                      <td data-label="Order" style={{ fontWeight: 600, color: 'var(--primary-light)' }}>{o.order_number}</td>
+                      <td className="cell-primary">
                         <div style={{ fontWeight: 500 }}>{o.first_name || ''} {o.last_name || ''}</div>
                         <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{o.customer_email || ''}</div>
                       </td>
-                      <td style={{ color: 'var(--text-secondary)' }}>{formatDate(o.created_at)}</td>
-                      <td>
+                      <td data-label="Date" style={{ color: 'var(--text-secondary)' }}>{formatDate(o.created_at)}</td>
+                      <td data-label="Payment">
                         <span className={`status-badge ${getStatusClass(o.financial_status)}`}>
                           {o.financial_status || 'Unknown'}
                         </span>
                       </td>
-                      <td>
+                      <td data-label="Fulfillment">
                         <span className={`status-badge ${getStatusClass(o.fulfillment_status)}`}>
                           {o.fulfillment_status || 'Unfulfilled'}
                         </span>
                       </td>
-                      <td style={{ fontWeight: 700 }}>{formatCurrency(o.total_price)}</td>
+                      <td data-label="Total" style={{ fontWeight: 700 }}>{formatCurrency(o.total_price)}</td>
                     </tr>
                     {expandedOrder === o.id && o.line_items_json && (
                       <tr key={`${o.id}-details`}>

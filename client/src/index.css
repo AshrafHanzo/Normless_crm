@@ -950,20 +950,212 @@ select { cursor: pointer; appearance: none;
 
 /* ============================================================
    RESPONSIVE
+   Breakpoints: 1024 (narrow desktop) · 900 (tablet, sidebar collapses)
+   · 720 (phone, tables become cards) · 560 (small phone) · 380 (compact)
    ============================================================ */
+
+/* Nothing may push the page sideways — a single overflowing table or long
+   unbroken string otherwise makes the whole app pan horizontally on a phone. */
+html, body { max-width: 100%; overflow-x: hidden; }
+
 @media (max-width: 1024px) {
   .grid-3, .profile-stats-grid { grid-template-columns: repeat(2, 1fr); }
+  .dash-row.charts, .dash-row.tables { grid-template-columns: 1fr; }
 }
+
 @media (max-width: 900px) {
-  .sidebar { transform: translateX(-100%); transition: transform 0.3s cubic-bezier(0.22,1,0.36,1); }
+  .sidebar {
+    width: min(86vw, 300px);
+    transform: translateX(-100%); transition: transform 0.3s cubic-bezier(0.22,1,0.36,1);
+    padding-top: max(20px, env(safe-area-inset-top));
+  }
   .sidebar.mobile-menu-open { transform: none; }
-  .main-content { margin-left: 0; padding: 72px 18px 48px; }
-  .sidebar-menu-toggle { display: grid; place-items: center; }
+  .main-content {
+    margin-left: 0; max-width: 100%;
+    padding: 72px 18px calc(48px + env(safe-area-inset-bottom));
+  }
+  .sidebar-menu-toggle { display: grid; place-items: center; top: max(16px, env(safe-area-inset-top)); }
+  /* Open: the toggle would sit on top of the sidebar's own logo — move it to the
+     drawer's top-right corner so it reads as that panel's close button. */
+  .sidebar.mobile-menu-open ~ .sidebar-menu-toggle {
+    left: calc(min(86vw, 300px) - 56px); background: var(--surface); box-shadow: none;
+  }
   .sidebar-overlay.visible { display: block; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 99; }
-  .grid-2, .grid-3, .form-row, .account-info-grid, .profile-stats-grid, .invoice-grid { grid-template-columns: 1fr; }
+  .grid-2, .grid-3, .form-row, .account-info-grid, .profile-stats-grid, .invoice-grid,
+  .access-grid, .dash-row.charts, .dash-row.tables { grid-template-columns: 1fr; }
+  /* auto-fill tracks whose min is wider than the viewport overflow — cap them */
+  .reminders-grid { grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr)); gap: 16px; }
+  .catalog-grid { grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr)); }
+  .drawer, .drawer-wide { width: 100%; border-left: none; }
 }
+
+@media (max-width: 720px) {
+  /* iOS zooms the whole page when a focused field is under 16px — never let it. */
+  input:where(:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"])),
+  select, textarea, .input { font-size: 16px; }
+
+  /* ---- Tables become stacked cards ---------------------------------
+     Each row is a card; each cell shows its column name via data-label.
+     Cells marked .cell-primary become the card's heading, .cell-actions
+     its footer. Inline text-align/width styles are overridden here. */
+  .data-table-wrapper {
+    background: transparent; border: none; box-shadow: none; border-radius: 0;
+    backdrop-filter: none; -webkit-backdrop-filter: none; overflow: visible;
+  }
+  .data-table-wrapper > div[style*="overflow"] { overflow: visible !important; }
+  .data-table, .data-table tbody { display: block; width: 100%; }
+  .data-table thead { display: none; }
+  /* Each row is a card laid out as a 2-up grid of label-over-value pairs — half the
+     height of one-field-per-line, and .cell-primary / .cell-actions can be re-ordered
+     into a heading and footer without touching the desktop column order. */
+  .data-table tbody tr {
+    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 11px 14px;
+    background: color-mix(in srgb, var(--bg-secondary) 88%, transparent);
+    border: 1px solid var(--border); border-radius: var(--radius-md);
+    padding: 14px; margin-bottom: 12px; box-shadow: var(--shadow-sm);
+  }
+  .data-table tbody tr:hover { background: color-mix(in srgb, var(--bg-secondary) 88%, transparent); }
+  .data-table tbody td {
+    display: flex; flex-direction: column; align-items: flex-start; gap: 3px;
+    min-width: 0; padding: 0 !important; border-bottom: none; font-size: 13.5px;
+    text-align: left !important; max-width: none !important; white-space: normal !important;
+    overflow: visible !important; text-overflow: clip !important; overflow-wrap: anywhere;
+  }
+  .data-table tbody td::before {
+    content: attr(data-label); font-size: 10px; font-weight: 700;
+    letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted); line-height: 1.4;
+  }
+  .data-table tbody td:not([data-label])::before, .data-table tbody td[data-label=""]::before { display: none; }
+  .data-table tbody td.cell-primary {
+    grid-column: 1 / -1; order: -1; display: block;
+    padding: 0 0 11px !important; border-bottom: 1px dashed var(--border);
+    font-size: 15px; font-weight: 700;
+  }
+  .data-table tbody td.cell-primary::before { display: none; }
+  .data-table tbody td.cell-actions {
+    grid-column: 1 / -1; order: 99; flex-direction: row; align-items: center; justify-content: flex-end;
+    gap: 8px; padding: 11px 0 0 !important; border-top: 1px dashed var(--border); flex-wrap: wrap;
+  }
+  .data-table tbody td.cell-actions::before { margin-right: auto; }
+  /* expanded detail rows (colSpan) stay full-width blocks */
+  .data-table tbody td[colspan] { grid-column: 1 / -1; display: block; padding: 4px 0 !important; }
+  .data-table tbody td[colspan]::before { display: none; }
+  .data-table tbody td > .inline-select { width: 100%; min-width: 0; }
+  .photo-status-badges { flex-direction: row; flex-wrap: wrap; }
+
+  /* ---- Filters: full-width search, then two-up filter chips ---- */
+  .filters-row { gap: 10px; margin-bottom: 16px; }
+  .filters-row .search-bar { flex: 1 0 100%; min-width: 0; }
+  .filters-row > select { flex: 1 1 calc(50% - 5px); width: auto !important; min-width: 0; }
+  .search-hint { font-size: 11.5px; }
+
+  /* ---- Toolbars & headers ---- */
+  .dash-toolbar { flex-direction: column; align-items: stretch; gap: 12px; }
+  .dash-toolbar > div { width: 100%; }
+  /* :not(:first-child) — when the toolbar is title-only, its single div holds the
+     h1 + subtitle and must stay stacked, not become a side-by-side action row. */
+  .dash-toolbar > div:last-child:not(:first-child) { display: flex; gap: 10px; }
+  .dash-toolbar > div:last-child:not(:first-child) > * { flex: 1; }
+  .drf, .drf-trigger { width: 100%; justify-content: center; }
+  .page-header { margin-bottom: 20px; }
+  .section-header { flex-wrap: wrap; gap: 10px; }
+
+  /* ---- Pagination ---- */
+  .pagination { justify-content: center; gap: 10px; }
+  .pagination-info { flex: 1 0 100%; text-align: center; order: -1; }
+  .pagination-pages { flex-wrap: wrap; justify-content: center; }
+  .pagination button { min-width: 36px; height: 36px; }
+
+  /* ---- Drawer / modals ---- */
+  .drawer-header { padding: 16px 18px; padding-top: max(16px, env(safe-area-inset-top)); }
+  .drawer-body { padding: 18px 16px calc(18px + env(safe-area-inset-bottom)); }
+  .drawer-body .form-row { gap: 12px; }
+  /* labels that carry inline toggle buttons (e.g. "Size breakdown" Standard/Manual)
+     overlap once the buttons wrap — lay the whole label out as a wrapping flex row */
+  .drawer-body .input-group > label { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .drawer-body .input-group > label > span { display: flex; flex-wrap: wrap; gap: 6px; margin-left: 0 !important; }
+  .drawer-body .input-group > label .mini-btn { margin-left: 0 !important; }
+  .image-modal-overlay { padding: 16px; }
+  .image-modal-content { max-width: 100%; }
+  .image-modal-close { top: 8px; right: 8px; position: fixed; z-index: 2; background: rgba(0,0,0,0.6); }
+  .image-modal-toolbar { position: static; margin-bottom: 12px; justify-content: center; flex-wrap: wrap; }
+  .modal-carousel-nav-btn { width: 40px; height: 40px; background: rgba(0,0,0,0.55); }
+  .modal-carousel-prev { left: 4px; } .modal-carousel-next { right: 4px; }
+  .modal-carousel-counter { bottom: -30px; }
+  .full-image { max-width: 100%; max-height: 70vh; }
+
+  /* ---- Crewfit order builder ---- */
+  .dispatch-banner { flex-direction: column; align-items: stretch; }
+  .dispatch-banner > span:last-child { flex-direction: column; }
+  .dispatch-banner .btn, .dispatch-banner .mini-btn { width: 100%; justify-content: center; }
+  .totals-bar { flex-wrap: wrap; gap: 14px 12px; }
+  .totals-bar > div { flex: 1 1 calc(50% - 6px); min-width: 0; }
+  .totals-bar strong { font-size: 16px; }
+  .form-section { flex-wrap: wrap; gap: 8px; }
+  .order-block { font-size: 12px; max-height: 240px; }
+  .img-thumb { width: 68px; height: 68px; }
+  .invoice-card-amount { font-size: 19px; }
+
+  /* ---- Quotes calculator ---- */
+  .calc-item-row { flex-wrap: wrap; gap: 8px; }
+  .calc-item-row select { flex: 1 0 100%; }
+  .calc-item-row input { flex: 1 1 0; width: auto !important; min-width: 0; }
+  .calc-item-row .btn-icon { flex: 0 0 auto; }
+
+  /* ---- Misc modules ---- */
+  .scan-tabs { width: 100%; }
+  .scan-tabs button { flex: 1; padding: 10px 8px; }
+  .manual-lookup-form { flex-direction: column; }
+  .user-card { flex-direction: column; align-items: stretch; gap: 12px; }
+  .user-card-actions { justify-content: flex-end; }
+  .admin-header { gap: 12px; margin-bottom: 20px; }
+  .admin-header-icon { width: 46px; height: 46px; font-size: 21px; }
+  .chart { height: 170px; }
+  .chart-empty { height: 170px; }
+  .cal-month { width: 100%; max-width: 300px; margin: 0 auto; }
+  .specs-grid-items { gap: 8px; }
+  .reminder-row { padding: 10px 8px; }
+  .login-card { padding: 30px 22px; }
+  .login-page { padding: 18px; }
+}
+
 @media (max-width: 560px) {
-  .main-content { padding: 68px 14px 40px; }
-  h1 { font-size: 23px; }
+  .main-content { padding: 68px 14px calc(40px + env(safe-area-inset-bottom)); }
+  h1 { font-size: 22px; }
+  h2 { font-size: 18px; }
+  .page-header p { font-size: 13px; }
+  .grid-3, .profile-stats-grid { grid-template-columns: 1fr; }
+  .kpi-grid { grid-template-columns: repeat(2, 1fr); gap: 12px; }
+  .kpi-card { padding: 16px; }
+  .kpi-icon { width: 36px; height: 36px; font-size: 17px; }
+  .kpi-head { margin-bottom: 10px; flex-wrap: wrap; gap: 6px; }
+  .kpi-trend { font-size: 10.5px; padding: 3px 7px; }
+  .kpi-value { font-size: 22px; }
+  .kpi-label { font-size: 11.5px; }
+  .panel-head { padding: 14px 16px; }
+  .panel-body { padding: 16px; }
+  .glass-card { padding: 16px; }
+  .profile-header-advanced { padding: 22px 18px; }
   .profile-header-content { flex-direction: column; text-align: center; }
+  /* usernames are email addresses — they must wrap rather than run off the card */
+  .profile-header-info { min-width: 0; width: 100%; }
+  .profile-header-info h1 { font-size: 19px; overflow-wrap: anywhere; }
+  .profile-avatar-advanced { width: 68px; height: 68px; border-radius: 18px; font-size: 27px; }
+  .profile-badges { justify-content: center; flex-wrap: wrap; }
+  .btn { padding: 11px 16px; }
+  .cat-chip { padding: 7px 13px; font-size: 12.5px; }
+}
+
+@media (max-width: 380px) {
+  .kpi-grid { grid-template-columns: 1fr; }
+  .totals-bar > div { flex: 1 1 100%; }
+  .main-content { padding-left: 11px; padding-right: 11px; }
+  .data-table tbody td { font-size: 13px; gap: 10px; }
+}
+
+/* Touch devices: hover lifts feel broken (they stick), and tap targets need room. */
+@media (hover: none) {
+  .kpi-card:hover, .product-card:hover, .btn-primary:hover:not(:disabled) { transform: none; }
+  .btn-icon { width: 38px; height: 38px; }
+  .mini-btn { padding: 6px 11px; }
 }

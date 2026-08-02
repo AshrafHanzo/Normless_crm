@@ -97,9 +97,9 @@ export default function Dashboard() {
             <tbody>
               {(data.topCustomers || []).slice(0, 8).map((c) => (
                 <tr key={c.id}>
-                  <td><div style={{ display: 'flex', alignItems: 'center', gap: 10 }}><div className="avatar" style={{ width: 30, height: 30, fontSize: 12 }}>{(c.first_name || '?').charAt(0)}</div><span>{c.first_name} {c.last_name}</span></div></td>
-                  <td style={{ textAlign: 'center', fontWeight: 600 }}>{c.orders_count}</td>
-                  <td style={{ textAlign: 'right', fontWeight: 700, color: 'var(--success)' }}>{fmt(c.total_spent)}</td>
+                  <td className="cell-primary"><div style={{ display: 'flex', alignItems: 'center', gap: 10 }}><div className="avatar" style={{ width: 30, height: 30, fontSize: 12 }}>{(c.first_name || '?').charAt(0)}</div><span>{c.first_name} {c.last_name}</span></div></td>
+                  <td data-label="Orders" style={{ textAlign: 'center', fontWeight: 600 }}>{c.orders_count}</td>
+                  <td data-label="Spent" style={{ textAlign: 'right', fontWeight: 700, color: 'var(--success)' }}>{fmt(c.total_spent)}</td>
                 </tr>
               ))}
             </tbody>
@@ -113,7 +113,7 @@ export default function Dashboard() {
             <tbody>
               {(data.recentOrders || []).slice(0, 8).map((o) => {
                 const fulfilled = o.fulfillment_status?.toLowerCase().includes('fulfilled') && !o.fulfillment_status?.toLowerCase().includes('un')
-                return (<tr key={o.id}><td style={{ fontWeight: 700 }}>{o.order_number}</td><td style={{ textAlign: 'center' }}><span className={`status-badge ${fulfilled ? 'fulfilled' : 'pending'}`}>{o.fulfillment_status || 'Pending'}</span></td><td style={{ textAlign: 'right', fontWeight: 700 }}>{fmt(o.total_price)}</td></tr>)
+                return (<tr key={o.id}><td className="cell-primary" style={{ fontWeight: 700 }}>{o.order_number}</td><td data-label="Status" style={{ textAlign: 'center' }}><span className={`status-badge ${fulfilled ? 'fulfilled' : 'pending'}`}>{o.fulfillment_status || 'Pending'}</span></td><td data-label="Amount" style={{ textAlign: 'right', fontWeight: 700 }}>{fmt(o.total_price)}</td></tr>)
               })}
             </tbody>
           </table>

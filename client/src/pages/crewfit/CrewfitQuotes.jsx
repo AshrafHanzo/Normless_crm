@@ -273,12 +273,12 @@ export default function CrewfitQuotes() {
             <tbody>
               {quotes.map(q => (
                 <tr key={q.id}>
-                  <td><div style={{ fontWeight: 600 }}>{q.customer_name}</div><div style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>{q.contact_number}</div></td>
-                  <td style={{ fontSize: 12.5, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{(q.line_items || []).map(li => `${li.product_name} ×${li.qty}`).join(', ')}</td>
-                  <td style={{ textAlign: 'right', fontWeight: 700 }}>{fmt(q.grand_total)}</td>
-                  <td><span className={`status-badge ${statusClass(q.status)}`}>{q.status}</span></td>
-                  <td>{q.converted_order_id ? <span className="badge-primary" style={{ cursor: 'pointer' }} onClick={() => navigate(`/crewfit/orders?focus=${q.converted_order_id}`)}>#{q.converted_order_id}</span> : '—'}</td>
-                  <td>
+                  <td className="cell-primary"><div style={{ fontWeight: 600 }}>{q.customer_name}</div><div style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>{q.contact_number}</div></td>
+                  <td data-label="Items" style={{ fontSize: 12.5, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{(q.line_items || []).map(li => `${li.product_name} ×${li.qty}`).join(', ')}</td>
+                  <td data-label="Total" style={{ textAlign: 'right', fontWeight: 700 }}>{fmt(q.grand_total)}</td>
+                  <td data-label="Status"><span className={`status-badge ${statusClass(q.status)}`}>{q.status}</span></td>
+                  <td data-label="Order">{q.converted_order_id ? <span className="badge-primary" style={{ cursor: 'pointer' }} onClick={() => navigate(`/crewfit/orders?focus=${q.converted_order_id}`)}>#{q.converted_order_id}</span> : '—'}</td>
+                  <td className="cell-actions">
                     <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
                       {!q.converted_order_id && (<>
                         <button className="btn-icon" title="Copy quote text" onClick={() => copyQuote(q, q.id)}>{copiedId === q.id ? <Icon name="check" size={14} /> : <Icon name="copy" size={14} />}</button>

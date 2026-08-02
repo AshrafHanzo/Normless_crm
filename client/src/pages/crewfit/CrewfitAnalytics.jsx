@@ -162,10 +162,10 @@ export default function CrewfitAnalytics() {
             <tbody>
               {(data.soPerformance || []).map((s, i) => (
                 <tr key={i}>
-                  <td style={{ fontWeight: 600 }}>{s.so}</td>
-                  <td style={{ textAlign: 'center' }}>{s.orders}</td>
-                  <td style={{ textAlign: 'right', fontWeight: 700, color: 'var(--success)' }}>{fmt(s.revenue)}</td>
-                  <td style={{ textAlign: 'right', color: 'var(--text-muted)' }}>{s.avgFulfillmentDays != null ? `${s.avgFulfillmentDays}d` : '—'}</td>
+                  <td className="cell-primary" style={{ fontWeight: 600 }}>{s.so}</td>
+                  <td data-label="Orders" style={{ textAlign: 'center' }}>{s.orders}</td>
+                  <td data-label="Revenue" style={{ textAlign: 'right', fontWeight: 700, color: 'var(--success)' }}>{fmt(s.revenue)}</td>
+                  <td data-label="Avg days" style={{ textAlign: 'right', color: 'var(--text-muted)' }}>{s.avgFulfillmentDays != null ? `${s.avgFulfillmentDays}d` : '—'}</td>
                 </tr>
               ))}
               {!(data.soPerformance || []).length && emptyRow(4)}
@@ -188,9 +188,9 @@ export default function CrewfitAnalytics() {
             <tbody>
               {(data.topCustomers || []).map((c, i) => (
                 <tr key={i}>
-                  <td><div style={{ fontWeight: 600 }}>{c.customer_name || '—'}</div><div style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>{c.contact_number}</div></td>
-                  <td style={{ textAlign: 'center', fontWeight: 600 }}>{c.orders}</td>
-                  <td style={{ textAlign: 'right', fontWeight: 700, color: 'var(--success)' }}>{fmt(c.revenue)}</td>
+                  <td className="cell-primary"><div style={{ fontWeight: 600 }}>{c.customer_name || '—'}</div><div style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>{c.contact_number}</div></td>
+                  <td data-label="Orders" style={{ textAlign: 'center', fontWeight: 600 }}>{c.orders}</td>
+                  <td data-label="Revenue" style={{ textAlign: 'right', fontWeight: 700, color: 'var(--success)' }}>{fmt(c.revenue)}</td>
                 </tr>
               ))}
               {!(data.topCustomers || []).length && emptyRow(3)}

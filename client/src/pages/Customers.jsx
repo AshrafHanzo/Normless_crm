@@ -162,7 +162,7 @@ export default function Customers() {
               <tbody>
                 {customers.map(c => (
                   <tr key={c.id} onClick={() => openDetail(c)}>
-                    <td>
+                    <td className="cell-primary">
                       <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                         <div className="avatar">{(c.first_name || '?').charAt(0).toUpperCase()}</div>
                         <div>
@@ -171,11 +171,11 @@ export default function Customers() {
                         </div>
                       </div>
                     </td>
-                    <td>{c.phone || '-'}</td>
-                    <td>{c.orders_count}</td>
-                    <td style={{ fontWeight: 600, color: 'var(--success)' }}>{formatCurrency(c.total_spent)}</td>
-                    <td><span className={`status-badge ${(c.crm_status || '').toLowerCase()}`}>{c.crm_status || 'Lead'}</span></td>
-                    <td><span className={`tag-chip`}>{c.crm_priority || 'Medium'}</span></td>
+                    <td data-label="Phone">{c.phone || '-'}</td>
+                    <td data-label="Orders">{c.orders_count}</td>
+                    <td data-label="Total spent" style={{ fontWeight: 600, color: 'var(--success)' }}>{formatCurrency(c.total_spent)}</td>
+                    <td data-label="Status"><span className={`status-badge ${(c.crm_status || '').toLowerCase()}`}>{c.crm_status || 'Lead'}</span></td>
+                    <td data-label="Priority"><span className={`tag-chip`}>{c.crm_priority || 'Medium'}</span></td>
                   </tr>
                 ))}
               </tbody>
