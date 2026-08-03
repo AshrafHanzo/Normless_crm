@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useApi, useAuth } from '../../App'
 import { useToast } from '../../components/Toast'
+import { cleanMobile, mobileError, isValidMobile, mobileInputProps } from '../../utils/phone'
 
 const fmt = (v) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(v || 0)
 const PRINTING = ['Front', 'Back', 'Front & Back', 'Front Chest & Back', 'No Print']
@@ -188,6 +189,14 @@ function toWaNumber(phone) {
   return digits
 }
 
+// Only ST Courier has a public trace page we can deep-link into by consignment number.
+// Every other MOT gets the bare tracking ID — pointing a DTDC or Delhivery number at
+// ST Courier's tracker just lands the customer on a "not found" page.
+export const trackingUrl = (order) =>
+  order?.mot === 'ST Courier' && order?.tracking_link
+    ? `https://trackcourier.io/track-and-trace/st-courier/${String(order.tracking_link).trim()}`
+    : null
+
 // Porter deliveries don't come with a tracking ID — a different, shorter template
 // is used instead of the tracking-details one.
 function buildDispatchMessage(order) {
@@ -199,6 +208,8 @@ function buildDispatchMessage(order) {
   }
   const L = [`Hi ${order.customer_name || 'there'}! 🎉`, '', `Your Crewfit order (Ref: CF-${order.sl_no}) has been dispatched${order.mot ? ` via ${order.mot}` : ''}.`, '']
   L.push(`📦 *Tracking ID:* ${order.tracking_link || '—'}`)
+  const url = trackingUrl(order)
+  if (url) L.push(`🔗 *Track your parcel here:* ${url}`)
   if (order.dispatch_date) L.push(`📅 *Dispatched On:* ${order.dispatch_date}`)
   L.push('', 'Thank you for choosing Crewfit! We hope to serve you again. 🙌')
   return L.join('\n')
@@ -370,6 +381,7 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
   const [payments, setPayments] = useState([])
   const [payBusy, setPayBusy] = useState(null) // 'advance' | 'balance' while a link call is in flight
   const [deleting, setDeleting] = useState(false)
+  const [custHistory, setCustHistory] = useState(null) // prior orders on this phone, or null while unknown
 
   useEffect(() => {
     apiFetch('/api/crewfit/meta').then(m => setMeta(m && m.statuses ? m : null))
@@ -382,6 +394,24 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [lightbox])
+
+  // New vs Returning is decided by whether the phone number has ordered before, so it follows the
+  // number rather than being picked by hand. Debounced because it fires while the SO is still
+  // typing; the order being edited is excluded so an existing order never counts itself.
+  const phoneKey = (form?.contact_number || '').replace(/\D/g, '').slice(-10)
+  useEffect(() => {
+    if (!form) return
+    if (phoneKey.length < 10) { setCustHistory(null); return }
+    let cancelled = false
+    const t = setTimeout(async () => {
+      const qs = new URLSearchParams({ phone: phoneKey, ...(form.id ? { excludeId: String(form.id) } : {}) })
+      const r = await apiFetch(`/api/crewfit/customers/lookup?${qs}`)
+      if (cancelled || !r || r.error) return
+      setCustHistory(r)
+      setForm(f => (f && f.customer_type !== r.customer_type ? { ...f, customer_type: r.customer_type } : f))
+    }, 400)
+    return () => { cancelled = true; clearTimeout(t) }
+  }, [phoneKey, form?.id])
 
   useEffect(() => {
     if (target === 'new') setForm(blankOrder())
@@ -737,6 +767,16 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
 
   const save = async (e) => {
     e.preventDefault()
+    // Billing mobile is optional (only filled for GST invoices), so it's checked only when present.
+    const badPhone = [
+      ['Contact Number', form.contact_number, true],
+      ['WhatsApp Number', form.whatsapp_number, true],
+      ['Billing Mobile', form.billing_mobile, false],
+    ].find(([, v, required]) => (required || String(v || '').trim()) && !isValidMobile(v))
+    if (badPhone) {
+      toast.error(`${badPhone[0]} must be exactly 10 digits.`, { title: 'Check the mobile number' })
+      return
+    }
     setSaving(true)
     const items = form.line_items.map(({ _sizeMode, _sizes, _saved, _pendingMock, _pendingProd, ...rest }) => rest)
     const merged = { ...form, ...recompute(form), line_items: items }
@@ -802,9 +842,30 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
           <div className="form-section">Customer</div>
           <div className="form-row">
             <div className="input-group"><label>Customer Name *</label><input required value={form.customer_name || ''} onChange={e => setF({ customer_name: e.target.value })} /></div>
-            <div className="input-group"><label>Contact Number *</label><input required value={form.contact_number || ''} onChange={e => setF({ contact_number: e.target.value })} /></div>
-            <div className="input-group"><label>WhatsApp Number *</label><input required value={form.whatsapp_number || ''} onChange={e => setF({ whatsapp_number: e.target.value })} placeholder="If different from contact number" /></div>
-            <div className="input-group"><label>Customer Type *</label><select required value={form.customer_type || ''} onChange={e => setF({ customer_type: e.target.value })}><option value="">—</option>{(meta?.customerTypes || ['New', 'Returning']).map(v => <option key={v}>{v}</option>)}</select></div>
+            <div className="input-group">
+              <label>Contact Number *</label>
+              <input {...mobileInputProps} required value={form.contact_number || ''} onChange={e => setF({ contact_number: cleanMobile(e.target.value) })} />
+              {mobileError(form.contact_number) && <div className="field-error">{mobileError(form.contact_number)}</div>}
+              {custHistory && (custHistory.orders_count > 0 ? (
+                <div className="cust-hint returning">
+                  ↩︎ Returning customer — {custHistory.orders_count} previous order{custHistory.orders_count > 1 ? 's' : ''}
+                  {custHistory.lifetime_value ? ` · ₹${Number(custHistory.lifetime_value).toLocaleString('en-IN')} so far` : ''}
+                  {custHistory.customer_name && custHistory.customer_name !== form.customer_name ? ` · known as "${custHistory.customer_name}"` : ''}
+                </div>
+              ) : (
+                <div className="cust-hint">✨ First-time customer — no previous orders on this number</div>
+              ))}
+            </div>
+            <div className="input-group">
+              <label>WhatsApp Number *</label>
+              <input {...mobileInputProps} required value={form.whatsapp_number || ''} onChange={e => setF({ whatsapp_number: cleanMobile(e.target.value) })} placeholder="If different from contact number" />
+              {mobileError(form.whatsapp_number) && <div className="field-error">{mobileError(form.whatsapp_number)}</div>}
+            </div>
+            <div className="input-group">
+              <label>Customer Type *</label>
+              <select required value={form.customer_type || ''} onChange={e => setF({ customer_type: e.target.value })}><option value="">—</option>{(meta?.customerTypes || ['New', 'Returning']).map(v => <option key={v}>{v}</option>)}</select>
+              <div className="img-upload-hint">Set automatically from the contact number's order history.</div>
+            </div>
             <div className="input-group"><label>Sales Officer *</label><select required value={form.so || ''} onChange={e => setF({ so: e.target.value })}><option value="">—</option>{(meta?.sos || []).map(v => <option key={v}>{v}</option>)}</select></div>
           </div>
 
@@ -949,7 +1010,11 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
           <div className="form-row">
             <div className="input-group"><label>Billing Name / Company *</label><input required value={form.billing_name || ''} onChange={e => setF({ billing_name: e.target.value })} /></div>
             <div className="input-group"><label>Contact Person *</label><input required value={form.contact_person || ''} onChange={e => setF({ contact_person: e.target.value })} /></div>
-            <div className="input-group"><label>Billing Mobile *</label><input required value={form.billing_mobile || ''} onChange={e => setF({ billing_mobile: e.target.value })} /></div>
+            <div className="input-group">
+              <label>Billing Mobile *</label>
+              <input {...mobileInputProps} required value={form.billing_mobile || ''} onChange={e => setF({ billing_mobile: cleanMobile(e.target.value) })} />
+              {mobileError(form.billing_mobile) && <div className="field-error">{mobileError(form.billing_mobile)}</div>}
+            </div>
             <div className="input-group"><label>Email</label><input value={form.billing_email || ''} onChange={e => setF({ billing_email: e.target.value })} /></div>
             <div className="input-group"><label>GST Number</label><input value={form.gst_number || ''} onChange={e => setF({ gst_number: e.target.value })} /></div>
           </div>
@@ -987,6 +1052,12 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
               <div className="input-group">
                 <label>Tracking ID / Link</label>
                 <input value={form.tracking_link || ''} onChange={e => onTrackingChange(e.target.value)} placeholder="Filling this in marks the order Dispatched" />
+                {trackingUrl(form) && (
+                  <a className="track-link" href={trackingUrl(form)} target="_blank" rel="noreferrer">🔗 Track on ST Courier</a>
+                )}
+                {form.mot === 'ST Courier' && !form.tracking_link && (
+                  <div className="img-upload-hint">Add the consignment number to get a trackable link.</div>
+                )}
               </div>
             )}
             {form.id && (
@@ -1023,6 +1094,7 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
             <div className="dispatch-banner">
               <span>
                 📦 Dispatched{form.dispatch_date ? ` on ${form.dispatch_date}` : ''}{form.tracking_link ? ` · Tracking: ${form.tracking_link}` : form.mot === 'Porter' ? ' · via Porter (no tracking ID)' : ''}
+                {trackingUrl(form) && <> · <a className="track-link" href={trackingUrl(form)} target="_blank" rel="noreferrer">Track</a></>}
                 {form.tracking_sent_at ? <> · <span style={{ color: 'var(--success)' }}>✓ sent</span></> : ''}
               </span>
               <span style={{ display: 'flex', gap: 8 }}>

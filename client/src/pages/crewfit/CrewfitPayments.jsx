@@ -4,6 +4,7 @@ import { useApi } from '../../App'
 import { useToast } from '../../components/Toast'
 import DateRangeFilter from '../../components/DateRangeFilter'
 import Icon from '../../components/Icon'
+import { cleanMobile, mobileError, isValidMobile, mobileInputProps } from '../../utils/phone'
 
 const fmt = (v) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(v || 0)
 const statusClass = (s) => (s === 'Paid' ? 'fulfilled' : s === 'Created' ? 'pending' : 'refunded')
@@ -95,6 +96,7 @@ export default function CrewfitPayments() {
 
   const createLink = async (e) => {
     e.preventDefault()
+    if (!isValidMobile(form.contact_number)) { toast.error('Phone must be exactly 10 digits.', { title: 'Check the mobile number' }); return }
     setSaving(true)
     const res = await apiFetch('/api/crewfit/payments', { method: 'POST', body: JSON.stringify(form) })
     setSaving(false)
@@ -127,6 +129,8 @@ export default function CrewfitPayments() {
 
   const payments = data?.payments || []
   const pg = data?.pagination || { total: 0, page: 1, totalPages: 1 }
+  // Server is the authority; default to hidden so a slow/failed load never flashes the totals.
+  const showRevenue = data?.canViewRevenue === true
 
   return (
     <div className="page-enter">
@@ -160,7 +164,8 @@ export default function CrewfitPayments() {
             <div className="input-group"><label>Customer name *</label>
               <input required value={form.customer_name} onChange={e => setForm(f => ({ ...f, customer_name: e.target.value }))} placeholder="e.g. Rahul Sports Club" /></div>
             <div className="input-group"><label>Phone *</label>
-              <input required value={form.contact_number} onChange={e => setForm(f => ({ ...f, contact_number: e.target.value }))} placeholder="10-digit mobile" /></div>
+              <input {...mobileInputProps} required value={form.contact_number} onChange={e => setForm(f => ({ ...f, contact_number: cleanMobile(e.target.value) }))} />
+              {mobileError(form.contact_number) && <div className="field-error">{mobileError(form.contact_number)}</div>}</div>
             <div className="input-group"><label>Amount (₹) *</label>
               <input required type="number" min="1" step="1" value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} /></div>
             <div className="input-group"><label>Email</label>
@@ -175,17 +180,23 @@ export default function CrewfitPayments() {
         </form>
       )}
 
-      <div className="kpi-grid" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
-        <div className="kpi-card">
-          <div className="kpi-head"><div className="kpi-icon">💰</div></div>
-          <div className="kpi-value">{fmt(data?.summary.collected)}</div>
-          <div className="kpi-label">Collected</div>
-        </div>
-        <div className="kpi-card">
-          <div className="kpi-head"><div className="kpi-icon">⏳</div></div>
-          <div className="kpi-value">{fmt(data?.summary.awaiting)}</div>
-          <div className="kpi-label">Awaiting payment</div>
-        </div>
+      {/* The money roll-ups are gated by can_view_revenue; the server omits them entirely, so
+          this only decides layout. The link count stays — it's operational, not financial. */}
+      <div className="kpi-grid" style={{ gridTemplateColumns: `repeat(${showRevenue ? 3 : 1}, 1fr)` }}>
+        {showRevenue && (
+          <>
+            <div className="kpi-card">
+              <div className="kpi-head"><div className="kpi-icon">💰</div></div>
+              <div className="kpi-value">{fmt(data?.summary.collected)}</div>
+              <div className="kpi-label">Collected</div>
+            </div>
+            <div className="kpi-card">
+              <div className="kpi-head"><div className="kpi-icon">⏳</div></div>
+              <div className="kpi-value">{fmt(data?.summary.awaiting)}</div>
+              <div className="kpi-label">Awaiting payment</div>
+            </div>
+          </>
+        )}
         <div className="kpi-card">
           <div className="kpi-head"><div className="kpi-icon">🔗</div></div>
           <div className="kpi-value">{data?.summary.count ?? 0}</div>

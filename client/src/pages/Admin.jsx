@@ -14,24 +14,25 @@ const GROUPS = [
     { key: 'crewfit_analytics', label: 'Dashboard', icon: 'dashboard' },
     { key: 'crewfit_followups', label: 'Follow-ups', icon: 'bell' },
     { key: 'crewfit_orders', label: 'Bulk Orders', icon: 'box' },
+    { key: 'crewfit_customers', label: 'Customers', icon: 'users' },
     { key: 'crewfit_catalog', label: 'Catalog', icon: 'shirt' },
     { key: 'crewfit_calculator', label: 'Quotes', icon: 'spark' },
     { key: 'crewfit_payments', label: 'Payments', icon: 'card' },
   ] },
 ]
 
-const blankForm = () => ({ username: '', password: '', role: 'operator', normless: true, dashboard: true, customers: true, orders: true, scanner: true, crewfit: false, crewfit_analytics: false, crewfit_followups: false, crewfit_orders: false, crewfit_catalog: false, crewfit_calculator: false, crewfit_payments: false })
+const blankForm = () => ({ username: '', password: '', role: 'operator', normless: true, dashboard: true, customers: true, orders: true, scanner: true, crewfit: false, crewfit_analytics: false, crewfit_followups: false, crewfit_orders: false, crewfit_catalog: false, crewfit_calculator: false, crewfit_payments: false, crewfit_customers: false, revenue: false })
 const fromUser = (u) => ({
   id: u.id, username: u.username, password: '', role: u.role,
   normless: !!u.can_access_normless, dashboard: !!u.can_view_dashboard, customers: !!u.can_view_customers, orders: !!u.can_view_orders, scanner: !!u.can_scan_orders,
-  crewfit: !!u.can_access_crewfit, crewfit_analytics: !!u.can_view_crewfit_analytics, crewfit_followups: !!u.can_view_crewfit_followups, crewfit_orders: !!u.can_view_crewfit_orders, crewfit_catalog: !!u.can_view_crewfit_catalog, crewfit_calculator: !!u.can_view_crewfit_calculator, crewfit_payments: !!u.can_view_crewfit_payments,
+  crewfit: !!u.can_access_crewfit, crewfit_analytics: !!u.can_view_crewfit_analytics, crewfit_followups: !!u.can_view_crewfit_followups, crewfit_orders: !!u.can_view_crewfit_orders, crewfit_catalog: !!u.can_view_crewfit_catalog, crewfit_calculator: !!u.can_view_crewfit_calculator, crewfit_payments: !!u.can_view_crewfit_payments, crewfit_customers: !!u.can_view_crewfit_customers, revenue: !!u.can_view_revenue,
 })
 const buildPerms = (f) => {
-  if (f.role === 'admin') return { normless: true, crewfit: true, dashboard: true, customers: true, orders: true, scanner: true, crewfit_analytics: true, crewfit_followups: true, crewfit_orders: true, crewfit_catalog: true, crewfit_calculator: true, crewfit_payments: true, sync: false }
+  if (f.role === 'admin') return { normless: true, crewfit: true, dashboard: true, customers: true, orders: true, scanner: true, crewfit_analytics: true, crewfit_followups: true, crewfit_orders: true, crewfit_catalog: true, crewfit_calculator: true, crewfit_payments: true, crewfit_customers: true, revenue: true, sync: false }
   return {
     normless: !!f.normless, crewfit: !!f.crewfit, sync: false,
     dashboard: !!(f.normless && f.dashboard), customers: !!(f.normless && f.customers), orders: !!(f.normless && f.orders), scanner: !!(f.normless && f.scanner),
-    crewfit_analytics: !!(f.crewfit && f.crewfit_analytics), crewfit_followups: !!(f.crewfit && f.crewfit_followups), crewfit_orders: !!(f.crewfit && f.crewfit_orders), crewfit_catalog: !!(f.crewfit && f.crewfit_catalog), crewfit_calculator: !!(f.crewfit && f.crewfit_calculator), crewfit_payments: !!(f.crewfit && f.crewfit_payments),
+    crewfit_analytics: !!(f.crewfit && f.crewfit_analytics), crewfit_followups: !!(f.crewfit && f.crewfit_followups), crewfit_orders: !!(f.crewfit && f.crewfit_orders), crewfit_catalog: !!(f.crewfit && f.crewfit_catalog), crewfit_calculator: !!(f.crewfit && f.crewfit_calculator), crewfit_payments: !!(f.crewfit && f.crewfit_payments), crewfit_customers: !!(f.crewfit && f.crewfit_customers), revenue: !!f.revenue,
   }
 }
 
@@ -105,6 +106,18 @@ export default function AdminManagement() {
           {form.role === 'admin' ? (
             <div className="admin-note"><Icon name="shield" size={16} /> Admins get full access to both brands and all pages.</div>
           ) : (
+            <>
+            {/* Cuts across pages rather than unlocking one, so it sits outside the brand cards. */}
+            <div className="access-card data-access-card">
+              <label className="page-check" style={{ margin: 0 }}>
+                <input type="checkbox" checked={!!form.revenue} onChange={e => setF({ revenue: e.target.checked })} />
+                <Icon name="wallet" size={15} />
+                <span>
+                  <b>See revenue totals</b>
+                  <em>Collected &amp; outstanding totals on Payments, combined lifetime value on Customers, and all money figures on the dashboard. Individual order and payment amounts stay visible either way.</em>
+                </span>
+              </label>
+            </div>
             <div className="access-grid">
               {GROUPS.map(g => (
                 <div key={g.brand} className={`access-card ${form[g.brand] ? 'on' : ''}`}>
@@ -123,6 +136,7 @@ export default function AdminManagement() {
                 </div>
               ))}
             </div>
+            </>
           )}
 
           <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>

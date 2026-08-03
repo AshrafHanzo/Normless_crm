@@ -1,6 +1,8 @@
 const express = require('express');
 const db = require('../db/connection');
 const razorpay = require('../config/razorpay');
+const { isValidMobile } = require('../utils/phone');
+const { canViewRevenue } = require('../utils/permissions');
 
 const router = express.Router();
 
@@ -170,9 +172,17 @@ router.get('/', async (req, res) => {
        ${whereSql} ORDER BY p.created_at DESC, p.id DESC LIMIT ${lim} OFFSET ${(pg - 1) * lim}`, vals);
 
     const total = parseInt(totals.rows[0].n, 10);
+    // Individual link amounts stay — staff still need them to chase a specific payment. Only the
+    // roll-ups leave, and they're omitted from the payload rather than blanked in the UI, so the
+    // figure isn't sitting in a network response for anyone who opens devtools.
+    const showRevenue = await canViewRevenue(req);
     res.json({
       payments: rows.rows,
-      summary: { collected: Number(totals.rows[0].collected), awaiting: Number(totals.rows[0].awaiting), count: total },
+      summary: {
+        ...(showRevenue ? { collected: Number(totals.rows[0].collected), awaiting: Number(totals.rows[0].awaiting) } : {}),
+        count: total,
+      },
+      canViewRevenue: showRevenue,
       pagination: { total, page: pg, limit: lim, totalPages: Math.max(1, Math.ceil(total / lim)) },
       mode: razorpay.MODE,
       configured: razorpay.isConfigured,
@@ -204,6 +214,7 @@ router.post('/', async (req, res) => {
     const { customer_name, contact_number, email, amount, description, notes, order_id } = req.body;
     if (!customer_name) return res.status(400).json({ error: 'Customer name is required' });
     if (!contact_number) return res.status(400).json({ error: 'Contact number is required' });
+    if (!isValidMobile(contact_number)) return res.status(400).json({ error: 'Contact number must be exactly 10 digits' });
 
     const payment = await createLink({
       order_id: order_id ? parseInt(order_id, 10) : null,

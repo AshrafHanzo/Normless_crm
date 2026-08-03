@@ -9,9 +9,11 @@ const SELLER = {
   gstin: '33AAYFN3674M1ZF',
   stateCode: '33',
   state: 'Tamil Nadu',
+  returnPhone: '8754604214', // printed on shipping labels so couriers can call on a failed delivery
 };
-// Drop a PNG/JPG at this path to have it appear on the invoice header — optional, skipped if missing.
-const LOGO_PATH = path.join(__dirname, '..', '..', 'client', 'logo', 'crewfit-logo.png');
+// PDFs print on white paper, so the dark lockup is the legible one — cf_white would vanish.
+// Still guarded by existsSync: a missing file degrades to a text-only header rather than throwing.
+const LOGO_PATH = path.join(__dirname, '..', '..', 'client', 'logo', 'cf_logo', 'cf_black.png');
 // Cotton knit T-shirts/polos — verify this matches your actual product mix before relying on it for filing.
 const HSN_CODE = '6109';
 
@@ -33,8 +35,8 @@ function renderInvoice(doc, order, invoice, allInvoices) {
 
   let headerX = 40;
   if (fs.existsSync(LOGO_PATH)) {
-    doc.image(LOGO_PATH, 40, 40, { width: 46 });
-    headerX = 96;
+    doc.image(LOGO_PATH, 40, 34, { width: 58 });
+    headerX = 108;
   }
   doc.fontSize(20).fillColor('#1a1a1a').text(SELLER.brandName, headerX, 44);
   doc.fontSize(9).fillColor('#666').text(SELLER.tagline, headerX, 68);
@@ -134,8 +136,8 @@ function renderInvoice(doc, order, invoice, allInvoices) {
 function renderQuote(doc, quote) {
   let headerX = 40;
   if (fs.existsSync(LOGO_PATH)) {
-    doc.image(LOGO_PATH, 40, 40, { width: 46 });
-    headerX = 96;
+    doc.image(LOGO_PATH, 40, 34, { width: 58 });
+    headerX = 108;
   }
   doc.fontSize(20).fillColor('#1a1a1a').text(SELLER.brandName, headerX, 44);
   doc.fontSize(9).fillColor('#666').text(SELLER.tagline, headerX, 68);
@@ -204,86 +206,94 @@ function renderQuote(doc, quote) {
     .text('This is a quotation, not a tax invoice, and is valid for 7 days from the date above. Prices are subject to change after that.', 40, 780, { width: 515, align: 'center' });
 }
 
-// A courier-ready address label. Sized to sit in the top portion of a plain A4 sheet so it prints
-// on any office printer and gets cut along the border — no thermal label printer assumed.
+// Standard 4in x 6in thermal shipping label (288pt x 432pt), the size every label printer and
+// pre-cut sticker sheet expects. The page itself is created at this size by the caller, so the
+// artwork fills the sheet edge to edge — nothing to cut out.
+const LABEL_SIZE = [288, 432]; // [width, height] in PDF points at 72dpi
+
 function renderShippingLabel(doc, order) {
-  const L = 40, R = 555, W = R - L, PAD = 16;
-  const innerW = W - PAD * 2;
+  const [PW, PH] = LABEL_SIZE;
+  const M = 10, PAD = 9;               // outer border inset, then padding inside it
+  const L = M + PAD, R = PW - M - PAD;
+  const innerW = R - L;
   const shipTo = order.delivery_location || order.billing_address || '-';
   const name = order.billing_name || order.customer_name || '-';
   const phone = order.billing_mobile || order.contact_number || '-';
-  const top = 40;
 
-  const line = (y) => doc.moveTo(L, y).lineTo(R, y).strokeColor('#bbb').lineWidth(1).stroke();
-  let y = top + PAD;
+  const line = (y) => doc.moveTo(M, y).lineTo(PW - M, y).strokeColor('#999').lineWidth(0.8).stroke();
+  // Vertical space is fixed on a label, so long addresses get scaled down rather than
+  // overflowing the sheet — a clipped address is a lost parcel.
+  const fitFont = (text, size, min, width) => {
+    let s = size;
+    while (s > min && doc.font('Helvetica').fontSize(s).heightOfString(text, { width }) > 96) s -= 0.5;
+    return s;
+  };
 
-  // ── Header: brand on the left, order ref big on the right (what the warehouse matches on)
-  let headerX = L + PAD;
-  if (fs.existsSync(LOGO_PATH)) {
-    doc.image(LOGO_PATH, L + PAD, y, { width: 38 });
-    headerX = L + PAD + 48;
+  let y = M + PAD;
+
+  // ── Header: brand left, order ref right — what the packer matches the parcel on.
+  // On a 4in sheet the logo does the branding on its own; repeating "CREWFIT" as text beside it
+  // would just cost width that the order ref needs.
+  const hasLogo = fs.existsSync(LOGO_PATH);
+  if (hasLogo) {
+    doc.image(LOGO_PATH, L, y - 2, { width: 40 });
+    doc.font('Helvetica').fontSize(6).fillColor('#666').text(SELLER.tagline, L, y + 40, { width: 90 });
+  } else {
+    doc.font('Helvetica-Bold').fontSize(13).fillColor('#000').text(SELLER.brandName, L, y + 1);
+    doc.font('Helvetica').fontSize(6).fillColor('#666').text(SELLER.tagline, L, y + 16);
   }
-  doc.font('Helvetica-Bold').fontSize(17).fillColor('#1a1a1a').text(SELLER.brandName, headerX, y + 2);
-  doc.font('Helvetica').fontSize(8).fillColor('#666').text(SELLER.tagline, headerX, y + 22);
-  doc.font('Helvetica').fontSize(8).fillColor('#888').text('ORDER REF', L + PAD, y, { width: innerW, align: 'right' });
-  doc.font('Helvetica-Bold').fontSize(20).fillColor('#1a1a1a').text(`CF-${order.sl_no}`, L + PAD, y + 11, { width: innerW, align: 'right' });
-  y += 44;
+  doc.font('Helvetica').fontSize(6).fillColor('#888').text('ORDER REF', L, y + 4, { width: innerW, align: 'right' });
+  doc.font('Helvetica-Bold').fontSize(17).fillColor('#000').text(`CF-${order.sl_no}`, L, y + 13, { width: innerW, align: 'right' });
+  y += hasLogo ? 52 : 32;
   line(y);
 
-  // ── Deliver to — the block that actually matters, so it gets the largest type on the page
-  y += 12;
-  doc.font('Helvetica').fontSize(8).fillColor('#888').text('DELIVER TO', L + PAD, y);
-  y += 13;
-  doc.font('Helvetica-Bold').fontSize(16).fillColor('#000').text(name, L + PAD, y, { width: innerW });
-  y += doc.heightOfString(name, { width: innerW }) + 3;
+  // ── Deliver to — the only block a courier really reads, so it takes the largest type
+  y += 9;
+  doc.font('Helvetica').fontSize(6.5).fillColor('#888').text('DELIVER TO', L, y);
+  y += 11;
+  doc.font('Helvetica-Bold').fontSize(13).fillColor('#000').text(name, L, y, { width: innerW });
+  y += doc.font('Helvetica-Bold').fontSize(13).heightOfString(name, { width: innerW }) + 2;
   if (order.contact_person && order.contact_person !== name) {
-    doc.font('Helvetica').fontSize(11).fillColor('#333').text(`Attn: ${order.contact_person}`, L + PAD, y, { width: innerW });
-    y += 16;
+    doc.font('Helvetica').fontSize(9).fillColor('#333').text(`Attn: ${order.contact_person}`, L, y, { width: innerW });
+    y += 13;
   }
-  doc.font('Helvetica').fontSize(12).fillColor('#1a1a1a');
-  doc.text(shipTo, L + PAD, y, { width: innerW, lineGap: 2 });
-  y += doc.heightOfString(shipTo, { width: innerW, lineGap: 2 }) + 8;
-  doc.font('Helvetica-Bold').fontSize(13).fillColor('#000').text(`Phone: ${phone}`, L + PAD, y);
-  y += 22;
-  line(y);
-
-  // ── Return address
-  y += 12;
-  doc.font('Helvetica').fontSize(8).fillColor('#888').text('IF UNDELIVERED, RETURN TO', L + PAD, y);
-  y += 12;
-  doc.font('Helvetica-Bold').fontSize(10).fillColor('#1a1a1a').text(`${SELLER.legalName} (${SELLER.brandName})`, L + PAD, y);
-  y += 13;
-  doc.font('Helvetica').fontSize(9).fillColor('#444').text(SELLER.address, L + PAD, y, { width: innerW, lineGap: 1 });
-  y += doc.heightOfString(SELLER.address, { width: innerW, lineGap: 1 }) + 4;
-  doc.text(`GSTIN: ${SELLER.gstin}`, L + PAD, y);
+  const addrSize = fitFont(shipTo, 10.5, 7, innerW);
+  doc.font('Helvetica').fontSize(addrSize).fillColor('#000').text(shipTo, L, y, { width: innerW, lineGap: 1.5 });
+  y += doc.heightOfString(shipTo, { width: innerW, lineGap: 1.5 }) + 6;
+  doc.font('Helvetica-Bold').fontSize(11).fillColor('#000').text(`Phone: ${phone}`, L, y);
   y += 18;
   line(y);
 
-  // ── Consignment strip: what the courier desk and the packer need at a glance
-  y += 11;
-  const cell = (label, val, x, w) => {
-    doc.font('Helvetica').fontSize(7.5).fillColor('#888').text(label, x, y, { width: w });
-    doc.font('Helvetica-Bold').fontSize(11).fillColor('#1a1a1a').text(val || '-', x, y + 11, { width: w });
-  };
-  const cw = innerW / 3;
-  cell('COURIER', order.mot, L + PAD, cw - 8);
-  cell('TRACKING ID', order.tracking_link, L + PAD + cw, cw - 8);
-  cell('TOTAL PIECES', order.qty ? `${order.qty} pcs` : '-', L + PAD + cw * 2, cw - 8);
-  y += 34;
+  // ── Contents + piece count, side by side to save vertical room
+  y += 8;
+  doc.font('Helvetica').fontSize(6.5).fillColor('#888').text('TOTAL PIECES', L, y);
+  doc.font('Helvetica-Bold').fontSize(11).fillColor('#000').text(order.qty ? `${order.qty} pcs` : '-', L, y + 9);
+  y += 26;
 
   const items = Array.isArray(order.line_items) ? order.line_items.filter(it => it.product) : [];
   if (items.length) {
     const contents = items.map(it => `${it.product}${it.color ? ` (${it.color})` : ''} x${it.qty || 0}`).join(' · ');
-    doc.font('Helvetica').fontSize(7.5).fillColor('#888').text('CONTENTS', L + PAD, y);
-    y += 10;
-    doc.font('Helvetica').fontSize(9).fillColor('#444').text(contents, L + PAD, y, { width: innerW, lineGap: 1 });
-    y += doc.heightOfString(contents, { width: innerW, lineGap: 1 }) + 4;
+    doc.font('Helvetica').fontSize(6.5).fillColor('#888').text('CONTENTS', L, y);
+    y += 9;
+    doc.font('Helvetica').fontSize(7.5).fillColor('#444').text(contents, L, y, { width: innerW, lineGap: 1, height: 34, ellipsis: true });
+    y += Math.min(doc.heightOfString(contents, { width: innerW, lineGap: 1 }), 34) + 4;
   }
-  y += PAD;
 
-  doc.rect(L, top, W, y - top).strokeColor('#1a1a1a').lineWidth(1.5).stroke();
-  doc.font('Helvetica').fontSize(7.5).fillColor('#999')
-    .text('Cut along the border and paste on the parcel.', L, y + 8, { width: W, align: 'center' });
+  // ── Return address pinned to the bottom so the layout above can breathe
+  const returnLines = [`${SELLER.legalName} (${SELLER.brandName})`, SELLER.address, `Ph: ${SELLER.returnPhone} · GSTIN: ${SELLER.gstin}`];
+  const addrH = doc.font('Helvetica').fontSize(7).heightOfString(SELLER.address, { width: innerW, lineGap: 0.5 });
+  const blockH = 11 + 10 + addrH + 11;
+  let ry = PH - M - PAD - blockH;
+  line(ry - 8);
+  doc.font('Helvetica').fontSize(6.5).fillColor('#888').text('IF UNDELIVERED, RETURN TO', L, ry);
+  ry += 10;
+  doc.font('Helvetica-Bold').fontSize(8).fillColor('#000').text(returnLines[0], L, ry, { width: innerW });
+  ry += 10;
+  doc.font('Helvetica').fontSize(7).fillColor('#444').text(SELLER.address, L, ry, { width: innerW, lineGap: 0.5 });
+  ry += addrH + 2;
+  doc.font('Helvetica-Bold').fontSize(7.5).fillColor('#000').text(returnLines[2], L, ry, { width: innerW });
+
+  doc.rect(M, M, PW - M * 2, PH - M * 2).strokeColor('#000').lineWidth(1.2).stroke();
 }
 
-module.exports = { renderInvoice, renderQuote, renderShippingLabel, nextInvoiceNumber, SELLER };
+module.exports = { renderInvoice, renderQuote, renderShippingLabel, LABEL_SIZE, nextInvoiceNumber, SELLER };

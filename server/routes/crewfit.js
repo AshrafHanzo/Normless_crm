@@ -5,7 +5,10 @@ const crypto = require('crypto');
 const multer = require('multer');
 const PDFDocument = require('pdfkit');
 const db = require('../db/connection');
-const { renderInvoice, renderShippingLabel, nextInvoiceNumber } = require('../services/invoice');
+const { renderInvoice, renderShippingLabel, LABEL_SIZE, nextInvoiceNumber } = require('../services/invoice');
+const { historyForPhone } = require('./crewfit-customers');
+const { validatePhoneFields } = require('../utils/phone');
+const { canViewRevenue } = require('../utils/permissions');
 
 const router = express.Router();
 
@@ -236,25 +239,35 @@ router.get('/analytics', async (req, res) => {
       revenueSeries.push(revByDate[key] || { date: key, revenue: 0, order_count: 0 });
     }
 
+    // The dashboard is where revenue is most exposed — headline totals, the trend chart, and
+    // per-SO/product/customer money. Without stripping it here, hiding the Payments and Customers
+    // totals would achieve nothing for anyone who can open this page.
+    const showRevenue = await canViewRevenue(req);
+    const stripMoney = (rows) => rows.map(({ revenue, ...rest }) => rest);
+    // paymentBreakdown carries a per-status rupee amount that adds back up to total revenue,
+    // so the counts stay but the money goes.
+    const stripAmount = (rows) => rows.map(({ amount, ...rest }) => rest);
+
     res.json({
       range: { startDate: startDate || null, endDate: endDate || null },
+      canViewRevenue: showRevenue,
       kpis: {
         totalOrders: orders.length,
         activeOrders: orders.filter(o => !CLOSED.includes(o.status)).length,
         dispatchedOrders: dispatched.length,
         cancelledOrders: orders.length - nonCancelled.length,
-        totalRevenue, collectedRevenue, pendingRevenue, avgOrderValue,
+        ...(showRevenue ? { totalRevenue, collectedRevenue, pendingRevenue, avgOrderValue } : {}),
         totalCustomers, repeatCustomers, repeatRate,
         avgFulfillmentDays, onTimeRate,
       },
-      revenueSeries,
+      revenueSeries: showRevenue ? revenueSeries : [],
       statusBreakdown,
-      paymentBreakdown,
+      paymentBreakdown: showRevenue ? paymentBreakdown : stripAmount(paymentBreakdown),
       customerTypeBreakdown,
       fulfillmentBuckets,
-      soPerformance,
-      topProducts,
-      topCustomers,
+      soPerformance: showRevenue ? soPerformance : stripMoney(soPerformance),
+      topProducts: showRevenue ? topProducts : stripMoney(topProducts),
+      topCustomers: showRevenue ? topCustomers : stripMoney(topCustomers),
     });
   } catch (err) {
     console.error('crewfit analytics error:', err); res.status(500).json({ error: 'Failed to load analytics' });
@@ -378,10 +391,13 @@ const EDITABLE = ['status', 'payment_status', 'layout_status', 'customer_type', 
 // PUT /api/crewfit/orders/:id — inline field / dropdown updates
 router.put('/orders/:id', async (req, res) => {
   try {
-    const current = (await db.query('SELECT status, payment_status, tracking_link, dispatch_date, mot, deadline_at FROM crewfit_orders WHERE id = $1', [req.params.id])).rows[0];
+    const current = (await db.query('SELECT status, payment_status, tracking_link, dispatch_date, mot, deadline_at, contact_number, whatsapp_number, billing_mobile FROM crewfit_orders WHERE id = $1', [req.params.id])).rows[0];
     if (!current) return res.status(404).json({ error: 'Not found' });
 
     const body = { ...req.body };
+    // Passing `current` means an untouched legacy number doesn't block edits to other fields.
+    const phoneError = validatePhoneFields(body, current);
+    if (phoneError) return res.status(400).json({ error: phoneError });
     // Status can only become "Dispatched" via a tracking ID being present — never a direct manual
     // pick — except Porter, which doesn't issue tracking IDs at all.
     const effectiveTracking = body.tracking_link !== undefined ? body.tracking_link : current.tracking_link;
@@ -436,12 +452,32 @@ router.put('/orders/:id', async (req, res) => {
 router.post('/orders', async (req, res) => {
   try {
     const body = { ...req.body };
+    const phoneError = validatePhoneFields(body);
+    if (phoneError) return res.status(400).json({ error: phoneError });
+
     if (body.status === 'Dispatched' && !body.tracking_link && body.mot !== 'Porter') {
       return res.status(400).json({ error: 'Add a tracking ID before marking this order as Dispatched' });
     }
     if (body.tracking_link && body.status !== 'Cancelled') {
       body.status = 'Dispatched';
       if (!body.dispatch_date) body.dispatch_date = todayStr();
+    }
+    // Every order is dated the day it was raised unless one was typed in. Defaulted here rather
+    // than only in the drawer because orders also arrive prefilled from a quote, which skips the
+    // blank-order defaults entirely and was leaving order_date NULL.
+    if (!body.order_date) body.order_date = todayStr();
+
+    // Deadline runs 7 days from the payment. Orders normally pick this up when the advance lands,
+    // but one created with a payment already recorded (a quote paid via Razorpay, or an order
+    // keyed in after the fact) would otherwise never get one.
+    if (!body.deadline_at && body.payment_status && body.payment_status !== 'Pending') {
+      body.deadline_at = addDaysStr(7);
+    }
+
+    // New vs Returning is a fact about the phone number's history, not something worth trusting
+    // the client to compute — derive it here so imports, the API and the drawer always agree.
+    if (body.contact_number) {
+      body.customer_type = (await historyForPhone(body.contact_number)).customer_type;
     }
     const cols = ['customer_name', 'contact_number', 'description', 'product', 'color', 'size_breakdown', 'qty', 'total_cost',
       'deadline_at', 'deadline_text', 'order_date', 'customer_type', 'so', 'vendor', 'mot', 'mock_folder', 'notes',
@@ -550,7 +586,8 @@ router.get('/orders/:id/shipping-label', async (req, res) => {
     }
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="Shipping-Label-CF-${order.sl_no}.pdf"`);
-    const doc = new PDFDocument({ size: 'A4', margin: 40 });
+    // 4x6 label stock, not A4 — the renderer fills the whole sheet, so no page margin.
+    const doc = new PDFDocument({ size: LABEL_SIZE, margin: 0 });
     doc.pipe(res);
     renderShippingLabel(doc, order);
     doc.end();

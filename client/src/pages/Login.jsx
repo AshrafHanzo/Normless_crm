@@ -69,7 +69,9 @@ export default function Login() {
           ))}
         </div>
 
-        <div className={`login-logo brand-logo-${selected}`}><Icon name={b.glyph} size={30} strokeWidth={2.2} /></div>
+        <div className={`login-logo ${selected === 'crewfit' ? 'cf-logo' : `brand-logo-${selected}`}`} role="img" aria-label={b.name}>
+          {selected !== 'crewfit' && <Icon name={b.glyph} size={30} strokeWidth={2.2} />}
+        </div>
         <h1>Welcome back</h1>
         <p>Sign in to your <strong>{b.name}</strong> CRM — {b.tag}</p>
 

@@ -4,6 +4,7 @@ import { useApi } from '../../App'
 import { useToast } from '../../components/Toast'
 import Icon from '../../components/Icon'
 import CrewfitOrderDrawer from './CrewfitOrderDrawer'
+import { cleanMobile, mobileError, isValidMobile, mobileInputProps } from '../../utils/phone'
 
 const fmt = (v) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(v || 0)
 const blankItem = () => ({ product_id: '', qty: '', price_per_piece: '' })
@@ -21,6 +22,9 @@ const buildQuoteMessage = (quote) => {
   return `Hi ${quote.customer_name}! 👕\n\nHere's your Crewfit order quote:\n\n${items}\n\nShipping (${quote.zone_label}): ${fmt(quote.shipping_charge)}\nGST (5%): ${fmt(quote.gst_amount)}\nGrand Total: ${fmt(quote.grand_total)}\n\nPlease reply "OK" to confirm and we'll get your order started! 🙌`
 }
 
+// Local calendar parts, not toISOString() — before 05:30 IST the UTC date is still yesterday.
+const todayStr = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` }
+
 // Builds a new-order prefill (same shape CrewfitOrderDrawer's blankOrder()/openEdit() expect)
 // from a saved quote — the SO reviews/edits it in the normal order form; nothing is created
 // until they hit Save there.
@@ -28,6 +32,7 @@ const prefillOrderFromQuote = (quote) => ({
   customer_name: quote.customer_name,
   contact_number: quote.contact_number,
   whatsapp_number: quote.contact_number,
+  order_date: todayStr(),
   status: 'Awaiting Payment',
   payment_status: 'Pending',
   layout_status: 'Pending',
@@ -100,6 +105,7 @@ export default function CrewfitQuotes() {
   const saveQuote = async () => {
     setError('')
     if (!customerName.trim() || !contactNumber.trim()) { setError('Customer name and phone are required'); return }
+    if (!isValidMobile(contactNumber)) { setError('Phone must be exactly 10 digits'); return }
     if (!calc || calc.needsManualQuote) { setError('Fix the items/zone above first — every line needs a price per piece before a quote can be saved'); return }
     setSaving(true)
     const valid = items.filter(it => it.product_id && Number(it.qty) > 0)
@@ -223,7 +229,9 @@ export default function CrewfitQuotes() {
 
                 <div className="form-row">
                   <div className="input-group" style={{ marginBottom: 0 }}><label>Customer name</label><input value={customerName} onChange={e => setCustomerName(e.target.value)} placeholder="e.g. Rahul Sports Club" /></div>
-                  <div className="input-group" style={{ marginBottom: 0 }}><label>Phone</label><input value={contactNumber} onChange={e => setContactNumber(e.target.value)} placeholder="10-digit mobile" /></div>
+                  <div className="input-group" style={{ marginBottom: 0 }}><label>Phone</label>
+                    <input {...mobileInputProps} value={contactNumber} onChange={e => setContactNumber(cleanMobile(e.target.value))} />
+                    {mobileError(contactNumber) && <div className="field-error">{mobileError(contactNumber)}</div>}</div>
                 </div>
                 <div className="input-group"><label>Notes (optional)</label><input value={notes} onChange={e => setNotes(e.target.value)} placeholder="Internal note for this quote" /></div>
               </>

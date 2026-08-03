@@ -171,6 +171,7 @@ const { convertQuoteToOrder } = crewfitQuotesRoutes;
 const razorpayConfig = require('./config/razorpay');
 const crewfitPaymentsRoutes = require('./routes/crewfit-payments');
 const { settlePayment } = crewfitPaymentsRoutes;
+const crewfitCustomersRoutes = require('./routes/crewfit-customers');
 
 // Public routes
 app.use('/api/auth', authRoutes);
@@ -237,6 +238,7 @@ app.use('/api/dashboard', authMiddleware, dashboardRoutes);
 app.use('/api/sync', authMiddleware, syncRoutes);
 app.use('/api/crewfit/quotes', authMiddleware, crewfitQuotesRoutes);
 app.use('/api/crewfit/payments', authMiddleware, crewfitPaymentsRoutes);
+app.use('/api/crewfit/customers', authMiddleware, crewfitCustomersRoutes);
 app.use('/api/crewfit', authMiddleware, crewfitRoutes);
 
 // Health check
@@ -349,10 +351,15 @@ async function ensureCrewfitSchema() {
                 ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_crewfit_analytics BOOLEAN DEFAULT false;
                 ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_crewfit_calculator BOOLEAN DEFAULT false;
                 ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_crewfit_payments BOOLEAN DEFAULT false;
+                ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_crewfit_customers BOOLEAN DEFAULT false;
+                -- Not a page permission: gates the money totals shown across Payments, Customers
+                -- and the dashboard, so staff can work orders without seeing overall revenue.
+                ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_revenue BOOLEAN DEFAULT false;
             `);
             await db.query(`UPDATE admin_users SET can_access_normless=true, can_access_crewfit=true,
                 can_view_crewfit_followups=true, can_view_crewfit_orders=true, can_view_crewfit_catalog=true,
-                can_view_crewfit_analytics=true, can_view_crewfit_calculator=true, can_view_crewfit_payments=true
+                can_view_crewfit_analytics=true, can_view_crewfit_calculator=true, can_view_crewfit_payments=true,
+                can_view_crewfit_customers=true, can_view_revenue=true
                 WHERE role IN ('owner','admin')`);
         } catch (e) { console.error('admin perms ensure:', e.message); }
 

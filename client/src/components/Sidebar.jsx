@@ -20,6 +20,7 @@ const NAV = {
     { to: '/crewfit/dashboard', icon: 'dashboard', label: 'Dashboard', perm: 'can_view_crewfit_analytics' },
     { to: '/crewfit', end: true, icon: 'bell', label: 'Follow-ups', perm: 'can_view_crewfit_followups' },
     { to: '/crewfit/orders', icon: 'box', label: 'Bulk Orders', perm: 'can_view_crewfit_orders' },
+    { to: '/crewfit/customers', icon: 'users', label: 'Customers', perm: 'can_view_crewfit_customers' },
     { to: '/crewfit/catalog', icon: 'shirt', label: 'Catalog', perm: 'can_view_crewfit_catalog' },
     { to: '/crewfit/quotes', icon: 'spark', label: 'Quotes', perm: 'can_view_crewfit_calculator' },
     { to: '/crewfit/payments', icon: 'card', label: 'Payments', perm: 'can_view_crewfit_payments' },
@@ -47,7 +48,10 @@ export default function Sidebar() {
     <>
       <aside className={`sidebar brand-${brand} ${open ? 'mobile-menu-open' : ''}`}>
         <div className="sidebar-brand">
-          <div className={`brand-mark brand-mark-${brand}`}><Icon name={b.glyph} size={22} strokeWidth={2.4} /></div>
+          {/* Crewfit has a real lockup; Normless still uses the glyph chip. */}
+          <div className={`brand-mark brand-mark-${brand} ${brand === 'crewfit' ? 'cf-logo' : ''}`} role="img" aria-label={b.name}>
+            {brand !== 'crewfit' && <Icon name={b.glyph} size={22} strokeWidth={2.4} />}
+          </div>
           <div className="brand-text"><h2>{b.name}</h2><span>{b.tag}</span></div>
         </div>
 
