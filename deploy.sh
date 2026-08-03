@@ -22,8 +22,9 @@ cd ..
 echo "🗄️  Ensuring DB schema is up to date..."
 node server/db/init-postgres.js
 
-echo "📋 Importing Crewfit orders from the sheet..."
-node server/db/import-crewfit.js || echo "(crewfit import skipped)"
+# NOTE: Crewfit orders are now created inside the CRM, not from the sheet.
+# The sheet import is MANUAL now — run `node server/db/import-crewfit.js` by hand
+# ONLY if you ever need to re-sync from the Google Sheet. It no longer runs on deploy.
 
 echo "♻️  Reloading app (zero-downtime)..."
 pm2 reload ecosystem.config.js --update-env || pm2 start ecosystem.config.js
