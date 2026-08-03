@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useApi } from '../../App'
+import { useToast } from '../../components/Toast'
 import Icon from '../../components/Icon'
 import CrewfitOrderDrawer from './CrewfitOrderDrawer'
+import { cleanMobile, mobileError, isValidMobile, mobileInputProps } from '../../utils/phone'
 
 const fmt = (v) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(v || 0)
 const blankItem = () => ({ product_id: '', qty: '', price_per_piece: '' })
@@ -20,6 +22,9 @@ const buildQuoteMessage = (quote) => {
   return `Hi ${quote.customer_name}! 👕\n\nHere's your Crewfit order quote:\n\n${items}\n\nShipping (${quote.zone_label}): ${fmt(quote.shipping_charge)}\nGST (5%): ${fmt(quote.gst_amount)}\nGrand Total: ${fmt(quote.grand_total)}\n\nPlease reply "OK" to confirm and we'll get your order started! 🙌`
 }
 
+// Local calendar parts, not toISOString() — before 05:30 IST the UTC date is still yesterday.
+const todayStr = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` }
+
 // Builds a new-order prefill (same shape CrewfitOrderDrawer's blankOrder()/openEdit() expect)
 // from a saved quote — the SO reviews/edits it in the normal order form; nothing is created
 // until they hit Save there.
@@ -27,6 +32,7 @@ const prefillOrderFromQuote = (quote) => ({
   customer_name: quote.customer_name,
   contact_number: quote.contact_number,
   whatsapp_number: quote.contact_number,
+  order_date: todayStr(),
   status: 'Awaiting Payment',
   payment_status: 'Pending',
   layout_status: 'Pending',
@@ -44,6 +50,7 @@ const statusClass = (s) => (s === 'Paid' || s === 'Converted' ? 'fulfilled' : s 
 
 export default function CrewfitQuotes() {
   const apiFetch = useApi()
+  const toast = useToast()
   const navigate = useNavigate()
   const [meta, setMeta] = useState(null)
   const [items, setItems] = useState([blankItem()])
@@ -98,6 +105,7 @@ export default function CrewfitQuotes() {
   const saveQuote = async () => {
     setError('')
     if (!customerName.trim() || !contactNumber.trim()) { setError('Customer name and phone are required'); return }
+    if (!isValidMobile(contactNumber)) { setError('Phone must be exactly 10 digits'); return }
     if (!calc || calc.needsManualQuote) { setError('Fix the items/zone above first — every line needs a price per piece before a quote can be saved'); return }
     setSaving(true)
     const valid = items.filter(it => it.product_id && Number(it.qty) > 0)
@@ -110,6 +118,7 @@ export default function CrewfitQuotes() {
     })
     setSaving(false)
     if (r?.error) { setError(r.error); return }
+    toast.success(`Quote for ${r.customer_name} saved — ${fmt(r.grand_total)}`)
     setActiveQuote(r)
     loadQuotes()
   }
@@ -132,7 +141,7 @@ export default function CrewfitQuotes() {
 
   const downloadQuotePdf = async (quote) => {
     const res = await apiFetch(`/api/crewfit/quotes/${quote.id}/pdf`, { responseType: 'blob' })
-    if (!res || res.error) { alert(res?.error || 'Failed to generate PDF'); return }
+    if (!res || res.error) { toast.error(res?.error || 'Failed to generate PDF'); return }
     const url = URL.createObjectURL(res.blob)
     const a = document.createElement('a')
     a.href = url; a.download = res.filename || `Quote-${quote.id}.pdf`
@@ -155,7 +164,7 @@ export default function CrewfitQuotes() {
       await apiFetch(`/api/crewfit/quotes/${qid}/link-order`, { method: 'POST', body: JSON.stringify({ orderId: order.id }) })
       if (activeQuote?.id === qid) setActiveQuote(null)
       loadQuotes()
-      if (confirm('Order created! Open it in Bulk Orders now?')) navigate(`/crewfit/orders?focus=${order.id}`)
+      if (await toast.confirm({ title: 'Order created', message: `Order CF-${order.sl_no ?? ''} has been created from this quote.`, confirmLabel: 'Open in Bulk Orders', cancelLabel: 'Stay here' })) navigate(`/crewfit/orders?focus=${order.id}`)
     } else {
       loadQuotes()
     }
@@ -166,9 +175,14 @@ export default function CrewfitQuotes() {
   }
 
   const deleteQuote = async (quote) => {
-    if (!confirm(`Delete the quote for ${quote.customer_name}? This can't be undone.${quote.converted_order_id ? ' (The order it was converted to is not affected.)' : ''}`)) return
+    if (!await toast.confirm({
+      title: `Delete the quote for ${quote.customer_name}?`,
+      message: `This can't be undone.${quote.converted_order_id ? '\nThe order it was converted to is not affected.' : ''}`,
+      confirmLabel: 'Delete quote', danger: true,
+    })) return
     const r = await apiFetch(`/api/crewfit/quotes/${quote.id}`, { method: 'DELETE' })
-    if (r?.error) { alert(r.error); return }
+    if (r?.error) { toast.error(r.error); return }
+    toast.success('Quote deleted')
     if (activeQuote?.id === quote.id) setActiveQuote(null)
     loadQuotes()
   }
@@ -215,7 +229,9 @@ export default function CrewfitQuotes() {
 
                 <div className="form-row">
                   <div className="input-group" style={{ marginBottom: 0 }}><label>Customer name</label><input value={customerName} onChange={e => setCustomerName(e.target.value)} placeholder="e.g. Rahul Sports Club" /></div>
-                  <div className="input-group" style={{ marginBottom: 0 }}><label>Phone</label><input value={contactNumber} onChange={e => setContactNumber(e.target.value)} placeholder="10-digit mobile" /></div>
+                  <div className="input-group" style={{ marginBottom: 0 }}><label>Phone</label>
+                    <input {...mobileInputProps} value={contactNumber} onChange={e => setContactNumber(cleanMobile(e.target.value))} />
+                    {mobileError(contactNumber) && <div className="field-error">{mobileError(contactNumber)}</div>}</div>
                 </div>
                 <div className="input-group"><label>Notes (optional)</label><input value={notes} onChange={e => setNotes(e.target.value)} placeholder="Internal note for this quote" /></div>
               </>

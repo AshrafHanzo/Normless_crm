@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-route
 import './index.css'
 
 import { ThemeProvider } from './components/ThemeProvider'
+import ToastProvider from './components/Toast'
 import Sidebar from './components/Sidebar'
 import ErrorBoundary from './components/ErrorBoundary'
 import Login from './pages/Login'
@@ -20,6 +21,8 @@ import CrewfitAnalytics from './pages/crewfit/CrewfitAnalytics'
 import CrewfitOrders from './pages/crewfit/CrewfitOrders'
 import CrewfitCatalog from './pages/crewfit/CrewfitCatalog'
 import CrewfitQuotes from './pages/crewfit/CrewfitQuotes'
+import CrewfitPayments from './pages/crewfit/CrewfitPayments'
+import CrewfitCustomers from './pages/crewfit/CrewfitCustomers'
 
 // API base. In dev, VITE_API_URL (from .env.development.local) points at the
 // production backend + Postgres so previews use the real database.
@@ -117,7 +120,8 @@ function App() {
 
   return (
     <ThemeProvider>
-      <AuthContext.Provider value={{ token, user, login, logout, API_URL, brand, setBrand }}>
+      <ToastProvider>
+        <AuthContext.Provider value={{ token, user, login, logout, API_URL, brand, setBrand }}>
         <BrowserRouter>
           <Routes>
             <Route path="/login" element={token ? <Navigate to={homeFor(brand)} replace /> : <Login />} />
@@ -139,9 +143,12 @@ function App() {
             <Route path="/crewfit/orders" element={<ProtectedRoute permission="can_view_crewfit_orders"><AppLayout><CrewfitOrders /></AppLayout></ProtectedRoute>} />
             <Route path="/crewfit/catalog" element={<ProtectedRoute permission="can_view_crewfit_catalog"><AppLayout><CrewfitCatalog /></AppLayout></ProtectedRoute>} />
             <Route path="/crewfit/quotes" element={<ProtectedRoute permission="can_view_crewfit_calculator"><AppLayout><CrewfitQuotes /></AppLayout></ProtectedRoute>} />
+            <Route path="/crewfit/payments" element={<ProtectedRoute permission="can_view_crewfit_payments"><AppLayout><CrewfitPayments /></AppLayout></ProtectedRoute>} />
+            <Route path="/crewfit/customers" element={<ProtectedRoute permission="can_view_crewfit_customers"><AppLayout><CrewfitCustomers /></AppLayout></ProtectedRoute>} />
           </Routes>
         </BrowserRouter>
-      </AuthContext.Provider>
+        </AuthContext.Provider>
+      </ToastProvider>
     </ThemeProvider>
   )
 }

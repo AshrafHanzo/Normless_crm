@@ -3,6 +3,8 @@ const PDFDocument = require('pdfkit');
 const db = require('../db/connection');
 const { SHIP_ZONES, SHIP_REGIONS, shippingFor } = require('../data/crewfitShipping');
 const { renderQuote } = require('../services/invoice');
+const razorpay = require('../config/razorpay');
+const { isValidMobile } = require('../utils/phone');
 
 const router = express.Router();
 
@@ -89,10 +91,13 @@ async function convertQuoteToOrder(quote) {
 
   const nextRow = await db.query('SELECT COALESCE(MAX(sl_no), 0) + 1 AS next FROM crewfit_orders');
   const orderIns = await db.query(
+    // A quote paid through Razorpay converts straight to a paid order, so its 7-day deadline
+    // starts here; an unpaid one gets its deadline when the advance actually lands.
     `INSERT INTO crewfit_orders
        (sl_no, customer_name, contact_number, product, qty, line_items, product_total, shipping, gst_amount, grand_total, total_cost,
-        status, payment_status, layout_status, customer_type, order_date, notes)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'Pending','New',CURRENT_DATE,$14)
+        status, payment_status, layout_status, customer_type, order_date, deadline_at, notes)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'Pending','New',CURRENT_DATE,
+             ${paid ? "CURRENT_DATE + INTERVAL '7 days'" : 'NULL'},$14)
      RETURNING id`,
     [nextRow.rows[0].next, quote.customer_name, quote.contact_number, productNames, totalQty,
       JSON.stringify(orderLineItems), quote.product_total, quote.shipping_charge, quote.gst_amount, quote.grand_total, quote.grand_total,
@@ -139,6 +144,7 @@ router.post('/', async (req, res) => {
   try {
     const { customer_name, contact_number, items, zoneId, notes } = req.body || {};
     if (!customer_name || !contact_number) return res.status(400).json({ error: 'Customer name and phone are required' });
+    if (!isValidMobile(contact_number)) return res.status(400).json({ error: 'Phone must be exactly 10 digits' });
 
     const result = await computeQuote({ items, zoneId });
     if (!result.lineItems.length) return res.status(400).json({ error: 'Add at least one product with a valid quantity' });
@@ -214,16 +220,15 @@ router.post('/:id/link-order', async (req, res) => {
 // usual "confirm now, invoice later" flow. Not part of the default quote flow.
 router.post('/:id/payment-link', async (req, res) => {
   try {
-    if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
-      return res.status(400).json({ error: 'Razorpay is not configured on this server' });
+    if (!razorpay.isConfigured) {
+      return res.status(400).json({ error: `Razorpay (${razorpay.MODE} mode) is not configured on this server — set ${razorpay.missingVars().join(' and ')}` });
     }
     const r = await db.query('SELECT * FROM crewfit_quotes WHERE id = $1', [req.params.id]);
     const quote = r.rows[0];
     if (!quote) return res.status(404).json({ error: 'Quote not found' });
     if (quote.converted_order_id) return res.status(400).json({ error: 'This quote was already converted to an order' });
 
-    const Razorpay = require('razorpay');
-    const rzp = new Razorpay({ key_id: process.env.RAZORPAY_KEY_ID, key_secret: process.env.RAZORPAY_KEY_SECRET });
+    const rzp = razorpay.client();
     const link = await rzp.paymentLink.create({
       amount: Math.round(Number(quote.grand_total) * 100),
       currency: 'INR',

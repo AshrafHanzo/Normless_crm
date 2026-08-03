@@ -23,31 +23,41 @@ pool.on('error', (err) => {
     console.error('⚠️  Unexpected error on idle PG client (pool recovers automatically):', err.message);
 });
 
+// The pool listener above only covers *idle* clients — pg removes it the moment a
+// client is checked out. A connection that dies mid-query therefore emits 'error' on
+// the client with nobody listening, which crashes the process. Every checkout goes
+// through here so a listener is in place for the whole window; the in-flight query
+// still rejects, so callers just see a normal failure instead of a dead server.
+const withClient = async (fn) => {
+    const client = await pool.connect();
+    let broken = false;
+    const onError = (err) => { broken = true; console.error('⚠️  PG client error mid-query:', err.message); };
+    client.on('error', onError);
+    try {
+        return await fn(client);
+    } finally {
+        client.removeListener('error', onError);
+        // Destroy rather than recycle a client whose connection already failed.
+        client.release(broken || undefined);
+    }
+};
+
 // Convert legacy `?` placeholders to Postgres `$1, $2, …`
 const toPg = (sql) => { let i = 1; return sql.replace(/\?/g, () => `$${i++}`); };
 
 const db = {
     prepare: (sql) => ({
-        get: (...args) => pool.connect().then(async (c) => {
-            try { return (await c.query(toPg(sql), args)).rows[0] || null; } finally { c.release(); }
+        get: (...args) => withClient(async (c) => (await c.query(toPg(sql), args)).rows[0] || null),
+        run: (...args) => withClient(async (c) => {
+            const r = await c.query(toPg(sql), args);
+            return { changes: r.rowCount, lastID: null };
         }),
-        run: (...args) => pool.connect().then(async (c) => {
-            try { const r = await c.query(toPg(sql), args); return { changes: r.rowCount, lastID: null }; } finally { c.release(); }
-        }),
-        all: (...args) => pool.connect().then(async (c) => {
-            try { return (await c.query(toPg(sql), args)).rows; } finally { c.release(); }
-        })
+        all: (...args) => withClient(async (c) => (await c.query(toPg(sql), args)).rows)
     }),
-    query: async (sql, params = []) => {
-        const c = await pool.connect();
-        try { return await c.query(sql, params); } finally { c.release(); }
-    },
+    query: (sql, params = []) => withClient((c) => c.query(sql, params)),
     querySync: () => { throw new Error('PostgreSQL requires async operations. Use db.query().'); },
     pragma: () => { /* no-op */ },
-    exec: async (sql) => {
-        const c = await pool.connect();
-        try { await c.query(sql); } finally { c.release(); }
-    },
+    exec: (sql) => withClient((c) => c.query(sql)).then(() => undefined),
     close: async () => { await pool.end(); }
 };
 

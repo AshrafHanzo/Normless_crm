@@ -41,8 +41,11 @@ function BarList({ rows, colorFor }) {
 const emptyRow = (colSpan) => <tr><td colSpan={colSpan} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '24px 0' }}>No data yet</td></tr>
 
 // Ranked leaderboard bars — top 3 get medal-style badges, bar width scales to the leader's revenue.
-function TopProductsChart({ products }) {
-  const max = Math.max(...products.map(p => p.revenue), 1)
+// Without revenue permission the same chart ranks by units instead, so the panel stays useful
+// rather than rendering a row of empty bars (the server sends no revenue field at all).
+function TopProductsChart({ products, showRevenue }) {
+  const metric = (p) => (showRevenue ? p.revenue : p.qty)
+  const max = Math.max(...products.map(metric), 1)
   return (
     <div className="rank-bar-list">
       {products.map((p, i) => (
@@ -51,9 +54,9 @@ function TopProductsChart({ products }) {
           <div className="rank-bar-main">
             <div className="rank-bar-head">
               <span className="rank-bar-name" title={p.product}>{p.product}</span>
-              <span className="rank-bar-value">{fmt(p.revenue)}</span>
+              <span className="rank-bar-value">{showRevenue ? fmt(p.revenue) : `${p.qty} units`}</span>
             </div>
-            <div className="rank-bar-track"><div className="rank-bar-fill" style={{ width: `${(p.revenue / max) * 100}%` }} /></div>
+            <div className="rank-bar-track"><div className="rank-bar-fill" style={{ width: `${(metric(p) / max) * 100}%` }} /></div>
             <div className="rank-bar-sub">{p.qty} units sold</div>
           </div>
         </div>
@@ -84,11 +87,16 @@ export default function CrewfitAnalytics() {
   if (!data) return <div className="empty-state"><Icon name="dashboard" size={44} /><p>No data available yet</p></div>
 
   const k = data.kpis || {}
+  // Server is the authority and omits the money fields entirely; default to hidden so a slow
+  // load never flashes them. Operational KPIs (orders, customers, timing) are unaffected.
+  const showRevenue = data.canViewRevenue === true
   const kpis = [
-    { icon: 'wallet', label: 'Total Revenue', value: fmt(k.totalRevenue), trend: `${fmt(k.collectedRevenue)} collected`, cls: 'up' },
-    { icon: 'card', label: 'Pending Collections', value: fmt(k.pendingRevenue), trend: k.totalRevenue ? `${((k.pendingRevenue / k.totalRevenue) * 100).toFixed(0)}% outstanding` : '—', cls: 'neutral' },
+    ...(showRevenue ? [
+      { icon: 'wallet', label: 'Total Revenue', value: fmt(k.totalRevenue), trend: `${fmt(k.collectedRevenue)} collected`, cls: 'up' },
+      { icon: 'card', label: 'Pending Collections', value: fmt(k.pendingRevenue), trend: k.totalRevenue ? `${((k.pendingRevenue / k.totalRevenue) * 100).toFixed(0)}% outstanding` : '—', cls: 'neutral' },
+    ] : []),
     { icon: 'box', label: 'Total Orders', value: k.totalOrders ?? 0, trend: `${k.activeOrders ?? 0} active`, cls: 'neutral' },
-    { icon: 'trending', label: 'Avg Order Value', value: fmt(k.avgOrderValue), trend: 'per order', cls: 'neutral' },
+    ...(showRevenue ? [{ icon: 'trending', label: 'Avg Order Value', value: fmt(k.avgOrderValue), trend: 'per order', cls: 'neutral' }] : []),
     { icon: 'users', label: 'Total Customers', value: k.totalCustomers ?? 0, trend: `${k.repeatCustomers ?? 0} repeat`, cls: 'neutral' },
     { icon: 'activity', label: 'Repeat Customer Rate', value: pct(k.repeatRate), trend: 'retention', cls: 'up' },
     { icon: 'clock', label: 'Avg Fulfillment Time', value: k.avgFulfillmentDays != null ? `${k.avgFulfillmentDays.toFixed(1)}d` : '—', trend: 'order → dispatch', cls: 'neutral' },
@@ -104,7 +112,7 @@ export default function CrewfitAnalytics() {
   return (
     <div className="page-enter">
       <div className="dash-toolbar">
-        <div><h1>Crewfit · Dashboard</h1><p style={{ color: 'var(--text-muted)' }}>Revenue, delivery time, customers &amp; retention</p></div>
+        <div><h1>Crewfit · Dashboard</h1><p style={{ color: 'var(--text-muted)' }}>{showRevenue ? 'Revenue, delivery time, customers & retention' : 'Orders, delivery time, customers & retention'}</p></div>
         <DateRangeFilter startDate={startDate} endDate={endDate} onApply={applyFilter} onClear={clearFilter} />
       </div>
 
@@ -119,12 +127,14 @@ export default function CrewfitAnalytics() {
       </div>
 
       <div className="dash-row charts">
-        <div className="panel">
-          <div className="panel-head"><div><div className="panel-title">Revenue Trend</div><div className="panel-sub">{startDate && endDate ? 'Selected range' : 'Last 30 days'}</div></div></div>
-          <div className="panel-body">
-            {hasRevenue ? <AreaChart data={data.revenueSeries} fmt={fmt} /> : <div className="chart-empty">No revenue data for this range</div>}
+        {showRevenue && (
+          <div className="panel">
+            <div className="panel-head"><div><div className="panel-title">Revenue Trend</div><div className="panel-sub">{startDate && endDate ? 'Selected range' : 'Last 30 days'}</div></div></div>
+            <div className="panel-body">
+              {hasRevenue ? <AreaChart data={data.revenueSeries} fmt={fmt} /> : <div className="chart-empty">No revenue data for this range</div>}
+            </div>
           </div>
-        </div>
+        )}
         <div className="panel">
           <div className="panel-head"><div className="panel-title">Order Status</div></div>
           <div className="panel-body">
@@ -158,17 +168,17 @@ export default function CrewfitAnalytics() {
         <div className="panel">
           <div className="panel-head"><div className="panel-title">Sales Officer Performance</div></div>
           <table className="data-table">
-            <thead><tr><th>SO</th><th style={{ textAlign: 'center' }}>Orders</th><th style={{ textAlign: 'right' }}>Revenue</th><th style={{ textAlign: 'right' }}>Avg Days</th></tr></thead>
+            <thead><tr><th>SO</th><th style={{ textAlign: 'center' }}>Orders</th>{showRevenue && <th style={{ textAlign: 'right' }}>Revenue</th>}<th style={{ textAlign: 'right' }}>Avg Days</th></tr></thead>
             <tbody>
               {(data.soPerformance || []).map((s, i) => (
                 <tr key={i}>
                   <td className="cell-primary" style={{ fontWeight: 600 }}>{s.so}</td>
                   <td data-label="Orders" style={{ textAlign: 'center' }}>{s.orders}</td>
-                  <td data-label="Revenue" style={{ textAlign: 'right', fontWeight: 700, color: 'var(--success)' }}>{fmt(s.revenue)}</td>
+                  {showRevenue && <td data-label="Revenue" style={{ textAlign: 'right', fontWeight: 700, color: 'var(--success)' }}>{fmt(s.revenue)}</td>}
                   <td data-label="Avg days" style={{ textAlign: 'right', color: 'var(--text-muted)' }}>{s.avgFulfillmentDays != null ? `${s.avgFulfillmentDays}d` : '—'}</td>
                 </tr>
               ))}
-              {!(data.soPerformance || []).length && emptyRow(4)}
+              {!(data.soPerformance || []).length && emptyRow(showRevenue ? 4 : 3)}
             </tbody>
           </table>
         </div>
@@ -176,24 +186,24 @@ export default function CrewfitAnalytics() {
 
       <div className="dash-row tables">
         <div className="panel">
-          <div className="panel-head"><div className="panel-title">Top Products</div><span className="panel-sub">by revenue</span></div>
+          <div className="panel-head"><div className="panel-title">Top Products</div><span className="panel-sub">{showRevenue ? 'by revenue' : 'by units sold'}</span></div>
           <div className="panel-body">
-            {(data.topProducts || []).length ? <TopProductsChart products={data.topProducts} /> : <div className="empty-state" style={{ padding: '30px 0' }}>No data yet</div>}
+            {(data.topProducts || []).length ? <TopProductsChart products={data.topProducts} showRevenue={showRevenue} /> : <div className="empty-state" style={{ padding: '30px 0' }}>No data yet</div>}
           </div>
         </div>
         <div className="panel">
-          <div className="panel-head"><div className="panel-title">Top Customers</div><span className="panel-sub">by spend</span></div>
+          <div className="panel-head"><div className="panel-title">Top Customers</div><span className="panel-sub">{showRevenue ? 'by spend' : 'by order count'}</span></div>
           <table className="data-table">
-            <thead><tr><th>Customer</th><th style={{ textAlign: 'center' }}>Orders</th><th style={{ textAlign: 'right' }}>Spent</th></tr></thead>
+            <thead><tr><th>Customer</th><th style={{ textAlign: 'center' }}>Orders</th>{showRevenue && <th style={{ textAlign: 'right' }}>Spent</th>}</tr></thead>
             <tbody>
               {(data.topCustomers || []).map((c, i) => (
                 <tr key={i}>
                   <td className="cell-primary"><div style={{ fontWeight: 600 }}>{c.customer_name || '—'}</div><div style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>{c.contact_number}</div></td>
                   <td data-label="Orders" style={{ textAlign: 'center', fontWeight: 600 }}>{c.orders}</td>
-                  <td data-label="Revenue" style={{ textAlign: 'right', fontWeight: 700, color: 'var(--success)' }}>{fmt(c.revenue)}</td>
+                  {showRevenue && <td data-label="Revenue" style={{ textAlign: 'right', fontWeight: 700, color: 'var(--success)' }}>{fmt(c.revenue)}</td>}
                 </tr>
               ))}
-              {!(data.topCustomers || []).length && emptyRow(3)}
+              {!(data.topCustomers || []).length && emptyRow(showRevenue ? 3 : 2)}
             </tbody>
           </table>
         </div>

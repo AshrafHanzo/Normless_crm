@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useApi } from '../../App'
+import { useToast } from '../../components/Toast'
 import DateRangeFilter from '../../components/DateRangeFilter'
 import CrewfitOrderDrawer, { openShippingLabel } from './CrewfitOrderDrawer'
 import Icon from '../../components/Icon'
@@ -15,6 +16,7 @@ const emptyFilters = { search: '', status: '', payment_status: '', layout_status
 
 export default function CrewfitOrders() {
   const apiFetch = useApi()
+  const toast = useToast()
   const [params, setParams] = useSearchParams()
   const [meta, setMeta] = useState(null)
   const [orders, setOrders] = useState([])
@@ -57,7 +59,7 @@ export default function CrewfitOrders() {
   const applyDateFilter = (s, e) => { setStartDate(s); setEndDate(e); setPage(1) }
   const clearDateFilter = () => { setStartDate(''); setEndDate(''); setPage(1) }
 
-  const printLabel = async (o) => { setLabelBusy(o.id); await openShippingLabel(apiFetch, o); setLabelBusy(null) }
+  const printLabel = async (o) => { setLabelBusy(o.id); await openShippingLabel(apiFetch, o, toast); setLabelBusy(null) }
   const quickUpdate = async (id, patch) => { setOrders(os => os.map(o => o.id === id ? { ...o, ...patch } : o)); await apiFetch(`/api/crewfit/orders/${id}`, { method: 'PUT', body: JSON.stringify(patch) }) }
   const InlineSelect = ({ o, field, options, cls }) => {
     const opts = options || []
