@@ -48,10 +48,8 @@ export default function Sidebar() {
     <>
       <aside className={`sidebar brand-${brand} ${open ? 'mobile-menu-open' : ''}`}>
         <div className="sidebar-brand">
-          {/* Crewfit has a real lockup; Normless still uses the glyph chip. */}
-          <div className={`brand-mark brand-mark-${brand} ${brand === 'crewfit' ? 'cf-logo' : ''}`} role="img" aria-label={b.name}>
-            {brand !== 'crewfit' && <Icon name={b.glyph} size={22} strokeWidth={2.4} />}
-          </div>
+          {/* Both brands ship a real mark now, so the gradient chip + glyph is retired here. */}
+          <div className={`brand-mark brand-mark-${brand} ${brand === 'crewfit' ? 'cf-logo' : 'n-logo'}`} role="img" aria-label={b.name} />
           <div className="brand-text"><h2>{b.name}</h2><span>{b.tag}</span></div>
         </div>
 

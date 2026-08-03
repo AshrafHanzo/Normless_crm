@@ -704,30 +704,36 @@ select { cursor: pointer; appearance: none;
 .brand-logo-normless { background: linear-gradient(135deg, #7c6cff, #9d92ff) !important; }
 .brand-logo-crewfit { background: linear-gradient(135deg, #14b8a6, #2dd4bf) !important; }
 
-/* Crewfit's real lockup, swapped by theme: the white version disappears on a light background
-   and the black one disappears on a dark one, so each is bound to the theme that suits it.
-   Dark is the app default, hence cf_white on :root with cf_black behind .light-mode. */
-.cf-logo {
-  background-image: url('/logo/cf_white.png');
-  background-repeat: no-repeat;
-  background-position: center;
-  background-size: contain;
-}
+/* Real brand marks, swapped by theme: each file only works on one background — the white
+   version disappears on a light page and the black one on a dark page — so each is bound to the
+   theme that suits it. Dark is the app default, hence *_white on :root and *_black behind
+   .light-mode. Crewfit is a tall lockup (hanger + CREW/FIT), Normless a single "N" glyph, so
+   they're sized independently below. */
+.cf-logo, .n-logo { background-repeat: no-repeat; background-position: center; background-size: contain; }
+.cf-logo { background-image: url('/logo/cf_white.png'); }
+.n-logo { background-image: url('/logo/n_white.png'); }
 :root.light-mode .cf-logo { background-image: url('/logo/cf_black.png'); }
+:root.light-mode .n-logo { background-image: url('/logo/n_black.png'); }
 
-/* On the login card the lockup stands alone — no tile, no glyph behind it. */
-.login-logo.cf-logo { background-color: transparent !important; box-shadow: none; width: 92px; height: 92px; border-radius: 0; margin-bottom: 18px; }
-/* In the sidebar it sits where the brand chip would, sized to stay readable at a glance.
-   background-size/position/repeat are repeated here rather than inherited from .cf-logo because
-   .brand-mark-crewfit's `background` shorthand is declared later and would reset them to auto —
-   which paints the image at its native 3240px, i.e. a blank transparent corner. */
-.brand-mark.cf-logo {
+/* On the login card the mark stands alone — no tile, no glyph behind it. */
+.login-logo.cf-logo, .login-logo.n-logo { background-color: transparent !important; box-shadow: none; border-radius: 0; margin-bottom: 18px; }
+.login-logo.cf-logo { width: 92px; height: 92px; }
+.login-logo.n-logo { width: 68px; height: 68px; } /* solid glyph — reads heavy, so smaller than the Crewfit lockup */
+
+/* In the sidebar the mark sits where the brand chip would, sized to stay readable at a glance.
+   background-size/position/repeat are repeated here rather than inherited from .cf-logo/.n-logo
+   because .brand-mark-crewfit / .brand-mark-normless use the `background` shorthand and are
+   declared later — that shorthand resets size to auto, painting the image at its native 2160–3240px,
+   i.e. a blank transparent corner. This rule is more specific, so it wins. */
+.brand-mark.cf-logo, .brand-mark.n-logo {
   background-color: transparent !important;
-  background-image: url('/logo/cf_white.png');
   background-size: contain; background-position: center; background-repeat: no-repeat;
-  box-shadow: none; width: 46px; height: 46px; border-radius: 0;
+  box-shadow: none; border-radius: 0;
 }
+.brand-mark.cf-logo { background-image: url('/logo/cf_white.png'); width: 46px; height: 46px; }
+.brand-mark.n-logo { background-image: url('/logo/n_white.png'); width: 34px; height: 34px; }
 :root.light-mode .brand-mark.cf-logo { background-image: url('/logo/cf_black.png'); }
+:root.light-mode .brand-mark.n-logo { background-image: url('/logo/n_black.png'); }
 
 /* Segmented brand toggle (login) + switcher (sidebar) */
 .brand-toggle, .brand-switch {
