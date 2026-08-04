@@ -1,6 +1,28 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useSearchParams, Link } from 'react-router-dom'
 
+function EyeIcon({ off }) {
+  return off ? (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c6.5 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68" />
+      <path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3.5 7 10 7a9.74 9.74 0 0 0 5.39-1.61" />
+      <line x1="2" y1="2" x2="22" y2="22" />
+    </svg>
+  ) : (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" /><circle cx="12" cy="12" r="3" />
+    </svg>
+  )
+}
+
+const LockLogo = () => (
+  <div className="login-logo" style={{ color: '#fff' }}>
+    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" />
+    </svg>
+  </div>
+)
+
 export default function ResetPassword() {
   const [searchParams] = useSearchParams()
   const [password, setPassword] = useState('')
@@ -8,49 +30,27 @@ export default function ResetPassword() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState(false)
-  const [showPassword, setShowPassword] = useState(false)
+  const [showPw, setShowPw] = useState(false)
+  const [showConfirm, setShowConfirm] = useState(false)
   const navigate = useNavigate()
   const token = searchParams.get('token')
 
-  useEffect(() => {
-    if (!token) {
-      setError('Invalid reset link. Please request a new one.')
-    }
-  }, [token])
+  useEffect(() => { if (!token) setError('Invalid reset link. Please request a new one.') }, [token])
 
   const handleSubmit = async (e) => {
     e.preventDefault()
-
-    if (password !== confirmPassword) {
-      setError('Passwords do not match')
-      return
-    }
-
-    if (password.length < 6) {
-      setError('Password must be at least 6 characters')
-      return
-    }
-
-    setLoading(true)
-    setError('')
-
+    if (password !== confirmPassword) { setError('Passwords do not match'); return }
+    if (password.length < 6) { setError('Password must be at least 6 characters'); return }
+    setLoading(true); setError('')
     try {
       const res = await fetch('/api/auth/reset-password', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token, password })
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, password }),
       })
-
       const data = await res.json()
-
-      if (!res.ok) {
-        throw new Error(data.message || 'Failed to reset password')
-      }
-
+      if (!res.ok) throw new Error(data.message || 'Failed to reset password')
       setSuccess(true)
-      setTimeout(() => {
-        navigate('/login')
-      }, 2000)
+      setTimeout(() => navigate('/login'), 2000)
     } catch (err) {
       setError(err.message)
     } finally {
@@ -60,157 +60,60 @@ export default function ResetPassword() {
 
   if (!token) {
     return (
-      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'linear-gradient(135deg, var(--bg-primary), var(--bg-secondary))' }}>
-        <div style={{ width: '100%', maxWidth: '420px', padding: '24px' }}>
-          <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', padding: '40px 32px', textAlign: 'center', boxShadow: 'var(--shadow-lg)' }}>
-            <div style={{ fontSize: '48px', marginBottom: '12px' }}>❌</div>
-            <h1 style={{ fontSize: '20px', fontWeight: '700', color: 'var(--text-primary)', marginBottom: '8px' }}>Invalid Link</h1>
-            <p style={{ fontSize: '14px', color: 'var(--text-secondary)', marginBottom: '24px' }}>This password reset link is invalid or has expired.</p>
-            <Link to="/forgot-password" style={{ display: 'inline-block', padding: '12px 24px', background: 'var(--primary)', color: 'white', borderRadius: 'var(--radius-md)', textDecoration: 'none', fontWeight: '600', transition: 'all 0.2s' }}>
-              Request New Link
-            </Link>
-          </div>
+      <div className="login-page">
+        <div className="login-card page-enter" style={{ textAlign: 'center' }}>
+          <LockLogo />
+          <h1>Invalid link</h1>
+          <p>This password reset link is invalid or has expired.</p>
+          <Link to="/forgot-password" className="btn btn-primary" style={{ width: '100%', marginTop: 8 }}>Request New Link</Link>
+          <div style={{ marginTop: 18 }}><Link to="/login" style={{ color: 'var(--primary-light)', fontSize: 13 }}>Back to Login</Link></div>
         </div>
       </div>
     )
   }
 
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'linear-gradient(135deg, var(--bg-primary), var(--bg-secondary))' }}>
-      <div style={{ width: '100%', maxWidth: '420px', padding: '24px' }}>
-        <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', padding: '40px 32px', boxShadow: 'var(--shadow-lg)' }}>
-          {/* Header */}
-          <div style={{ marginBottom: '32px', textAlign: 'center' }}>
-            <div style={{ fontSize: '48px', marginBottom: '12px' }}>🔑</div>
-            <h1 style={{ fontSize: '24px', fontWeight: '700', color: 'var(--text-primary)', marginBottom: '8px' }}>Set New Password</h1>
-            <p style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>Enter your new password below</p>
+    <div className="login-page">
+      <div className="login-card page-enter">
+        <LockLogo />
+        <h1>Set new password</h1>
+        <p>Choose a strong new password for your account</p>
+
+        {success ? (
+          <div style={{ padding: 16, background: 'var(--success-bg)', borderRadius: 'var(--radius-md)', textAlign: 'center' }}>
+            <div style={{ color: 'var(--success)', fontWeight: 600 }}>✓ Password reset successfully</div>
+            <div style={{ fontSize: 12.5, color: 'var(--text-muted)', marginTop: 6 }}>Redirecting to login…</div>
           </div>
-
-          {success ? (
-            <div style={{ padding: '16px', background: 'var(--success-bg)', border: `1px solid var(--success)`, borderRadius: 'var(--radius-md)', marginBottom: '24px', textAlign: 'center' }}>
-              <p style={{ color: 'var(--success)', fontWeight: '500', fontSize: '14px' }}>✓ Password reset successfully!</p>
-              <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '8px' }}>Redirecting to login...</p>
-            </div>
-          ) : (
-            <>
-              {error && (
-                <div style={{ padding: '12px 16px', background: 'var(--danger-bg)', border: `1px solid var(--danger)`, borderRadius: 'var(--radius-md)', marginBottom: '20px' }}>
-                  <p style={{ color: 'var(--danger)', fontSize: '13px', fontWeight: '500' }}>✕ {error}</p>
+        ) : (
+          <>
+            {error && <div className="login-error">{error}</div>}
+            <form onSubmit={handleSubmit}>
+              <div className="input-group">
+                <label>New Password</label>
+                <div className="password-wrap">
+                  <input type={showPw ? 'text' : 'password'} value={password} onChange={e => setPassword(e.target.value)} placeholder="Enter new password" required autoFocus />
+                  <button type="button" className="password-toggle" onClick={() => setShowPw(v => !v)} aria-label="Toggle password"><EyeIcon off={showPw} /></button>
                 </div>
-              )}
+              </div>
 
-              <form onSubmit={handleSubmit}>
-                {/* Password */}
-                <div style={{ marginBottom: '16px' }}>
-                  <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', color: 'var(--text-secondary)', marginBottom: '8px' }}>New Password</label>
-                  <div style={{ position: 'relative' }}>
-                    <input
-                      type={showPassword ? 'text' : 'password'}
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      placeholder="Enter new password"
-                      required
-                      style={{
-                        width: '100%',
-                        padding: '12px 14px',
-                        paddingRight: '40px',
-                        background: 'var(--surface)',
-                        border: '1px solid var(--border)',
-                        borderRadius: 'var(--radius-md)',
-                        color: 'var(--text-primary)',
-                        fontSize: '14px',
-                        transition: 'all 0.2s'
-                      }}
-                      onFocus={(e) => {
-                        e.target.style.borderColor = 'var(--primary)'
-                        e.target.style.boxShadow = '0 0 0 3px rgba(99, 102, 241, 0.1)'
-                      }}
-                      onBlur={(e) => {
-                        e.target.style.borderColor = 'var(--border)'
-                        e.target.style.boxShadow = 'none'
-                      }}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowPassword(!showPassword)}
-                      style={{
-                        position: 'absolute',
-                        right: '12px',
-                        top: '50%',
-                        transform: 'translateY(-50%)',
-                        background: 'none',
-                        border: 'none',
-                        cursor: 'pointer',
-                        fontSize: '16px',
-                        opacity: 0.6
-                      }}
-                    >
-                      {showPassword ? '👁️' : '🙈'}
-                    </button>
-                  </div>
+              <div className="input-group">
+                <label>Confirm Password</label>
+                <div className="password-wrap">
+                  <input type={showConfirm ? 'text' : 'password'} value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} placeholder="Re-enter new password" required />
+                  <button type="button" className="password-toggle" onClick={() => setShowConfirm(v => !v)} aria-label="Toggle confirm password"><EyeIcon off={showConfirm} /></button>
                 </div>
+                {confirmPassword && password !== confirmPassword && <span style={{ fontSize: 12, color: 'var(--danger)', marginTop: 6, display: 'block' }}>Passwords don't match</span>}
+              </div>
 
-                {/* Confirm Password */}
-                <div style={{ marginBottom: '24px' }}>
-                  <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', color: 'var(--text-secondary)', marginBottom: '8px' }}>Confirm Password</label>
-                  <input
-                    type="password"
-                    value={confirmPassword}
-                    onChange={(e) => setConfirmPassword(e.target.value)}
-                    placeholder="Confirm password"
-                    required
-                    style={{
-                      width: '100%',
-                      padding: '12px 14px',
-                      background: 'var(--surface)',
-                      border: '1px solid var(--border)',
-                      borderRadius: 'var(--radius-md)',
-                      color: 'var(--text-primary)',
-                      fontSize: '14px',
-                      transition: 'all 0.2s'
-                    }}
-                    onFocus={(e) => {
-                      e.target.style.borderColor = 'var(--primary)'
-                      e.target.style.boxShadow = '0 0 0 3px rgba(99, 102, 241, 0.1)'
-                    }}
-                    onBlur={(e) => {
-                      e.target.style.borderColor = 'var(--border)'
-                      e.target.style.boxShadow = 'none'
-                    }}
-                  />
-                </div>
+              <button type="submit" className="btn btn-primary" disabled={loading} style={{ width: '100%', marginTop: 8 }}>
+                {loading ? 'Resetting…' : 'Reset Password'}
+              </button>
+            </form>
+          </>
+        )}
 
-                <button
-                  type="submit"
-                  disabled={loading}
-                  style={{
-                    width: '100%',
-                    padding: '12px 16px',
-                    background: loading ? 'rgba(99, 102, 241, 0.5)' : 'linear-gradient(135deg, var(--primary), var(--primary-light))',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: 'var(--radius-md)',
-                    fontSize: '14px',
-                    fontWeight: '600',
-                    cursor: loading ? 'not-allowed' : 'pointer',
-                    transition: 'all 0.3s',
-                    opacity: loading ? 0.7 : 1
-                  }}
-                >
-                  {loading ? 'Resetting...' : 'Reset Password'}
-                </button>
-              </form>
-            </>
-          )}
-
-          {/* Back to Login */}
-          <div style={{ marginTop: '24px', textAlign: 'center', paddingTop: '20px', borderTop: '1px solid var(--border)' }}>
-            <p style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>
-              <Link to="/login" style={{ color: 'var(--primary)', fontWeight: '600', textDecoration: 'none', transition: 'color 0.2s' }} onMouseEnter={(e) => e.target.style.color = 'var(--primary-light)'} onMouseLeave={(e) => e.target.style.color = 'var(--primary)'}>
-                Back to Login
-              </Link>
-            </p>
-          </div>
+        <div style={{ marginTop: 22, textAlign: 'center', paddingTop: 18, borderTop: '1px solid var(--border)' }}>
+          <Link to="/login" style={{ color: 'var(--primary-light)', fontWeight: 600, fontSize: 14 }}>Back to Login</Link>
         </div>
       </div>
     </div>

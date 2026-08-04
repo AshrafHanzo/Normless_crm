@@ -168,13 +168,13 @@ router.post('/forgot-password', async (req, res) => {
         // Generate reset token
         const resetToken = crypto.randomBytes(32).toString('hex');
         const tokenHash = crypto.createHash('sha256').update(resetToken).digest('hex');
-        const expiresAt = new Date(Date.now() + 1 * 60 * 60 * 1000); // 1 hour
 
-        // Store token in database
+        // Store token — compute expiry with the DB's own clock (NOW() + 1 hour) so it
+        // matches the `expires_at > NOW()` check regardless of the server's timezone.
         await db.query(
             `INSERT INTO password_reset_tokens (user_id, token, expires_at)
-             VALUES ($1, $2, $3)`,
-            [user.id, tokenHash, expiresAt.toISOString()]
+             VALUES ($1, $2, NOW() + INTERVAL '1 hour')`,
+            [user.id, tokenHash]
         );
 
         // Build reset URL
