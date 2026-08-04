@@ -539,26 +539,42 @@ router.get('/orders/:id/invoice/:type', async (req, res) => {
       return res.status(400).json({ error: 'Order is not marked Fully Paid yet' });
     }
 
-    const invoices = safeJson(order.invoices, []);
-    let invoice = invoices.find(i => i.type === type);
-    if (!invoice) {
+    // grand_total already INCLUDES GST (the drawer computes products + shipping + GST), and so do
+    // the advance/balance halves. The invoice therefore has to work backwards out of the amount —
+    // charging GST on top of it would bill more than the order is worth and make the two invoices
+    // add up to more than the grand total.
+    const invoiceFigures = () => {
       // Older/imported orders may not have advance/balance columns populated — fall back to a 50/50
       // split of the grand total rather than silently invoicing for Rs. 0.
       const grand = Number(order.grand_total) || 0;
       const advance = order.advance != null ? Number(order.advance) : Math.round(grand / 2);
       const balance = order.balance != null ? Number(order.balance) : (grand - advance);
       const amount = type === 'advance' ? advance : balance;
-      const gstPct = ((Number(order.product_total) || 0) + (Number(order.shipping) || 0)) > 0
-        ? Math.round((Number(order.gst_amount) || 0) / ((Number(order.product_total) || 0) + (Number(order.shipping) || 0)) * 100)
-        : 0;
-      const taxable = Math.round(amount / (1 + gstPct / 100));
-      invoice = {
-        number: await nextInvoiceNumber(db),
-        type,
-        date: new Date().toISOString().slice(0, 10),
-        amount, taxable_value: taxable, gst_pct: gstPct, gst_amount: amount - taxable,
-      };
+      const base = (Number(order.product_total) || 0) + (Number(order.shipping) || 0); // pre-GST
+      const gstPct = base > 0 ? Math.round((Number(order.gst_amount) || 0) / base * 100) : 0;
+      // Split this invoice's slice in the same pre-GST:GST ratio as the order itself, rather than
+      // dividing by a rounded percentage — exact, and the halves always re-add to the grand total.
+      const taxable = grand > 0 ? Math.round(amount * base / grand) : amount;
+      return { amount, taxable_value: taxable, gst_pct: gstPct, gst_amount: amount - taxable };
+    };
+
+    const invoices = safeJson(order.invoices, []);
+    let invoice = invoices.find(i => i.type === type);
+    const fresh = invoiceFigures();
+    let dirty = false;
+
+    if (!invoice) {
+      invoice = { number: await nextInvoiceNumber(db), type, date: todayStr(), ...fresh };
       invoices.push(invoice);
+      dirty = true;
+    } else if (invoice.amount !== fresh.amount || invoice.taxable_value !== fresh.taxable_value) {
+      // The order was edited after this invoice was issued, so the stored figures no longer match
+      // what the customer owes. Refresh them in place but keep the original number and date —
+      // re-issuing would burn a new sequence number and leave a gap in the tax numbering.
+      Object.assign(invoice, fresh);
+      dirty = true;
+    }
+    if (dirty) {
       await db.query('UPDATE crewfit_orders SET invoices = $1 WHERE id = $2', [JSON.stringify(invoices), req.params.id]);
     }
 
