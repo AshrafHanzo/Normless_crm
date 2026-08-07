@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useApi } from '../App'
+import AutoTextarea from '../components/AutoTextarea'
 
 export default function Customers() {
   const apiFetch = useApi()
@@ -260,7 +261,7 @@ export default function Customers() {
                   </div>
                   <div className="input-group">
                     <label>Notes</label>
-                    <textarea value={editNotes} onChange={e => setEditNotes(e.target.value)} placeholder="Internal notes about this customer..." />
+                    <AutoTextarea value={editNotes} onChange={e => setEditNotes(e.target.value)} placeholder="Internal notes about this customer..." />
                   </div>
                   <button className="btn btn-primary btn-sm" onClick={saveCustomerFields}>Save Changes</button>
                 </div>
@@ -280,7 +281,7 @@ export default function Customers() {
                   </div>
                   <div className="input-group">
                     <label>Content</label>
-                    <textarea value={interactionContent} onChange={e => setInteractionContent(e.target.value)} placeholder="What happened?" />
+                    <AutoTextarea value={interactionContent} onChange={e => setInteractionContent(e.target.value)} placeholder="What happened?" />
                   </div>
                   <button className="btn btn-primary btn-sm" onClick={addInteraction}>Add Interaction</button>
                 </div>

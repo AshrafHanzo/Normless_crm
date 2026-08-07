@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import useDirtyGuard from '../../hooks/useDirtyGuard'
 import { useNavigate } from 'react-router-dom'
 import { useApi } from '../../App'
 import { useToast } from '../../components/Toast'
@@ -47,6 +48,14 @@ export default function CrewfitPayments() {
   const [endDate, setEndDate] = useState('')
   const [page, setPage] = useState(1)
   const [creating, setCreating] = useState(false)
+  const guard = useDirtyGuard({
+    snapshot: creating ? form : null,
+    identity: creating ? 'new' : null,
+    onDiscard: () => { setCreating(false); setForm(blankForm) },
+    confirm: toast.confirm,
+    title: 'Discard this payment link?',
+    message: 'You have started filling in a payment link. Closing now will lose it.',
+  })
   const [form, setForm] = useState(blankForm)
   const [saving, setSaving] = useState(false)
   const [copiedId, setCopiedId] = useState(null)
@@ -102,6 +111,7 @@ export default function CrewfitPayments() {
     setSaving(false)
     if (!res || res.error) { toast.error(res?.error || 'Failed to create payment link'); return }
     toast.success(`${fmt(res.amount)} link created for ${res.customer_name}`, { title: 'Payment link ready' })
+    guard.reset()
     setForm(blankForm); setCreating(false); setPage(1); load()
   }
 
@@ -175,7 +185,7 @@ export default function CrewfitPayments() {
             <input value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} placeholder="e.g. Sampling charges, rush delivery top-up" /></div>
           <div style={{ display: 'flex', gap: 10 }}>
             <button type="submit" className="btn btn-primary" disabled={saving || !data?.configured}>{saving ? 'Creating…' : 'Create link'}</button>
-            <button type="button" className="btn btn-secondary" onClick={() => { setCreating(false); setForm(blankForm) }}>Cancel</button>
+            <button type="button" className="btn btn-secondary" onClick={guard.requestClose}>Cancel</button>
           </div>
         </form>
       )}

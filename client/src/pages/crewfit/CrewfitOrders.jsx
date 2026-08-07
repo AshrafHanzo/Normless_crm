@@ -105,10 +105,23 @@ export default function CrewfitOrders() {
               <thead><tr><th>#</th><th>Date</th><th>Customer</th><th>Product</th><th style={{ textAlign: 'center' }}>Qty</th><th style={{ textAlign: 'right' }}>Total</th><th>Deadline</th><th>Status</th><th>Payment</th><th>Layout</th><th>Photos</th><th style={{ textAlign: 'center' }}>Label</th></tr></thead>
               <tbody>
                 {orders.map(o => (
-                  <tr key={o.id} onClick={() => setTarget(o)}>
-                    <td data-label="Order #" style={{ color: 'var(--text-muted)' }}>{o.sl_no}</td>
+                  <tr key={o.id} onClick={() => setTarget(o)} className={o.notes?.trim() ? 'has-note' : ''}>
+                    <td data-label="Order #" style={{ color: 'var(--text-muted)' }}>
+                      <span className="order-no">
+                        {o.sl_no}
+                        {o.notes?.trim() && (
+                          <span className="note-flag" title={o.notes} aria-label="Has an internal note">
+                            <Icon name="note" size={13} />
+                          </span>
+                        )}
+                      </span>
+                    </td>
                     <td data-label="Date" style={{ fontSize: 12.5 }}>{(o.order_date || '').slice(0, 10) || '—'}</td>
-                    <td className="cell-primary"><div style={{ fontWeight: 600 }}>{o.customer_name}</div><div style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>{o.contact_number}</div></td>
+                    <td className="cell-primary">
+                      <div style={{ fontWeight: 600 }}>{o.customer_name}</div>
+                      <div style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>{o.contact_number}</div>
+                      {o.notes?.trim() && <div className="note-preview" title={o.notes}>{o.notes.trim()}</div>}
+                    </td>
                     <td data-label="Product" style={{ fontSize: 12.5, maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.product || '—'}</td>
                     <td data-label="Qty" style={{ textAlign: 'center' }}>{o.qty || '—'}</td>
                     <td data-label="Total" style={{ textAlign: 'right', fontWeight: 700 }}>{o.total_cost ? fmt(o.total_cost) : '—'}</td>

@@ -1368,9 +1368,39 @@ html, body { max-width: 100%; overflow-x: hidden; }
   /* A collapsed section is just its heading, so drop the heading's own spacing. */
   .drawer-section:not(.open) > .form-section { margin: 0; padding-bottom: 10px; }
   /* Header actions ("+ Add product", "Copy"/"Send") are meaningless while collapsed. !important
-     because those spans carry an inline display:flex that a plain rule can't override. */
-  .drawer-section:not(.open) > .form-section > :not(.section-toggle) { display: none !important; }
+     because those spans carry an inline display:flex that a plain rule can't override.
+     The count badge is exempt — knowing "Products 3" without expanding is the point of it. */
+  .drawer-section:not(.open) > .form-section > :not(.section-toggle):not(.section-count) { display: none !important; }
 }
+
+/* ============================================================
+   LINE ITEMS — ADD PRODUCT FEEDBACK
+   ============================================================ */
+/* Row count in a section header, e.g. "3 products". Solid rather than tinted: at 11px a washed
+   -out chip reads as decoration, and this is the number being checked before saving. */
+.section-count {
+  display: inline-flex; align-items: center; height: 21px; padding: 0 10px;
+  margin-left: 4px; border-radius: 11px; font-size: 11.5px; font-weight: 700; line-height: 1;
+  letter-spacing: 0.02em; white-space: nowrap; color: #fff; background: var(--primary);
+  box-shadow: var(--shadow-glow);
+}
+/* A newly added row is scrolled to and pulsed, so adding one is never silent. */
+.line-item-card.just-added { animation: itemAdded 1.8s ease; }
+@keyframes itemAdded {
+  0%   { border-color: var(--primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 30%, transparent); }
+  60%  { border-color: var(--primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 18%, transparent); }
+  100% { border-color: var(--border); box-shadow: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .line-item-card.just-added { animation: none; border-color: var(--primary); }
+}
+/* Full-width "add another" at the foot of the list. */
+.add-item-btn {
+  width: 100%; padding: 11px; border: 1px dashed var(--border); border-radius: var(--radius-md);
+  background: transparent; color: var(--text-secondary); font-family: var(--font);
+  font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.15s ease;
+}
+.add-item-btn:hover { border-color: var(--primary); color: var(--primary-light); background: color-mix(in srgb, var(--primary) 7%, transparent); }
 
 /* ============================================================
    GST INVOICES — SALES / PURCHASE TABS
@@ -1390,3 +1420,56 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .gst-derived input { font-variant-numeric: tabular-nums; }
 .gst-hint { font-size: 11.5px; color: var(--text-muted); margin-top: 4px; }
 .gst-hint.warn { color: var(--warning, #d97706); }
+
+/* ============================================================
+   ORDER NOTES — VISIBLE FROM THE LIST
+   ============================================================ */
+/* A note lives inside the drawer, so without a marker on the row there is no way to know it is
+   there without opening every order. */
+.order-no { display: inline-flex; align-items: center; gap: 6px; }
+.note-flag {
+  display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 6px;
+  color: var(--warning, #d97706); background: color-mix(in srgb, var(--warning, #d97706) 16%, transparent);
+  cursor: help; flex-shrink: 0;
+}
+.note-preview {
+  margin-top: 4px; max-width: 230px; padding-left: 7px;
+  border-left: 2px solid color-mix(in srgb, var(--warning, #d97706) 55%, transparent);
+  font-size: 11px; line-height: 1.4; color: var(--text-muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* Tinting the whole row would fight the status colours already carried in these cells, so the
+   cue is a marker on the edge instead. */
+.data-table tbody tr.has-note > td:first-child { box-shadow: inset 3px 0 0 color-mix(in srgb, var(--warning, #d97706) 65%, transparent); }
+
+@media (max-width: 900px) {
+  .note-preview { max-width: none; white-space: normal; }
+}
+
+/* ============================================================
+   VENDOR ORDERS — COLOUR / SIZE BLOCKS
+   ============================================================ */
+.vo-color {
+  margin-top: 12px; padding: 12px; border: 1px solid var(--border);
+  border-radius: var(--radius-md); background: color-mix(in srgb, var(--surface) 60%, transparent);
+}
+.vo-color-head { display: flex; align-items: flex-end; gap: 10px; margin-bottom: 10px; }
+.vo-color-qty {
+  font-size: 12px; font-weight: 700; color: var(--text-secondary); white-space: nowrap; padding-bottom: 9px;
+}
+
+/* ============================================================
+   SORTABLE TABLE HEADINGS
+   ============================================================ */
+.sort-th {
+  display: inline-flex; align-items: center; gap: 5px; width: 100%;
+  padding: 0; border: 0; background: none; cursor: pointer;
+  font: inherit; color: inherit; letter-spacing: inherit; text-transform: inherit;
+}
+.sort-th:hover { color: var(--text-primary); }
+/* The neutral arrow is a hint, not a label — it only earns full contrast once the column is
+   actually the one being sorted by. */
+.sort-arrow { font-size: 9px; opacity: 0.35; transition: opacity 0.15s ease; }
+.sort-th:hover .sort-arrow { opacity: 0.7; }
+.sort-th.active { color: var(--primary-light); }
+.sort-th.active .sort-arrow { opacity: 1; }

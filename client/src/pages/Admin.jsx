@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import useDirtyGuard from '../hooks/useDirtyGuard'
 import { useApi, useAuth } from '../App'
 import { useToast } from '../components/Toast'
 import Icon from '../components/Icon'
@@ -19,21 +20,22 @@ const GROUPS = [
     { key: 'crewfit_catalog', label: 'Catalog', icon: 'shirt' },
     { key: 'crewfit_calculator', label: 'Quotes', icon: 'spark' },
     { key: 'crewfit_payments', label: 'Payments', icon: 'card' },
+    { key: 'crewfit_vendors', label: 'Vendor Orders', icon: 'truck' },
   ] },
 ]
 
-const blankForm = () => ({ username: '', password: '', role: 'operator', normless: true, dashboard: true, customers: true, orders: true, scanner: true, invoices: false, crewfit: false, crewfit_analytics: false, crewfit_followups: false, crewfit_orders: false, crewfit_catalog: false, crewfit_calculator: false, crewfit_payments: false, crewfit_customers: false, revenue: false })
+const blankForm = () => ({ username: '', password: '', role: 'operator', normless: true, dashboard: true, customers: true, orders: true, scanner: true, invoices: false, crewfit: false, crewfit_analytics: false, crewfit_followups: false, crewfit_orders: false, crewfit_catalog: false, crewfit_calculator: false, crewfit_payments: false, crewfit_customers: false, crewfit_vendors: false, revenue: false })
 const fromUser = (u) => ({
   id: u.id, username: u.username, password: '', role: u.role,
   normless: !!u.can_access_normless, dashboard: !!u.can_view_dashboard, customers: !!u.can_view_customers, orders: !!u.can_view_orders, scanner: !!u.can_scan_orders, invoices: !!u.can_view_invoices,
-  crewfit: !!u.can_access_crewfit, crewfit_analytics: !!u.can_view_crewfit_analytics, crewfit_followups: !!u.can_view_crewfit_followups, crewfit_orders: !!u.can_view_crewfit_orders, crewfit_catalog: !!u.can_view_crewfit_catalog, crewfit_calculator: !!u.can_view_crewfit_calculator, crewfit_payments: !!u.can_view_crewfit_payments, crewfit_customers: !!u.can_view_crewfit_customers, revenue: !!u.can_view_revenue,
+  crewfit: !!u.can_access_crewfit, crewfit_analytics: !!u.can_view_crewfit_analytics, crewfit_followups: !!u.can_view_crewfit_followups, crewfit_orders: !!u.can_view_crewfit_orders, crewfit_catalog: !!u.can_view_crewfit_catalog, crewfit_calculator: !!u.can_view_crewfit_calculator, crewfit_payments: !!u.can_view_crewfit_payments, crewfit_customers: !!u.can_view_crewfit_customers, crewfit_vendors: !!u.can_view_crewfit_vendors, revenue: !!u.can_view_revenue,
 })
 const buildPerms = (f) => {
-  if (f.role === 'admin') return { normless: true, crewfit: true, dashboard: true, customers: true, orders: true, scanner: true, invoices: true, crewfit_analytics: true, crewfit_followups: true, crewfit_orders: true, crewfit_catalog: true, crewfit_calculator: true, crewfit_payments: true, crewfit_customers: true, revenue: true, sync: false }
+  if (f.role === 'admin') return { normless: true, crewfit: true, dashboard: true, customers: true, orders: true, scanner: true, invoices: true, crewfit_analytics: true, crewfit_followups: true, crewfit_orders: true, crewfit_catalog: true, crewfit_calculator: true, crewfit_payments: true, crewfit_customers: true, crewfit_vendors: true, revenue: true, sync: false }
   return {
     normless: !!f.normless, crewfit: !!f.crewfit, sync: false,
     dashboard: !!(f.normless && f.dashboard), customers: !!(f.normless && f.customers), orders: !!(f.normless && f.orders), scanner: !!(f.normless && f.scanner), invoices: !!(f.normless && f.invoices),
-    crewfit_analytics: !!(f.crewfit && f.crewfit_analytics), crewfit_followups: !!(f.crewfit && f.crewfit_followups), crewfit_orders: !!(f.crewfit && f.crewfit_orders), crewfit_catalog: !!(f.crewfit && f.crewfit_catalog), crewfit_calculator: !!(f.crewfit && f.crewfit_calculator), crewfit_payments: !!(f.crewfit && f.crewfit_payments), crewfit_customers: !!(f.crewfit && f.crewfit_customers), revenue: !!f.revenue,
+    crewfit_analytics: !!(f.crewfit && f.crewfit_analytics), crewfit_followups: !!(f.crewfit && f.crewfit_followups), crewfit_orders: !!(f.crewfit && f.crewfit_orders), crewfit_catalog: !!(f.crewfit && f.crewfit_catalog), crewfit_calculator: !!(f.crewfit && f.crewfit_calculator), crewfit_payments: !!(f.crewfit && f.crewfit_payments), crewfit_customers: !!(f.crewfit && f.crewfit_customers), crewfit_vendors: !!(f.crewfit && f.crewfit_vendors), revenue: !!f.revenue,
   }
 }
 
@@ -45,6 +47,12 @@ export default function AdminManagement() {
   const [loading, setLoading] = useState(true)
   const [stats, setStats] = useState(null)
   const [form, setForm] = useState(null)
+  const guard = useDirtyGuard({
+    snapshot: form,
+    identity: form ? (form.id ?? 'new') : null,
+    onDiscard: () => setForm(null),
+    confirm: toast.confirm,
+  })
   const [saving, setSaving] = useState(false)
 
   useEffect(() => { loadUsers(); loadStats() }, [])
@@ -60,7 +68,7 @@ export default function AdminManagement() {
     if (form.id) res = await apiFetch(`/api/admin/users/${form.id}`, { method: 'PUT', body: JSON.stringify({ role: form.role, permissions }) })
     else res = await apiFetch('/api/admin/users', { method: 'POST', body: JSON.stringify({ username: form.username, password: form.password, role: form.role, permissions }) })
     setSaving(false)
-    if (res?.success) { setForm(null); loadUsers(); loadStats(); toast.success(form.id ? 'User updated' : 'User created') } else toast.error(res?.error || 'Save failed')
+    if (res?.success) { guard.reset(); setForm(null); loadUsers(); loadStats(); toast.success(form.id ? 'User updated' : 'User created') } else toast.error(res?.error || 'Save failed')
   }
 
   const del = async (id) => {
@@ -142,7 +150,7 @@ export default function AdminManagement() {
 
           <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
             <button className="btn btn-primary" onClick={save} disabled={saving}>{saving ? 'Saving…' : (form.id ? 'Save changes' : 'Create user')}</button>
-            <button className="btn btn-secondary" onClick={() => setForm(null)}>Cancel</button>
+            <button className="btn btn-secondary" onClick={guard.requestClose}>Cancel</button>
           </div>
         </div>
       )}

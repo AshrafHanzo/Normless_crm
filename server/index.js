@@ -173,6 +173,7 @@ const razorpayConfig = require('./config/razorpay');
 const crewfitPaymentsRoutes = require('./routes/crewfit-payments');
 const { settlePayment } = crewfitPaymentsRoutes;
 const crewfitCustomersRoutes = require('./routes/crewfit-customers');
+const crewfitVendorOrderRoutes = require('./routes/crewfit-vendor-orders');
 
 // Public routes
 app.use('/api/auth', authRoutes);
@@ -241,6 +242,7 @@ app.use('/api/invoices', authMiddleware, invoiceRoutes);
 app.use('/api/crewfit/quotes', authMiddleware, crewfitQuotesRoutes);
 app.use('/api/crewfit/payments', authMiddleware, crewfitPaymentsRoutes);
 app.use('/api/crewfit/customers', authMiddleware, crewfitCustomersRoutes);
+app.use('/api/crewfit/vendor-orders', authMiddleware, crewfitVendorOrderRoutes);
 app.use('/api/crewfit', authMiddleware, crewfitRoutes);
 
 // Health check
@@ -359,11 +361,14 @@ async function ensureCrewfitSchema() {
                 ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_revenue BOOLEAN DEFAULT false;
                 -- Normless GST sales invoicing (the Invoices menu).
                 ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_invoices BOOLEAN DEFAULT false;
+                -- Crewfit purchase orders raised to manufacturing vendors.
+                ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_crewfit_vendors BOOLEAN DEFAULT false;
             `);
             await db.query(`UPDATE admin_users SET can_access_normless=true, can_access_crewfit=true,
                 can_view_crewfit_followups=true, can_view_crewfit_orders=true, can_view_crewfit_catalog=true,
                 can_view_crewfit_analytics=true, can_view_crewfit_calculator=true, can_view_crewfit_payments=true,
-                can_view_crewfit_customers=true, can_view_revenue=true, can_view_invoices=true
+                can_view_crewfit_customers=true, can_view_revenue=true, can_view_invoices=true,
+                can_view_crewfit_vendors=true
                 WHERE role IN ('owner','admin')`);
         } catch (e) { console.error('admin perms ensure:', e.message); }
 
@@ -438,6 +443,49 @@ async function ensureCrewfitSchema() {
                 CREATE INDEX IF NOT EXISTS crewfit_payments_order_idx ON crewfit_payments (order_id);
             `);
         } catch (e) { console.error('crewfit_payments ensure:', e.message); }
+
+        // Purchase orders raised to manufacturing vendors. Deliberately standalone — one vendor
+        // order can cover several styles at once, so tying it to a single customer order would
+        // fit the minority case.
+        try {
+            await db.exec(`
+                CREATE TABLE IF NOT EXISTS crewfit_vendor_orders (
+                    id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                    ref_no INTEGER,
+                    order_date DATE NOT NULL,
+                    vendor TEXT NOT NULL,
+                    vendor_phone TEXT,
+                    delivery_date DATE,
+                    status TEXT DEFAULT 'Pending',
+                    payment_status TEXT DEFAULT 'Not Paid',
+                    -- [{ product_type, gsm, rate, colors:[{ color, sizes:{S:2,...} }] }]
+                    items TEXT,
+                    notes TEXT,
+                    total_qty INTEGER DEFAULT 0,
+                    total_amount NUMERIC,
+                    confirmed_at TIMESTAMP,
+                    sent_at TIMESTAMP,
+                    created_by TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                ALTER TABLE crewfit_vendor_orders ADD COLUMN IF NOT EXISTS delivery_date DATE;
+                ALTER TABLE crewfit_vendor_orders ADD COLUMN IF NOT EXISTS payment_status TEXT DEFAULT 'Not Paid';
+                CREATE INDEX IF NOT EXISTS crewfit_vendor_orders_date_idx ON crewfit_vendor_orders (order_date DESC);
+                CREATE UNIQUE INDEX IF NOT EXISTS crewfit_vendor_orders_ref_idx ON crewfit_vendor_orders (ref_no);
+
+                -- Remembers vendors and their WhatsApp numbers so the dropdown fills itself as
+                -- new names are typed in; a vendor typed once is offered from then on.
+                CREATE TABLE IF NOT EXISTS crewfit_vendors (
+                    id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                    name TEXT NOT NULL,
+                    phone TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS crewfit_vendors_name_idx ON crewfit_vendors (LOWER(name));
+            `);
+        } catch (e) { console.error('crewfit_vendor_orders ensure:', e.message); }
 
         const c = await db.query('SELECT COUNT(*) AS n FROM crewfit_products');
         if (parseInt(c.rows[0].n, 10) === 0) {

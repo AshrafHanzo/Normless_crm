@@ -3,6 +3,7 @@ import { useApi, useAuth } from '../App'
 import { useToast } from '../components/Toast'
 import DateRangeFilter from '../components/DateRangeFilter'
 import Icon from '../components/Icon'
+import useDirtyGuard from '../hooks/useDirtyGuard'
 
 const money = (v) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 2 }).format(Number(v) || 0)
 const num = (v) => new Intl.NumberFormat('en-IN').format(Number(v) || 0)
@@ -247,6 +248,14 @@ function PurchaseDrawer({ bill, suppliers, onClose, onSaved, apiFetch, toast }) 
   const [form, setForm] = useState(bill)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const guard = useDirtyGuard({
+    snapshot: form,
+    identity: form.id ?? 'new',
+    onDiscard: onClose,
+    confirm: toast.confirm,
+    title: form.id ? 'Discard your edits?' : 'Discard this bill?',
+    message: 'This bill has unsaved details. Closing now will lose them.',
+  })
 
   const set = (patch) => setForm(f => ({ ...f, ...patch }))
 
@@ -327,15 +336,16 @@ function PurchaseDrawer({ bill, suppliers, onClose, onSaved, apiFetch, toast }) 
     if (!res) return
     if (res.error) { setError(res.error); return }
     toast.success(form.id ? 'Bill updated' : 'Bill recorded')
+    guard.reset()
     onSaved()
   }
 
   return (
-    <div className="drawer-overlay" onClick={onClose}>
+    <div className="drawer-overlay" onClick={guard.requestClose}>
       <div className="drawer drawer-wide" onClick={e => e.stopPropagation()}>
         <div className="drawer-header">
           <h2 style={{ fontSize: 17 }}>{form.id ? 'Edit bill' : 'Record purchase bill'}</h2>
-          <button className="btn-icon" onClick={onClose}><Icon name="close" size={16} /></button>
+          <button className="btn-icon" onClick={guard.requestClose}><Icon name="close" size={16} /></button>
         </div>
 
         <div className="drawer-body">
@@ -446,7 +456,7 @@ function PurchaseDrawer({ bill, suppliers, onClose, onSaved, apiFetch, toast }) 
           </div>
 
           <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', paddingTop: 4 }}>
-            <button className="btn" onClick={onClose}>Cancel</button>
+            <button className="btn" onClick={guard.requestClose}>Cancel</button>
             <button className="btn btn-primary" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save bill'}</button>
           </div>
         </div>

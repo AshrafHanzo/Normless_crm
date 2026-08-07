@@ -1,4 +1,6 @@
 import { useState, useEffect } from 'react'
+import useDirtyGuard from '../../hooks/useDirtyGuard'
+import AutoTextarea from '../../components/AutoTextarea'
 import { useApi, useAuth } from '../../App'
 import { useToast } from '../../components/Toast'
 import { CATALOG, COLOR_HEX, CONTACT } from './catalog'
@@ -22,6 +24,12 @@ export default function CrewfitCatalog() {
   const [q, setQ] = useState('')
   const [products, setProducts] = useState(null)
   const [edit, setEdit] = useState(null) // product being edited/created
+  const guard = useDirtyGuard({
+    snapshot: edit,
+    identity: edit ? (edit.id ?? 'new') : null,
+    onDiscard: () => setEdit(null),
+    confirm: toast.confirm,
+  })
   const [saving, setSaving] = useState(false)
 
   const load = () => apiFetch('/api/crewfit/products').then(r => setProducts(r?.products?.length ? r.products : CATALOG))
@@ -49,7 +57,7 @@ export default function CrewfitCatalog() {
     const isNew = !edit.id
     const res = await apiFetch(`/api/crewfit/products${isNew ? '' : '/' + edit.id}`, { method: isNew ? 'POST' : 'PUT', body: JSON.stringify(body) })
     setSaving(false)
-    if (res && !res.error) { setEdit(null); load(); toast.success(edit.id ? 'Product updated' : 'Product added') } else toast.error(res?.error || 'Save failed')
+    if (res && !res.error) { guard.reset(); setEdit(null); load(); toast.success(edit.id ? 'Product updated' : 'Product added') } else toast.error(res?.error || 'Save failed')
   }
 
   const del = async (p) => {
@@ -103,9 +111,9 @@ export default function CrewfitCatalog() {
 
       {edit && (
         <>
-          <div className="drawer-overlay" onClick={() => setEdit(null)} />
+          <div className="drawer-overlay" onClick={guard.requestClose} />
           <div className="drawer">
-            <div className="drawer-header"><h2>{edit.id ? 'Edit Product' : 'Add Product'}</h2><button className="btn-icon" onClick={() => setEdit(null)}>✕</button></div>
+            <div className="drawer-header"><h2>{edit.id ? 'Edit Product' : 'Add Product'}</h2><button className="btn-icon" onClick={guard.requestClose}>✕</button></div>
             <div className="drawer-body">
               <div className="form-row">
                 <div className="input-group"><label>Name *</label><input value={edit.name} onChange={e => setEdit({ ...edit, name: e.target.value })} /></div>
@@ -118,10 +126,10 @@ export default function CrewfitCatalog() {
               <div className="input-group"><label>From price (₹/pc)</label><input type="number" value={edit.from_price} onChange={e => setEdit({ ...edit, from_price: e.target.value })} /></div>
               <div className="input-group"><label>Features (comma separated)</label><input value={edit._features} onChange={e => setEdit({ ...edit, _features: e.target.value })} /></div>
               <div className="input-group"><label>Colors (comma separated)</label><input value={edit._colors} onChange={e => setEdit({ ...edit, _colors: e.target.value })} /></div>
-              <div className="input-group"><label>MOQ tiers (one per line: <code>label = price</code>)</label><textarea rows={5} value={edit._tiers} onChange={e => setEdit({ ...edit, _tiers: e.target.value })} /></div>
+              <div className="input-group"><label>MOQ tiers (one per line: <code>label = price</code>)</label><AutoTextarea minRows={5} value={edit._tiers} onChange={e => setEdit({ ...edit, _tiers: e.target.value })} /></div>
               <div style={{ display: 'flex', gap: 10 }}>
                 <button className="btn btn-primary" onClick={save} disabled={saving || !edit.name}>{saving ? 'Saving…' : 'Save product'}</button>
-                <button className="btn btn-secondary" onClick={() => setEdit(null)}>Cancel</button>
+                <button className="btn btn-secondary" onClick={guard.requestClose}>Cancel</button>
               </div>
             </div>
           </div>

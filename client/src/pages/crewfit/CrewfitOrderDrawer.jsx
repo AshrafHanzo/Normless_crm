@@ -1,4 +1,6 @@
 import { useState, useEffect, useRef, Children, isValidElement, Fragment } from 'react'
+import useDirtyGuard from '../../hooks/useDirtyGuard'
+import AutoTextarea from '../../components/AutoTextarea'
 import { useApi, useAuth } from '../../App'
 import { useToast } from '../../components/Toast'
 import { cleanMobile, mobileError, isValidMobile, mobileInputProps } from '../../utils/phone'
@@ -55,6 +57,24 @@ function shippingFor(region, qty) {
   for (const [maxKg, price] of zone.flat) if (weightKg <= maxKg) return price
   for (const [maxKg, rate] of zone.perKg) if (weightKg <= maxKg) return Math.ceil(weightKg) * rate
   return null
+}
+
+// What counts as an unsaved edit. Mirrors the save payload rather than the whole form: UI-only
+// keys are dropped, staged-but-not-uploaded photos are reduced to a count (File objects don't
+// serialise), and customer_type is excluded because the phone lookup rewrites it on its own —
+// prompting over a value the user never touched would be noise.
+const omit = (obj, keys) => Object.fromEntries(Object.entries(obj).filter(([k]) => !keys.includes(k)))
+const ITEM_UI_KEYS = ['_sizeMode', '_sizes', '_saved', '_pendingMock', '_pendingProd']
+
+function dirtySnapshot(f) {
+  if (!f) return null
+  return {
+    ...omit(f, ['customer_type']),
+    line_items: (f.line_items || []).map(it => ({
+      ...omit(it, ITEM_UI_KEYS),
+      _staged: (it._pendingMock || []).length + (it._pendingProd || []).length,
+    })),
+  }
 }
 
 function blankItem() {
@@ -467,6 +487,14 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
   const [payBusy, setPayBusy] = useState(null) // 'advance' | 'balance' while a link call is in flight
   const [deleting, setDeleting] = useState(false)
   const [custHistory, setCustHistory] = useState(null) // prior orders on this phone, or null while unknown
+  // Index of a just-added product row: scrolled to and briefly highlighted so adding one is
+  // visible without hunting down the drawer for it.
+  // Ticks whenever the server confirms new form state (photo upload/delete, invoice issued).
+  // Folded into the guard's identity below so the baseline is re-captured *after* React commits
+  // the new form — resetting inline would re-capture the values being replaced.
+  const [serverSync, setServerSync] = useState(0)
+  const [flashItem, setFlashItem] = useState(null)
+  const itemRefs = useRef([])
 
   useEffect(() => {
     apiFetch('/api/crewfit/meta').then(m => setMeta(m && m.statuses ? m : null))
@@ -479,6 +507,20 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [lightbox])
+
+  // A new product row lands at the bottom of an already-tall drawer, so adding one used to look
+  // like nothing happened. Bring it into view and focus its first field; the highlight then fades
+  // on its own. Both calls are DOM effects, and the state reset is deferred, so no cascade.
+  useEffect(() => {
+    if (flashItem == null) return
+    const el = itemRefs.current[flashItem]
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+      el.querySelector('select, input')?.focus({ preventScroll: true })
+    }
+    const t = setTimeout(() => setFlashItem(null), 1800)
+    return () => clearTimeout(t)
+  }, [flashItem])
 
   // New vs Returning is decided by whether the phone number has ordered before, so it follows the
   // number rather than being picked by hand. Debounced because it fires while the SO is still
@@ -577,6 +619,20 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
     if (form) revokePendingUrls(form.line_items)
     setForm(null); setLightbox(null); onClose?.()
   }
+  // Every way out of the drawer goes through this: an order takes real effort to fill in, and
+  // a mis-aimed click on the overlay used to discard the lot without asking.
+  const guard = useDirtyGuard({
+    snapshot: dirtySnapshot(form),
+    // Re-baselines when a different order is opened; a new order saved for the first time gains
+    // an id, which correctly re-baselines it as saved.
+    identity: form ? `${form.id ?? 'new'}:${serverSync}` : null,
+    onDiscard: closeDrawer,
+    confirm: toast.confirm,
+    title: form?.id ? 'Discard your edits?' : 'Discard this order?',
+    message: form?.id
+      ? 'This order has unsaved edits. Closing now will lose them.'
+      : 'You have started filling in an order. Closing now will lose it.',
+  })
 
   // set order-level fields + recompute money
   const setF = (patch, recalc = false) => setForm(f => { const nf = { ...f, ...patch }; return recalc ? { ...nf, ...recompute(nf) } : nf })
@@ -623,7 +679,10 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
       updateItem(idx, { _sizeMode: 'manual' })
     }
   }
-  const addItem = () => setF({ line_items: [...form.line_items, blankItem()] })
+  const addItem = () => {
+    setF({ line_items: [...form.line_items, blankItem()] })
+    setFlashItem(form.line_items.length)
+  }
   const removeItem = (idx) => {
     revokePendingUrls([form.line_items[idx]])
     const items = form.line_items.filter((_, i) => i !== idx)
@@ -631,7 +690,10 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
   }
   // Merge the server's freshly-saved line_items (images, confirmation flags) back onto the
   // form without clobbering the UI-only _sizeMode/_sizes fields the server doesn't know about.
+  // The server has just confirmed this state (photo upload/delete), so it becomes the new
+  // baseline — otherwise an upload alone would leave the drawer looking unsaved.
   const applyServerOrder = (res) => {
+    setServerSync(n => n + 1)
     setForm(f => {
       const saved = (res.line_items || []).map((sv, i) => ({ ...(f.line_items[i] || {}), ...sv, _saved: true }))
       // Rows added in the drawer but not saved yet aren't in the server's copy — keep them.
@@ -799,6 +861,7 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
     setDeleting(false)
     if (!res || res.error) { toast.error(res?.error || 'Failed to delete order'); return }
     toast.success(`Order ${ref} deleted`)
+    guard.reset()
     setForm(null); onSaved?.()
   }
 
@@ -887,6 +950,7 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
       }
       setSaving(false)
       toast.success(isNew ? `Order CF-${res.sl_no} created` : `Order CF-${res.sl_no} saved`)
+      guard.reset()
       setForm(null); onSaved?.(res)
     } else {
       setSaving(false)
@@ -909,7 +973,7 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
     document.body.appendChild(a); a.click(); a.remove()
     URL.revokeObjectURL(url)
     const fresh = await apiFetch(`/api/crewfit/orders/${form.id}`)
-    if (fresh && !fresh.error) setF({ invoices: fresh.invoices })
+    if (fresh && !fresh.error) { setF({ invoices: fresh.invoices }); setServerSync(n => n + 1) }
     setInvoiceBusy(null)
   }
 
@@ -917,11 +981,11 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
 
   return (
     <>
-      <div className="drawer-overlay" onClick={closeDrawer} />
+      <div className="drawer-overlay" onClick={guard.requestClose} />
       <div className="drawer drawer-wide">
         <div className="drawer-header">
           <div><h2>{form.id ? `Edit Order #${form.sl_no}` : 'New Bulk Order'}</h2><div style={{ fontSize: 12.5, color: 'var(--text-muted)' }}>Add one or more products — price & totals auto-fill</div></div>
-          <button className="btn-icon" onClick={closeDrawer}>✕</button>
+          <button className="btn-icon" onClick={guard.requestClose}>✕</button>
         </div>
         <form className="drawer-body" onSubmit={save}>
           <AccordionSections>
@@ -955,13 +1019,16 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
             <div className="input-group"><label>Sales Officer *</label><select required value={form.so || ''} onChange={e => setF({ so: e.target.value })}><option value="">—</option>{(meta?.sos || []).map(v => <option key={v}>{v}</option>)}</select></div>
           </div>
 
-          <div className="form-section">Products <button type="button" className="mini-btn" onClick={addItem}>+ Add product</button></div>
+          {/* The count is a sibling element, not part of the heading text: AccordionSections keys
+              its open/closed state on the leading string, so "Products (2)" would collapse the
+              section every time a row was added. */}
+          <div className="form-section">Products <span className="section-count">{form.line_items.length} {form.line_items.length === 1 ? 'product' : 'products'}</span> <button type="button" className="mini-btn" onClick={addItem}>+ Add product</button></div>
           {form.line_items.map((item, idx) => {
             const itemProduct = products.find(p => p.name === item.product)
             const itemColorOptions = itemProduct?.colors || null
             const itemCatalogPrice = priceFor(itemProduct, parseInt(item.qty))
             return (
-              <div key={idx} className="line-item-card">
+              <div key={idx} ref={el => { itemRefs.current[idx] = el }} className={`line-item-card${flashItem === idx ? ' just-added' : ''}`}>
                 <div className="line-item-header">
                   <span>Product {idx + 1}</span>
                   {form.line_items.length > 1 && <button type="button" className="btn-icon" onClick={() => removeItem(idx)}>✕</button>}
@@ -1038,6 +1105,10 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
               </div>
             )
           })}
+
+          {/* Repeated at the foot of the list: after filling in a product you are already at the
+              bottom, and the header button is a long scroll back up. */}
+          <button type="button" className="add-item-btn" onClick={addItem}>+ Add another product</button>
 
           <div className="form-section">Pricing</div>
           <div className="totals-bar" style={{ marginBottom: 14 }}>
@@ -1222,12 +1293,12 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
           {/* Own header so it becomes its own collapsible section rather than being tucked
               inside whichever section happens to render last. */}
           <div className="form-section">Internal notes</div>
-          <div className="input-group"><textarea rows={2} value={form.notes || ''} onChange={e => setF({ notes: e.target.value })} /></div>
+          <div className="input-group"><AutoTextarea value={form.notes || ''} onChange={e => setF({ notes: e.target.value })} placeholder="Anything the team should know about this order — flagged on the orders list once saved." /></div>
           </AccordionSections>
 
           <div style={{ display: 'flex', gap: 10, position: 'sticky', bottom: 0, background: 'var(--bg-secondary)', padding: '12px 0' }}>
             <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? 'Saving…' : (form.id ? 'Save changes' : 'Create order')}</button>
-            <button type="button" className="btn btn-secondary" onClick={closeDrawer}>Cancel</button>
+            <button type="button" className="btn btn-secondary" onClick={guard.requestClose}>Cancel</button>
             {isOwner && form.id && (
               <button type="button" className="btn btn-danger" style={{ marginLeft: 'auto' }} disabled={deleting} onClick={deleteOrder}>
                 {deleting ? 'Deleting…' : '🗑 Delete order'}
