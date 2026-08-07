@@ -161,6 +161,56 @@ async function fetchAllOrders() {
 }
 
 /**
+ * Number of orders created in a window, from Shopify's own count endpoint.
+ *
+ * Deliberately separate from fetchOrdersInRange: counting is not subject to the 60-day order-data
+ * restriction that listing is, so comparing the two reveals when a range is only partially
+ * readable instead of letting it look empty.
+ */
+async function countOrders(createdAtMin, createdAtMax) {
+    const url = `${REST_BASE}/orders/count.json?status=any`
+        + `&created_at_min=${encodeURIComponent(createdAtMin)}`
+        + `&created_at_max=${encodeURIComponent(createdAtMax)}`;
+    const response = await fetch(url, { headers: { 'X-Shopify-Access-Token': SHOPIFY_ACCESS_TOKEN } });
+    if (!response.ok) {
+        throw new Error(`Shopify REST API error ${response.status}: ${await response.text()}`);
+    }
+    return parseInt((await response.json()).count, 10) || 0;
+}
+
+/**
+ * Full order payloads created in a window, following Link-header pagination.
+ * Unlike fetchAllOrders this keeps the raw order (addresses, fulfillments, money fields), which
+ * the GST register needs and the trimmed sync shape does not carry.
+ */
+async function fetchOrdersInRange(createdAtMin, createdAtMax) {
+    const all = [];
+    let url = `${REST_BASE}/orders.json?status=any&limit=250`
+        + `&created_at_min=${encodeURIComponent(createdAtMin)}`
+        + `&created_at_max=${encodeURIComponent(createdAtMax)}`;
+
+    while (url) {
+        const response = await fetch(url, { headers: { 'X-Shopify-Access-Token': SHOPIFY_ACCESS_TOKEN } });
+        if (!response.ok) {
+            throw new Error(`Shopify REST API error ${response.status}: ${await response.text()}`);
+        }
+
+        const data = await response.json();
+        all.push(...(data.orders || []));
+
+        url = null;
+        const linkHeader = response.headers.get('Link');
+        if (linkHeader) {
+            const nextMatch = linkHeader.match(/<([^>]+)>;\s*rel="next"/);
+            if (nextMatch) url = nextMatch[1];
+        }
+        if (url) await sleep(300);
+    }
+
+    return all;
+}
+
+/**
  * Test the API connection
  */
 async function testConnection() {
@@ -171,6 +221,8 @@ async function testConnection() {
 module.exports = {
     fetchAllCustomers,
     fetchAllOrders,
+    countOrders,
+    fetchOrdersInRange,
     testConnection,
     shopifyGraphQL,
 };

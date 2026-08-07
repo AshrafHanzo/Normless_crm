@@ -270,20 +270,59 @@ function renderShippingLabel(doc, order) {
   doc.font('Helvetica-Bold').fontSize(11).fillColor('#000').text(order.qty ? `${order.qty} pcs` : '-', L, y + 9);
   y += 26;
 
-  const items = Array.isArray(order.line_items) ? order.line_items.filter(it => it.product) : [];
-  if (items.length) {
-    const contents = items.map(it => `${it.product}${it.color ? ` (${it.color})` : ''} x${it.qty || 0}`).join(' · ');
-    doc.font('Helvetica').fontSize(6.5).fillColor('#888').text('CONTENTS', L, y);
-    y += 9;
-    doc.font('Helvetica').fontSize(7.5).fillColor('#444').text(contents, L, y, { width: innerW, lineGap: 1, height: 34, ellipsis: true });
-    y += Math.min(doc.heightOfString(contents, { width: innerW, lineGap: 1 }), 34) + 4;
-  }
-
-  // ── Return address pinned to the bottom so the layout above can breathe
+  // The return block is pinned to the bottom, so work out where it starts before drawing the
+  // contents — that's the ceiling the per-product list has to stay under.
   const returnLines = [`${SELLER.legalName} (${SELLER.brandName})`, SELLER.address, `Ph: ${SELLER.returnPhone} · GSTIN: ${SELLER.gstin}`];
   const addrH = doc.font('Helvetica').fontSize(7).heightOfString(SELLER.address, { width: innerW, lineGap: 0.5 });
   const blockH = 11 + 10 + addrH + 11;
-  let ry = PH - M - PAD - blockH;
+  const ry0 = PH - M - PAD - blockH;
+  const contentsFloor = ry0 - 18; // keep clear of the divider above the return block
+
+  // Legacy/imported orders kept product + sizes in flat columns with line_items empty — fall back
+  // to those so those labels still list something instead of coming out blank.
+  let items = Array.isArray(order.line_items) ? order.line_items.filter(it => it.product) : [];
+  if (!items.length && order.product) {
+    items = [{ product: order.product, color: order.color, qty: order.qty, size_breakdown: order.size_breakdown }];
+  }
+
+  if (items.length) {
+    doc.font('Helvetica').fontSize(6.5).fillColor('#888').text('CONTENTS', L, y);
+    y += 10;
+
+    const QTY_W = 40;              // right-hand column reserved for the piece count
+    const nameW = innerW - QTY_W - 6;
+    let dropped = 0;
+
+    for (const it of items) {
+      const name = `${it.product}${it.color ? ` (${it.color})` : ''}`;
+      // Strip any "Product: " prefix the flat column carries, so it isn't repeated after the name.
+      const sizes = String(it.size_breakdown || '').replace(/^[^:]{1,60}:\s*/, '').trim();
+      const nameH = doc.font('Helvetica-Bold').fontSize(8).heightOfString(name, { width: nameW });
+      const sizesH = sizes ? doc.font('Helvetica').fontSize(7).heightOfString(sizes, { width: innerW, lineGap: 0.5 }) : 0;
+      const rowH = nameH + (sizes ? sizesH + 2 : 0) + 5;
+
+      // Don't spill into the return address — count what didn't fit and say so instead.
+      if (y + rowH > contentsFloor) { dropped++; continue; }
+
+      doc.font('Helvetica-Bold').fontSize(8).fillColor('#000').text(name, L, y, { width: nameW });
+      doc.font('Helvetica-Bold').fontSize(8).fillColor('#000')
+        .text(it.qty ? `${it.qty} ${Number(it.qty) === 1 ? 'pc' : 'pcs'}` : '-', L, y, { width: innerW, align: 'right' });
+      y += nameH + 1;
+      if (sizes) {
+        doc.font('Helvetica').fontSize(7).fillColor('#555').text(sizes, L, y, { width: innerW, lineGap: 0.5 });
+        y += sizesH + 2;
+      }
+      y += 4;
+    }
+
+    if (dropped) {
+      doc.font('Helvetica').fontSize(6.5).fillColor('#888')
+        .text(`+ ${dropped} more item${dropped > 1 ? 's' : ''} — see order CF-${order.sl_no}`, L, y, { width: innerW });
+    }
+  }
+
+  // ── Return address pinned to the bottom so the layout above can breathe
+  let ry = ry0;
   line(ry - 8);
   doc.font('Helvetica').fontSize(6.5).fillColor('#888').text('IF UNDELIVERED, RETURN TO', L, ry);
   ry += 10;

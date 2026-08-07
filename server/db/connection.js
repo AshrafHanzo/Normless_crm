@@ -55,6 +55,21 @@ const db = {
         all: (...args) => withClient(async (c) => (await c.query(toPg(sql), args)).rows)
     }),
     query: (sql, params = []) => withClient((c) => c.query(sql, params)),
+    // Runs fn against a single client wrapped in BEGIN/COMMIT. The callback gets that client, so
+    // it must issue its queries through the passed handle — going back to `db.query` would check
+    // out a *different* connection and land outside the transaction.
+    transaction: (fn) => withClient(async (c) => {
+        await c.query('BEGIN');
+        try {
+            const result = await fn(c);
+            await c.query('COMMIT');
+            return result;
+        } catch (err) {
+            // A rollback on an already-dead connection would mask the real error.
+            try { await c.query('ROLLBACK'); } catch { /* connection already gone */ }
+            throw err;
+        }
+    }),
     querySync: () => { throw new Error('PostgreSQL requires async operations. Use db.query().'); },
     pragma: () => { /* no-op */ },
     exec: (sql) => withClient((c) => c.query(sql)).then(() => undefined),

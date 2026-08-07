@@ -15,6 +15,7 @@ const NAV = {
     { to: '/customers', icon: 'users', label: 'Customers', perm: 'can_view_customers' },
     { to: '/orders', icon: 'box', label: 'Orders', perm: 'can_view_orders' },
     { to: '/scan', icon: 'scan', label: 'Scan Order', perm: 'can_scan_orders' },
+    { to: '/invoices', icon: 'invoice', label: 'Invoices', perm: 'can_view_invoices' },
   ],
   crewfit: [
     { to: '/crewfit/dashboard', icon: 'dashboard', label: 'Dashboard', perm: 'can_view_crewfit_analytics' },

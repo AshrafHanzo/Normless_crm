@@ -3,6 +3,12 @@
   "version": "1.0.0",
   "description": "",
   "main": "server/index.js",
+  "nodemonConfig": {
+    "watch": ["server"],
+    "ext": "js,json",
+    "//": "Runtime-written files live under server/ but are not source. Without these ignores, saving an uploaded photo or a generated GST workbook restarts the dev server mid-request and the browser sees a connection reset.",
+    "ignore": ["server/storage/**", "server/uploads/**", "server/debug.log"]
+  },
   "scripts": {
     "start": "node server/index.js",
     "dev": "nodemon server/index.js",
@@ -17,6 +23,7 @@
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.6",
     "dotenv": "^17.4.1",
+    "exceljs": "^4.4.0",
     "express": "^5.2.1",
     "express-rate-limit": "^8.3.2",
     "helmet": "^8.1.0",

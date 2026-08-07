@@ -92,7 +92,8 @@ router.post('/login', async (req, res) => {
                 can_view_crewfit_calculator: user.can_view_crewfit_calculator,
                 can_view_crewfit_payments: user.can_view_crewfit_payments,
                 can_view_crewfit_customers: user.can_view_crewfit_customers,
-                can_view_revenue: user.can_view_revenue
+                can_view_revenue: user.can_view_revenue,
+                can_view_invoices: user.can_view_invoices
             }
         });
     } catch (error) {
@@ -140,7 +141,8 @@ router.get('/verify', async (req, res) => {
                 can_view_crewfit_calculator: user.can_view_crewfit_calculator,
                 can_view_crewfit_payments: user.can_view_crewfit_payments,
                 can_view_crewfit_customers: user.can_view_crewfit_customers,
-                can_view_revenue: user.can_view_revenue
+                can_view_revenue: user.can_view_revenue,
+                can_view_invoices: user.can_view_invoices
             }
         });
     } catch {

@@ -27,3 +27,9 @@ SERVER_SETUP.md
 
 # User-uploaded design mocks / production photos (real customer files — never commit)
 server/uploads/
+
+# Generated GST sales workbooks + the hand-kept reference file: both are registers of real
+# customer names and order values, so they stay on disk and out of the repo.
+server/storage/
+GST Sales*.xlsx
+GST Purchase*.xlsx

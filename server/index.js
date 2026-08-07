@@ -165,6 +165,7 @@ const orderRoutes = require('./routes/orders');
 const interactionRoutes = require('./routes/interactions');
 const dashboardRoutes = require('./routes/dashboard');
 const syncRoutes = require('./routes/sync');
+const invoiceRoutes = require('./routes/invoices');
 const crewfitRoutes = require('./routes/crewfit');
 const crewfitQuotesRoutes = require('./routes/crewfit-quotes');
 const { convertQuoteToOrder } = crewfitQuotesRoutes;
@@ -236,6 +237,7 @@ app.use('/api/orders', authMiddleware, orderRoutes);
 app.use('/api/interactions', authMiddleware, interactionRoutes);
 app.use('/api/dashboard', authMiddleware, dashboardRoutes);
 app.use('/api/sync', authMiddleware, syncRoutes);
+app.use('/api/invoices', authMiddleware, invoiceRoutes);
 app.use('/api/crewfit/quotes', authMiddleware, crewfitQuotesRoutes);
 app.use('/api/crewfit/payments', authMiddleware, crewfitPaymentsRoutes);
 app.use('/api/crewfit/customers', authMiddleware, crewfitCustomersRoutes);
@@ -355,11 +357,13 @@ async function ensureCrewfitSchema() {
                 -- Not a page permission: gates the money totals shown across Payments, Customers
                 -- and the dashboard, so staff can work orders without seeing overall revenue.
                 ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_revenue BOOLEAN DEFAULT false;
+                -- Normless GST sales invoicing (the Invoices menu).
+                ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_invoices BOOLEAN DEFAULT false;
             `);
             await db.query(`UPDATE admin_users SET can_access_normless=true, can_access_crewfit=true,
                 can_view_crewfit_followups=true, can_view_crewfit_orders=true, can_view_crewfit_catalog=true,
                 can_view_crewfit_analytics=true, can_view_crewfit_calculator=true, can_view_crewfit_payments=true,
-                can_view_crewfit_customers=true, can_view_revenue=true
+                can_view_crewfit_customers=true, can_view_revenue=true, can_view_invoices=true
                 WHERE role IN ('owner','admin')`);
         } catch (e) { console.error('admin perms ensure:', e.message); }
 
@@ -454,6 +458,120 @@ async function ensureCrewfitSchema() {
     }
 }
 
+// GST sales invoicing (Normless → Invoices menu)
+async function ensureGstSchema() {
+    try {
+        await db.exec(`
+            -- One row per Shopify order that has ever appeared on a GST sales report. The invoice
+            -- number is assigned once and never recomputed: regenerating a period must reproduce
+            -- the exact numbers already filed, so this table — not the report — is the record.
+            CREATE TABLE IF NOT EXISTS gst_invoice_numbers (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                fy TEXT NOT NULL,
+                seq INTEGER NOT NULL,
+                invoice_no TEXT NOT NULL,
+                order_name TEXT NOT NULL,
+                order_date DATE,
+                assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS gst_invoice_order_idx ON gst_invoice_numbers (fy, order_name);
+            CREATE UNIQUE INDEX IF NOT EXISTS gst_invoice_seq_idx ON gst_invoice_numbers (fy, seq);
+
+            -- Where each financial year's numbering starts. Needed because FY 26-27 was invoiced
+            -- by hand in "GST Sales FY 26-27.xlsx" up to NL/2594 before this module existed, and
+            -- those orders are past Shopify's 60-day read window so they can't be back-filled.
+            CREATE TABLE IF NOT EXISTS gst_sequences (
+                fy TEXT PRIMARY KEY,
+                seed INTEGER NOT NULL DEFAULT 0,
+                note TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            INSERT INTO gst_sequences (fy, seed, note)
+            VALUES ('26-27', 2594, 'Continues the hand-kept workbook, which ended at NL/2594/26-27 on 30 Jun 2026')
+            ON CONFLICT (fy) DO NOTHING;
+
+            -- Download history shown under the generator.
+            CREATE TABLE IF NOT EXISTS gst_reports (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                period_label TEXT,
+                from_date DATE NOT NULL,
+                to_date DATE NOT NULL,
+                filename TEXT NOT NULL,
+                stored_name TEXT NOT NULL,
+                row_count INTEGER DEFAULT 0,
+                total_qty INTEGER DEFAULT 0,
+                taxable_value NUMERIC DEFAULT 0,
+                gst_total NUMERIC DEFAULT 0,
+                gross_total NUMERIC DEFAULT 0,
+                invoice_from TEXT,
+                invoice_to TEXT,
+                generated_by TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS gst_reports_created_idx ON gst_reports (created_at DESC);
+            -- Sales and purchase registers share this history table.
+            ALTER TABLE gst_reports ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'sales';
+
+            -- Suppliers exist purely to autofill the purchase form: three vendors account for
+            -- 74 of the first 102 bills, so retyping their GSTIN and address every time is the
+            -- bulk of the data entry. Purchases snapshot these values rather than joining to
+            -- them (see below), so editing a supplier never rewrites a filed return.
+            CREATE TABLE IF NOT EXISTS gst_suppliers (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                name TEXT NOT NULL,
+                gstin TEXT,
+                location TEXT,
+                default_particulars TEXT,
+                default_gst_pct NUMERIC,
+                default_rate NUMERIC,
+                intra_state BOOLEAN DEFAULT true,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS gst_suppliers_key_idx
+                ON gst_suppliers (LOWER(name), COALESCE(NULLIF(gstin, ''), ''));
+
+            -- One row per supplier bill, entered by hand — there is no upstream system holding
+            -- purchases the way Shopify holds sales.
+            --
+            -- Money is stored as entered, not recomputed on read: 22 of the first 102 bills have
+            -- a GST value that isn't taxable x rate (Delhivery rounds to whole rupees), and input
+            -- tax credit is claimed on what the vendor actually charged. The figures on the bill
+            -- win over the formula.
+            CREATE TABLE IF NOT EXISTS gst_purchases (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                purchase_date DATE NOT NULL,
+                particulars TEXT,
+                company_name TEXT NOT NULL,
+                invoice_no TEXT NOT NULL,
+                location TEXT,
+                gstin TEXT,
+                gst_pct NUMERIC NOT NULL DEFAULT 0,
+                qty NUMERIC,
+                rate NUMERIC,
+                taxable NUMERIC NOT NULL DEFAULT 0,
+                gst_amount NUMERIC NOT NULL DEFAULT 0,
+                gross NUMERIC NOT NULL DEFAULT 0,
+                cgst NUMERIC NOT NULL DEFAULT 0,
+                sgst NUMERIC NOT NULL DEFAULT 0,
+                igst NUMERIC NOT NULL DEFAULT 0,
+                supplier_id INTEGER REFERENCES gst_suppliers(id) ON DELETE SET NULL,
+                source TEXT DEFAULT 'manual',
+                created_by TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            -- The realistic entry error is booking the same bill twice. Unregistered suppliers
+            -- have no GSTIN, so fall back to the company name as the identity.
+            CREATE UNIQUE INDEX IF NOT EXISTS gst_purchases_bill_idx ON gst_purchases
+                (LOWER(COALESCE(NULLIF(gstin, ''), company_name)), LOWER(invoice_no));
+            CREATE INDEX IF NOT EXISTS gst_purchases_date_idx ON gst_purchases (purchase_date);
+        `);
+    } catch (err) {
+        console.error('ensureGstSchema error:', err.message);
+    }
+}
+
 // Start Server
 app.listen(PORT, async () => {
     console.log(`🚀 Normless CRM Backend running on http://localhost:${PORT}`);
@@ -462,6 +580,8 @@ app.listen(PORT, async () => {
     await ensureAdminUser();
     // Ensure Crewfit catalog schema + seed
     await ensureCrewfitSchema();
+    // Ensure GST sales invoicing schema
+    await ensureGstSchema();
 
     // START AUTO-SYNC IMMEDIATELY (no user action needed!)
     startAutoSync();

@@ -298,7 +298,12 @@ select { cursor: pointer; appearance: none;
   background-repeat: no-repeat; background-position: right 14px center; padding-right: 38px;
 }
 
-.form-row { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+/* Fit as many fields per row as the container allows rather than a fixed pair — in the narrow
+   drawers and cards this still lands on 2 columns, but the wide order drawer gets 3, which is
+   where most of that form's scroll length disappears. Collapses to 1 column on mobile below. */
+.form-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr)); gap: 16px; align-items: start; }
+/* The grid gap already spaces these; the field's own margin doubled it to 32px per row. */
+.form-row > .input-group { margin-bottom: 0; }
 
 /* Password field with show/hide eye toggle */
 .password-wrap { position: relative; }
@@ -834,7 +839,9 @@ select { cursor: pointer; appearance: none;
 .catalog-contact .contact-row { display: flex; flex-wrap: wrap; gap: 18px; font-size: 12.5px; color: var(--text-secondary); }
 
 /* Crewfit order builder */
-.drawer-wide { width: min(680px, 96vw); }
+/* The order drawer carries ~35 fields across 9 sections; at 680px that was 4.5–5 screens of
+   scrolling. Wider lets .form-row lay out 3 fields per row instead of 2. */
+.drawer-wide { width: min(1080px, 96vw); }
 .form-section { font-size: 12px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; color: var(--primary-light); margin: 20px 0 12px; padding-bottom: 6px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
 .unit-hint { font-size: 11px; font-weight: 500; color: var(--text-muted); text-transform: none; letter-spacing: 0; }
 .totals-bar { display: flex; gap: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 14px 16px; }
@@ -1205,6 +1212,27 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .data-access-card .page-check span { display: flex; flex-direction: column; gap: 3px; }
 .data-access-card .page-check em { font-style: normal; font-size: 11.5px; color: var(--text-muted); line-height: 1.45; }
 
+/* ---- Drawer sections (plain headings on desktop, accordion on mobile) ----
+   The wrapper is display:contents so the sections stay direct flex children of .drawer-body and
+   keep its 18px rhythm; it exists purely to host the validation listener. */
+.drawer-sections { display: contents; }
+.drawer-section { display: flex; flex-direction: column; }
+.drawer-section-body { display: flex; flex-direction: column; gap: 18px; }
+/* The header is a real button for mobile, but on desktop it must look and behave like the plain
+   heading it replaced — no pointer, no focus ring, no chevron. */
+.section-toggle {
+  all: unset; display: flex; align-items: center; gap: 8px; flex: 1;
+  font: inherit; color: inherit; letter-spacing: inherit; text-transform: inherit; cursor: default;
+}
+.section-chevron { display: none; transition: transform 0.18s ease; font-size: 15px; line-height: 1; }
+
+/* Design mock + production photos side by side inside a product card; falls back to stacked
+   when the column would drop under ~280px (narrow drawer, tablets, phones). */
+/* 360px min so this resolves to exactly two tracks (there are only two blocks) — a smaller min
+   left an empty third column on wide screens. */
+.item-media-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(360px, 100%), 1fr)); gap: 14px; align-items: start; }
+.item-media-col { display: flex; flex-direction: column; gap: 8px; }
+
 /* Inline validation message under a field (mobile numbers today). */
 .field-error { margin-top: 6px; font-size: 11.5px; font-weight: 600; color: var(--danger); line-height: 1.4; }
 
@@ -1323,3 +1351,42 @@ html, body { max-width: 100%; overflow-x: hidden; }
   .confirm-card { padding: 22px 18px 18px; }
   .confirm-actions { flex-direction: column-reverse; }
 }
+
+/* ---- Order drawer: accordion on mobile ----
+   Declared last so it wins over the desktop defaults above (same specificity, later rule).
+   Breakpoint matches where the drawer goes full-width and .form-row drops to one column — the
+   point at which the form becomes a long single scroll.
+
+   Collapsed bodies use height:0 + overflow:hidden, NOT display:none: a display:none required
+   field makes the browser refuse to submit while showing the user nothing. Kept in the layout the
+   field stays focusable, and AccordionSections opens its section when validation flags it. */
+@media (max-width: 900px) {
+  .section-toggle { cursor: pointer; width: 100%; justify-content: space-between; }
+  .section-chevron { display: inline-block; color: var(--text-muted); }
+  .drawer-section.open .section-chevron { transform: rotate(180deg); }
+  .drawer-section:not(.open) > .drawer-section-body { height: 0; overflow: hidden; margin: 0; }
+  /* A collapsed section is just its heading, so drop the heading's own spacing. */
+  .drawer-section:not(.open) > .form-section { margin: 0; padding-bottom: 10px; }
+  /* Header actions ("+ Add product", "Copy"/"Send") are meaningless while collapsed. !important
+     because those spans carry an inline display:flex that a plain rule can't override. */
+  .drawer-section:not(.open) > .form-section > :not(.section-toggle) { display: none !important; }
+}
+
+/* ============================================================
+   GST INVOICES — SALES / PURCHASE TABS
+   ============================================================ */
+.gst-tabs {
+  display: inline-flex; gap: 4px; padding: 4px; margin-bottom: 18px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md);
+}
+.gst-tabs button {
+  padding: 8px 20px; border: none; background: transparent; color: var(--text-secondary);
+  font-family: var(--font); font-weight: 600; font-size: 13px; border-radius: 8px;
+  cursor: pointer; transition: all 0.15s ease;
+}
+.gst-tabs button:hover { color: var(--text-primary); }
+.gst-tabs button.active { background: var(--primary); color: #fff; }
+/* The computed figures a user may overwrite to match what the supplier actually billed. */
+.gst-derived input { font-variant-numeric: tabular-nums; }
+.gst-hint { font-size: 11.5px; color: var(--text-muted); margin-top: 4px; }
+.gst-hint.warn { color: var(--warning, #d97706); }

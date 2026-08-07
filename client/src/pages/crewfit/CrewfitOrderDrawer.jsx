@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, Children, isValidElement, Fragment } from 'react'
 import { useApi, useAuth } from '../../App'
 import { useToast } from '../../components/Toast'
 import { cleanMobile, mobileError, isValidMobile, mobileInputProps } from '../../utils/phone'
@@ -362,6 +362,91 @@ function InvoiceCard({ title, amount, invoice, busy, locked, lockedLabel, onGene
 }
 
 // target: null (closed) | 'new' (blank order) | an order object to edit.
+// The form body is a flat run of `.form-section` headers each followed by its fields. On a phone
+// that's several screens of scrolling, so rather than restructuring ~300 lines of JSX this groups
+// the existing markup into collapsible sections. Grouping keys off the very same headers the
+// desktop layout uses, so the two views can't drift apart as fields are added.
+//
+// Desktop is unaffected: the CSS keeps every body open there and hides the chevron, so the
+// collapsed state below is only ever honoured under the mobile breakpoint.
+function groupSections(children) {
+  const flat = []
+  const walk = (nodes) => Children.toArray(nodes).forEach((c) => {
+    // `{cond && <>…</>}` puts several sections inside one Fragment — descend into it so those
+    // headers start their own group instead of being swallowed by the preceding section.
+    if (isValidElement(c) && c.type === Fragment) walk(c.props.children)
+    else flat.push(c)
+  })
+  walk(children)
+
+  const groups = []
+  for (const node of flat) {
+    const isHeader = isValidElement(node) && String(node.props?.className || '').split(' ').includes('form-section')
+    if (isHeader) {
+      // Headers read `<div className="form-section">Title <button/></div>` — the leading string is
+      // the title, anything after it is an action that must stay outside the toggle button.
+      const kids = Children.toArray(node.props.children)
+      groups.push({
+        title: typeof kids[0] === 'string' ? kids[0].trim() : `Section ${groups.length + 1}`,
+        actions: kids.slice(1),
+        body: [],
+      })
+    } else if (groups.length) groups[groups.length - 1].body.push(node)
+    else groups.push({ title: null, actions: [], body: [node] }) // rendered before the first header
+  }
+  return groups
+}
+
+function AccordionSections({ children }) {
+  const groups = groupSections(children)
+  // The first section (Customer) starts expanded so the form opens on something actionable
+  // instead of a wall of closed headings; everything after it stays collapsed. Keyed off the
+  // first group rather than the literal "Customer" so renaming the heading can't silently
+  // break it. Desktop ignores this entirely — the CSS keeps every body open there.
+  const [open, setOpen] = useState(() => {
+    const first = groups.find(g => g.title)
+    return first ? { [first.title]: true } : {}
+  })
+  const wrapRef = useRef(null)
+
+  // A collapsed body is height:0/overflow:hidden rather than display:none precisely so required
+  // fields inside stay focusable — a display:none required field makes the browser refuse to
+  // submit with nothing shown to the user. Still, reporting a field the user can't see is no
+  // good, so open whichever section holds it. `invalid` doesn't bubble, hence capture phase.
+  useEffect(() => {
+    const el = wrapRef.current
+    if (!el) return
+    const onInvalid = (e) => {
+      const sec = e.target?.closest?.('.drawer-section')
+      if (sec?.dataset.section) setOpen(s => ({ ...s, [sec.dataset.section]: true }))
+    }
+    el.addEventListener('invalid', onInvalid, true)
+    return () => el.removeEventListener('invalid', onInvalid, true)
+  }, [])
+
+  return (
+    <div className="drawer-sections" ref={wrapRef}>
+      {groups.map(({ title, actions, body }, i) => {
+        if (!title) return <Fragment key={`pre-${i}`}>{body}</Fragment>
+        const isOpen = !!open[title]
+        return (
+          <section key={title} className={`drawer-section${isOpen ? ' open' : ''}`} data-section={title}>
+            <div className="form-section">
+              <button type="button" className="section-toggle" aria-expanded={isOpen}
+                onClick={() => setOpen(s => ({ ...s, [title]: !s[title] }))}>
+                <span>{title}</span>
+                <span className="section-chevron" aria-hidden="true">⌄</span>
+              </button>
+              {actions}
+            </div>
+            <div className="drawer-section-body">{body}</div>
+          </section>
+        )
+      })}
+    </div>
+  )
+}
+
 export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
   const apiFetch = useApi()
   const { API_URL, user } = useAuth()
@@ -839,6 +924,7 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
           <button className="btn-icon" onClick={closeDrawer}>✕</button>
         </div>
         <form className="drawer-body" onSubmit={save}>
+          <AccordionSections>
           <div className="form-section">Customer</div>
           <div className="form-row">
             <div className="input-group"><label>Customer Name *</label><input required value={form.customer_name || ''} onChange={e => setF({ customer_name: e.target.value })} /></div>
@@ -923,26 +1009,32 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
                   <div className="input-group"><label>Line Total (₹) *</label><input required type="number" value={item.product_total ?? ''} onChange={e => updateItem(idx, { product_total: e.target.value })} /></div>
                 </div>
 
-                <ImageUploadGrid
-                  icon="🎨" label="Design mock" thumbs={imageThumbs(item, 'mock', API_URL)}
-                  busy={imgBusy === `${idx}-mock`}
-                  onUpload={files => uploadItemImages(idx, 'mock', files)}
-                  onView={i => openLightbox(idx, 'mock', imageThumbs(item, 'mock', API_URL), i)}
-                  onDownloadAll={() => downloadImages(item.mockImages || [], `${idx}-mock-all`)}
-                  downloadBusy={bulkDownloading === `${idx}-mock-all`}
-                />
-                <label className="img-confirm-check">
-                  <input type="checkbox" checked={!!item.mockConfirmed} onChange={() => toggleMockConfirmed(idx)} /> Confirmed by client
-                </label>
+                {/* Mock and production photos sit side by side in the wide drawer — stacked they
+                    were a third of the card's height. Stacks again below the grid's min width. */}
+                <div className="item-media-row">
+                  <div className="item-media-col">
+                    <ImageUploadGrid
+                      icon="🎨" label="Design mock" thumbs={imageThumbs(item, 'mock', API_URL)}
+                      busy={imgBusy === `${idx}-mock`}
+                      onUpload={files => uploadItemImages(idx, 'mock', files)}
+                      onView={i => openLightbox(idx, 'mock', imageThumbs(item, 'mock', API_URL), i)}
+                      onDownloadAll={() => downloadImages(item.mockImages || [], `${idx}-mock-all`)}
+                      downloadBusy={bulkDownloading === `${idx}-mock-all`}
+                    />
+                    <label className="img-confirm-check">
+                      <input type="checkbox" checked={!!item.mockConfirmed} onChange={() => toggleMockConfirmed(idx)} /> Confirmed by client
+                    </label>
+                  </div>
 
-                <ImageUploadGrid
-                  icon="📷" label="Production photos" thumbs={imageThumbs(item, 'prod', API_URL)}
-                  busy={imgBusy === `${idx}-prod`}
-                  onUpload={files => uploadItemImages(idx, 'prod', files)}
-                  onView={i => openLightbox(idx, 'prod', imageThumbs(item, 'prod', API_URL), i)}
-                  onDownloadAll={() => downloadImages(item.prodImages || [], `${idx}-prod-all`)}
-                  downloadBusy={bulkDownloading === `${idx}-prod-all`}
-                />
+                  <ImageUploadGrid
+                    icon="📷" label="Production photos" thumbs={imageThumbs(item, 'prod', API_URL)}
+                    busy={imgBusy === `${idx}-prod`}
+                    onUpload={files => uploadItemImages(idx, 'prod', files)}
+                    onView={i => openLightbox(idx, 'prod', imageThumbs(item, 'prod', API_URL), i)}
+                    onDownloadAll={() => downloadImages(item.prodImages || [], `${idx}-prod-all`)}
+                    downloadBusy={bulkDownloading === `${idx}-prod-all`}
+                  />
+                </div>
               </div>
             )
           })}
@@ -1127,7 +1219,11 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
             </>
           )}
 
-          <div className="input-group" style={{ marginTop: 14 }}><label>Internal notes</label><textarea rows={2} value={form.notes || ''} onChange={e => setF({ notes: e.target.value })} /></div>
+          {/* Own header so it becomes its own collapsible section rather than being tucked
+              inside whichever section happens to render last. */}
+          <div className="form-section">Internal notes</div>
+          <div className="input-group"><textarea rows={2} value={form.notes || ''} onChange={e => setF({ notes: e.target.value })} /></div>
+          </AccordionSections>
 
           <div style={{ display: 'flex', gap: 10, position: 'sticky', bottom: 0, background: 'var(--bg-secondary)', padding: '12px 0' }}>
             <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? 'Saving…' : (form.id ? 'Save changes' : 'Create order')}</button>
