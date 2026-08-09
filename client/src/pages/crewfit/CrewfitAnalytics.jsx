@@ -95,7 +95,9 @@ export default function CrewfitAnalytics() {
       { icon: 'wallet', label: 'Total Revenue', value: fmt(k.totalRevenue), trend: `${fmt(k.collectedRevenue)} collected`, cls: 'up' },
       { icon: 'card', label: 'Pending Collections', value: fmt(k.pendingRevenue), trend: k.totalRevenue ? `${((k.pendingRevenue / k.totalRevenue) * 100).toFixed(0)}% outstanding` : '—', cls: 'neutral' },
     ] : []),
-    { icon: 'box', label: 'Total Orders', value: k.totalOrders ?? 0, trend: `${k.activeOrders ?? 0} active`, cls: 'neutral' },
+    // Orders alone hide the size of the book — 12 orders can be 20 pieces or 2,000 — so the unit
+    // count rides in this card rather than taking one of its own.
+    { icon: 'box', label: 'Total Orders', value: k.totalOrders ?? 0, sub: `${(k.totalUnits ?? 0).toLocaleString('en-IN')} units`, trend: `${k.activeOrders ?? 0} active`, cls: 'neutral' },
     ...(showRevenue ? [{ icon: 'trending', label: 'Avg Order Value', value: fmt(k.avgOrderValue), trend: 'per order', cls: 'neutral' }] : []),
     { icon: 'users', label: 'Total Customers', value: k.totalCustomers ?? 0, trend: `${k.repeatCustomers ?? 0} repeat`, cls: 'neutral' },
     { icon: 'activity', label: 'Repeat Customer Rate', value: pct(k.repeatRate), trend: 'retention', cls: 'up' },
@@ -120,7 +122,7 @@ export default function CrewfitAnalytics() {
         {kpis.map((kk, i) => (
           <div className="kpi-card" key={i}>
             <div className="kpi-head"><div className="kpi-icon"><Icon name={kk.icon} size={22} /></div><span className={`kpi-trend ${kk.cls}`}>{kk.trend}</span></div>
-            <div className="kpi-value">{kk.value}</div>
+            <div className="kpi-value">{kk.value}{kk.sub && <span className="kpi-sub">{kk.sub}</span>}</div>
             <div className="kpi-label">{kk.label}</div>
           </div>
         ))}

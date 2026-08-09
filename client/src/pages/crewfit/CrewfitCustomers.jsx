@@ -2,6 +2,9 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useApi } from '../../App'
 import { useToast } from '../../components/Toast'
+import useServerTable from '../../hooks/useServerTable'
+import SortTh from '../../components/SortTh'
+import Pagination from '../../components/Pagination'
 import Icon from '../../components/Icon'
 
 const fmt = (v) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(v || 0)
@@ -131,35 +134,35 @@ export default function CrewfitCustomers() {
   const [term, setTerm] = useState('')
   const [search, setSearch] = useState('')
   const [type, setType] = useState('')
-  const [sort, setSort] = useState('recent')
-  const [page, setPage] = useState(1)
+  // Server-side sort + page. The old sort dropdown is gone — the column headers do that job now,
+  // and cover more columns than the four the dropdown offered.
+  const t = useServerTable({ sort: 'last_order_date', dir: 'desc' })
   const [selected, setSelected] = useState(null)
 
-  useEffect(() => { const t = setTimeout(() => { setSearch(term); setPage(1) }, 350); return () => clearTimeout(t) }, [term])
-  useEffect(() => { load() }, [search, type, sort, page])
+  useEffect(() => { const timer = setTimeout(() => { setSearch(term); t.resetPage() }, 350); return () => clearTimeout(timer) }, [term])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { load() }, [search, type, t.key])
 
   const load = async () => {
     setLoading(true)
-    const qs = new URLSearchParams(Object.entries({ search, type, sort, page, limit: 25 }).filter(([, v]) => v)).toString()
-    const res = await apiFetch('/api/crewfit/customers' + (qs ? '?' + qs : ''))
+    const res = await apiFetch('/api/crewfit/customers?' + t.query({ search, type }))
     if (res?.error) toast.error(res.error)
     setData(res && !res.error ? res : null)
+    if (res?.pagination) t.setPagination(res.pagination)
     setLoading(false)
   }
 
   const customers = data?.customers || []
-  const p = data?.pagination || { total: 0, totalPages: 1 }
   const stats = data?.stats
   // Server is the authority; default to hidden so a slow/failed load never flashes the total.
   const showRevenue = data?.canViewRevenue === true
-  const totalPages = p.totalPages || 1
 
   return (
     <div className="page-enter">
       <div className="dash-toolbar">
         <div>
           <h1>Crewfit · Customers</h1>
-          <p style={{ color: 'var(--text-muted)' }}>{p.total || 0} customers · grouped by phone number</p>
+          <p style={{ color: 'var(--text-muted)' }}>{t.pagination.total || 0} customers · grouped by phone number</p>
         </div>
       </div>
 
@@ -177,12 +180,8 @@ export default function CrewfitCustomers() {
       </div>
 
       <div className="filters-row">
-        <select value={type} onChange={e => { setType(e.target.value); setPage(1) }} style={{ width: 'auto' }}>
+        <select value={type} onChange={e => { setType(e.target.value); t.resetPage() }} style={{ width: 'auto' }}>
           <option value="">All customers</option><option value="Returning">Returning only</option><option value="New">First-time only</option>
-        </select>
-        <select value={sort} onChange={e => { setSort(e.target.value); setPage(1) }} style={{ width: 'auto' }}>
-          <option value="recent">Most recent order</option><option value="orders">Most orders</option>
-          {showRevenue && <option value="value">Highest value</option>}<option value="name">Name (A–Z)</option>
         </select>
       </div>
 
@@ -193,9 +192,16 @@ export default function CrewfitCustomers() {
           <div style={{ overflowX: 'auto' }}>
             <table className="data-table">
               <thead><tr>
-                <th>Customer</th><th style={{ textAlign: 'center' }}>Orders</th>
-                {showRevenue && <><th style={{ textAlign: 'right' }}>Lifetime value</th><th style={{ textAlign: 'right' }}>Avg order</th></>}
-                <th>First order</th><th>Last order</th><th>Type</th><th style={{ textAlign: 'center' }}>Chat</th>
+                <SortTh label="Customer" col="customer_name" sort={t.sort} onSort={t.toggle} />
+                <SortTh label="Orders" col="orders_count" sort={t.sort} onSort={t.toggle} align="center" />
+                {showRevenue && <>
+                  <SortTh label="Lifetime value" col="total_value" sort={t.sort} onSort={t.toggle} align="right" />
+                  <SortTh label="Avg order" align="right" />
+                </>}
+                <SortTh label="First order" col="first_order_date" sort={t.sort} onSort={t.toggle} />
+                <SortTh label="Last order" col="last_order_date" sort={t.sort} onSort={t.toggle} />
+                <SortTh label="Type" />
+                <SortTh label="Chat" align="center" />
               </tr></thead>
               <tbody>
                 {customers.map(c => {
@@ -225,19 +231,7 @@ export default function CrewfitCustomers() {
           </div>
         )}
 
-        {!loading && customers.length > 0 && totalPages > 1 && (
-          <div className="pagination">
-            <span className="pagination-info">Showing {(page - 1) * 25 + 1}–{Math.min(page * 25, p.total)} of {p.total}</span>
-            <div className="pagination-pages">
-              <button disabled={page <= 1} onClick={() => setPage(x => x - 1)}>‹</button>
-              {Array.from({ length: Math.min(totalPages, 7) }, (_, i) => (
-                <button key={i + 1} className={page === i + 1 ? 'active' : ''} onClick={() => setPage(i + 1)}>{i + 1}</button>
-              ))}
-              {totalPages > 7 && <button disabled>…</button>}
-              <button disabled={page >= totalPages} onClick={() => setPage(x => x + 1)}>›</button>
-            </div>
-          </div>
-        )}
+        {!loading && <Pagination table={t} noun="customers" />}
       </div>
 
       <CustomerDrawer key={selected} phone={selected} onClose={() => setSelected(null)} />

@@ -11,8 +11,18 @@ const PDFDocument = require('pdfkit');
 const db = require('../db/connection');
 const { hasPermission } = require('../utils/permissions');
 const vendorOrder = require('../services/vendor-order');
+const { tableParams, pagination } = require('../utils/table');
 
 const router = express.Router();
+
+// Client column key → SQL expression. Only these can be sorted on. `products` sorts on the raw
+// items JSON, which puts the same product types together — the closest SQL can get to the
+// summary the table shows.
+const VENDOR_ORDER_SORTS = {
+    ref_no: 'ref_no', order_date: 'order_date', delivery_date: 'delivery_date', vendor: 'LOWER(vendor)',
+    products: 'items', total_qty: 'total_qty', total_amount: 'total_amount',
+    status: 'status', payment_status: 'payment_status',
+};
 
 // Vendors seen historically on customer orders, used to seed the dropdown before this module
 // has any vendors of its own.
@@ -122,6 +132,7 @@ router.get('/meta', async (req, res) => {
 router.get('/', async (req, res) => {
     try {
         const { vendor, status, search } = req.query;
+        const t = tableParams(req.query, { sortable: VENDOR_ORDER_SORTS, defaultSort: 'order_date' });
         const where = [], vals = [];
         if (vendor) { vals.push(vendor); where.push(`vendor = $${vals.length}`); }
         if (status) { vals.push(status); where.push(`status = $${vals.length}`); }
@@ -129,12 +140,14 @@ router.get('/', async (req, res) => {
             vals.push(`%${search}%`);
             where.push(`(vendor ILIKE $${vals.length} OR items ILIKE $${vals.length} OR notes ILIKE $${vals.length})`);
         }
+        const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+        const countRes = await db.query(`SELECT COUNT(*)::int AS n FROM crewfit_vendor_orders ${whereSql}`, vals);
+
         const r = await db.query(
             `SELECT ${ROW_COLUMNS} FROM crewfit_vendor_orders
-             ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
-             ORDER BY order_date DESC, id DESC LIMIT 500`, vals
+             ${whereSql} ${t.orderBy} LIMIT ${t.limit} OFFSET ${t.offset}`, vals
         );
-        res.json({ orders: r.rows.map(hydrate) });
+        res.json({ orders: r.rows.map(hydrate), pagination: pagination(countRes.rows[0]?.n || 0, t) });
     } catch (err) {
         console.error('Error loading vendor orders:', err);
         res.status(500).json({ error: 'Failed to load vendor orders' });

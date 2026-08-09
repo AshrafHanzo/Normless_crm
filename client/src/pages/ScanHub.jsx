@@ -88,86 +88,85 @@ const ScanHub = () => {
     executeSearchRef.current(scanValue);
   };
 
+  // Once an order is on screen the packer needs the garments, not the instructions — the header
+  // and the scanner panel collapse into a single slim bar so the items start near the top.
+  const compact = !!order;
+
   return (
     <div className="page-enter">
-      <div className="page-header">
-        <h1>Order Lookup Hub</h1>
-        <p>Manage your orders using barcode scanning or manual entry.</p>
-      </div>
-
-      <div className="scan-container">
-        <div className="scan-tabs">
-          <button
-            className={`scan-tab ${activeTab === 'scan' ? 'active' : ''}`}
-            onClick={() => { setActiveTab('scan'); setOrder(null); setError(''); setScanValue(''); }}
-          >
-            🎯 Scan Mode
-          </button>
-          <button
-            className={`scan-tab ${activeTab === 'manual' ? 'active' : ''}`}
-            onClick={() => { setActiveTab('manual'); setOrder(null); setError(''); setScanValue(''); }}
-          >
-            ⌨️ Manual Lookup
-          </button>
+      <div className={`scan-container ${compact ? 'scan-compact' : ''}`}>
+        <div className="scan-bar">
+          <div className="scan-bar-title">
+            <h1>Order Lookup</h1>
+            {!compact && <p>Scan a barcode or look an order up by number.</p>}
+          </div>
+          <div className="scan-tabs">
+            <button
+              className={`scan-tab ${activeTab === 'scan' ? 'active' : ''}`}
+              onClick={() => { setActiveTab('scan'); setOrder(null); setError(''); setScanValue(''); }}
+            >
+              🎯 Scan
+            </button>
+            <button
+              className={`scan-tab ${activeTab === 'manual' ? 'active' : ''}`}
+              onClick={() => { setActiveTab('manual'); setOrder(null); setError(''); setScanValue(''); }}
+            >
+              ⌨️ Manual
+            </button>
+          </div>
         </div>
 
-        <div className="scan-input-section glass-card">
-          {activeTab === 'scan' ? (
-            <div className="scan-mode-view">
-              <div className={`scan-status ${loading ? 'loading' : 'ready'}`}>
-                {loading ? '🔍 Reading...' : '📡 Listening for Scan'}
-              </div>
-              <p style={{ color: 'var(--text-muted)', fontSize: '14px' }}>
-                Use your barcode gun to scan the order now.
-              </p>
-              {/* Restored Native DOM Input for hardware-level scanning protection */}
-              <input
-                ref={inputRef}
-                type="text"
-                value={scanValue}
-                onChange={(e) => setScanValue(e.target.value)}
-                onKeyDown={handleHiddenScanKeyDown}
-                style={{ position: 'absolute', opacity: 0, top: '-9999px', left: '-9999px' }}
-                autoComplete="off"
-              />
+        {activeTab === 'scan' ? (
+          <div className={`scan-listen ${loading ? 'loading' : ''}`}>
+            <span className="scan-listen-dot" />
+            <span className="scan-listen-text">{loading ? 'Reading…' : 'Listening for scan'}</span>
+            {!compact && <span className="scan-listen-hint">Use your barcode gun to scan the order now.</span>}
+            {compact && <button type="button" className="mini-btn" onClick={() => { setOrder(null); setError(''); setScanValue(''); }}>Clear</button>}
+            {/* Native DOM input, kept focused for hardware-level scanning protection */}
+            <input
+              ref={inputRef}
+              type="text"
+              value={scanValue}
+              onChange={(e) => setScanValue(e.target.value)}
+              onKeyDown={handleHiddenScanKeyDown}
+              style={{ position: 'absolute', opacity: 0, top: '-9999px', left: '-9999px' }}
+              autoComplete="off"
+            />
+          </div>
+        ) : (
+          <form onSubmit={handleManualSubmit} className="manual-lookup-form">
+            <input
+              type="text"
+              value={scanValue}
+              onChange={(e) => setScanValue(e.target.value)}
+              placeholder="Type Order ID (e.g. #1001)..."
+              className="input"
+              autoComplete="off"
+            />
+            <button type="submit" className="btn btn-primary" disabled={loading}>
+              {loading ? '...' : 'Lookup'}
+            </button>
+          </form>
+        )}
+
+        {error && <div className="scan-error-msg">{error}</div>}
+
+        {order ? (
+          <OrderDetailsCard order={order} />
+        ) : !loading && !error && (
+          <div className="empty-state">
+            <div className="empty-icon">📦</div>
+            <h3>No Scan Detected</h3>
+            <p>
+              {activeTab === 'scan'
+                ? 'Waiting for barcode input from your scanner...'
+                : 'Enter an order number and click Lookup to begin'}
+            </p>
+            <div className="scan-tip">
+              <strong>Tip:</strong> If you are sure the Order ID is correct, make sure you have run a <strong>Full Sync</strong> in the Settings page!
             </div>
-          ) : (
-            <form onSubmit={handleManualSubmit} className="manual-lookup-form">
-              <input
-                type="text"
-                value={scanValue}
-                onChange={(e) => setScanValue(e.target.value)}
-                placeholder="Type Order ID (e.g. #1001)..."
-                className="input"
-                autoComplete="off"
-              />
-              <button type="submit" className="btn btn-primary" disabled={loading}>
-                {loading ? '...' : 'Lookup'}
-              </button>
-            </form>
-          )}
-
-          {error && <div className="scan-error-msg">{error}</div>}
-        </div>
-
-        <div className="scan-results-view">
-          {order ? (
-            <OrderDetailsCard order={order} />
-          ) : !loading && !error && (
-            <div className="empty-state">
-              <div className="empty-icon">📦</div>
-              <h3>No Scan Detected</h3>
-              <p>
-                {activeTab === 'scan'
-                  ? 'Waiting for barcode input from your scanner...'
-                  : 'Enter an order number and click Lookup to begin'}
-              </p>
-              <div style={{ marginTop: '20px', padding: '16px', borderRadius: '12px', background: 'rgba(255,165,0,0.1)', color: 'rgba(255,165,0,0.9)', fontSize: '13px', maxWidth: '400px', margin: '20px auto' }}>
-                <strong>Tip:</strong> If you are sure the Order ID is correct, make sure you have run a <strong>Full Sync</strong> in the Settings page!
-              </div>
-            </div>
-          )}
-        </div>
+          </div>
+        )}
       </div>
     </div>
   );

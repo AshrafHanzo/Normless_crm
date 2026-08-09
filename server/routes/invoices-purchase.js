@@ -9,8 +9,15 @@
 const express = require('express');
 const db = require('../db/connection');
 const purchase = require('../services/gst-purchase');
+const { tableParams, pagination } = require('../utils/table');
 
 const router = express.Router();
+
+// Client column key → SQL expression. Only these can be sorted on.
+const PURCHASE_SORTS = {
+    purchase_date: 'purchase_date', company_name: 'LOWER(company_name)', invoice_no: 'invoice_no',
+    particulars: 'particulars', taxable: 'taxable', gst_amount: 'gst_amount', gross: 'gross',
+};
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const isAdmin = (req) => req.user?.role === 'owner' || req.user?.role === 'admin';
@@ -42,11 +49,17 @@ router.get('/', async (req, res) => {
             vals.push(`%${search}%`);
             where.push(`(company_name ILIKE $${vals.length} OR invoice_no ILIKE $${vals.length} OR particulars ILIKE $${vals.length})`);
         }
-        const sql = `SELECT ${ROW_COLUMNS} FROM gst_purchases
-                     ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
-                     ORDER BY purchase_date DESC, id DESC LIMIT 1000`;
-        const rows = (await db.query(sql, vals)).rows;
-        res.json({ rows, summary: purchase.summarise(rows) });
+        const t = tableParams(req.query, { sortable: PURCHASE_SORTS, defaultSort: 'purchase_date' });
+        const whereSql = where.length ? 'WHERE ' + where.join(' AND ') : '';
+
+        const rows = (await db.query(
+            `SELECT ${ROW_COLUMNS} FROM gst_purchases ${whereSql} ${t.orderBy} LIMIT ${t.limit} OFFSET ${t.offset}`,
+            vals
+        )).rows;
+        // The GST totals have to describe the whole filtered period, not the page in view —
+        // they're what gets filed, so a figure that changed as you paged would be wrong.
+        const allRows = (await db.query(`SELECT ${ROW_COLUMNS} FROM gst_purchases ${whereSql}`, vals)).rows;
+        res.json({ rows, summary: purchase.summarise(allRows), pagination: pagination(allRows.length, t) });
     } catch (err) {
         console.error('Error loading purchases:', err);
         res.status(500).json({ error: 'Failed to load purchases' });

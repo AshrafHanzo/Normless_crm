@@ -174,6 +174,7 @@ const crewfitPaymentsRoutes = require('./routes/crewfit-payments');
 const { settlePayment } = crewfitPaymentsRoutes;
 const crewfitCustomersRoutes = require('./routes/crewfit-customers');
 const crewfitVendorOrderRoutes = require('./routes/crewfit-vendor-orders');
+const marketingRoutes = require('./routes/marketing');
 
 // Public routes
 app.use('/api/auth', authRoutes);
@@ -244,6 +245,7 @@ app.use('/api/crewfit/payments', authMiddleware, crewfitPaymentsRoutes);
 app.use('/api/crewfit/customers', authMiddleware, crewfitCustomersRoutes);
 app.use('/api/crewfit/vendor-orders', authMiddleware, crewfitVendorOrderRoutes);
 app.use('/api/crewfit', authMiddleware, crewfitRoutes);
+app.use('/api/marketing', authMiddleware, marketingRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
@@ -363,12 +365,17 @@ async function ensureCrewfitSchema() {
                 ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_invoices BOOLEAN DEFAULT false;
                 -- Crewfit purchase orders raised to manufacturing vendors.
                 ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_crewfit_vendors BOOLEAN DEFAULT false;
+                -- Normless influencer marketing: the roster and the seeding orders raised against it.
+                ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_marketing BOOLEAN DEFAULT false;
+                -- Separate from the page itself: only production fills in AWB/tracking and marks
+                -- an influencer order dispatched. Marketing sees those fields but can't edit them.
+                ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_dispatch_marketing BOOLEAN DEFAULT false;
             `);
             await db.query(`UPDATE admin_users SET can_access_normless=true, can_access_crewfit=true,
                 can_view_crewfit_followups=true, can_view_crewfit_orders=true, can_view_crewfit_catalog=true,
                 can_view_crewfit_analytics=true, can_view_crewfit_calculator=true, can_view_crewfit_payments=true,
                 can_view_crewfit_customers=true, can_view_revenue=true, can_view_invoices=true,
-                can_view_crewfit_vendors=true
+                can_view_crewfit_vendors=true, can_view_marketing=true, can_dispatch_marketing=true
                 WHERE role IN ('owner','admin')`);
         } catch (e) { console.error('admin perms ensure:', e.message); }
 
@@ -620,6 +627,67 @@ async function ensureGstSchema() {
     }
 }
 
+// Influencer marketing (Normless → Marketing menu): the roster of creators we collab with, and
+// the seeding orders raised against them. Orders are deliberately not Shopify orders — most go
+// out as barter with no transaction — but they carry the Shopify order number when one exists.
+async function ensureMarketingSchema() {
+    try {
+        await db.exec(`
+            CREATE TABLE IF NOT EXISTS marketing_influencers (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                name TEXT NOT NULL,
+                content_type TEXT,
+                platform TEXT DEFAULT 'Instagram',
+                profile_url TEXT,
+                collab_type TEXT DEFAULT 'Barter',
+                location TEXT,
+                payment_per_video TEXT,
+                total_content INTEGER DEFAULT 0,
+                email TEXT,
+                contact_number TEXT,
+                address TEXT,
+                notes TEXT,
+                active BOOLEAN DEFAULT true,
+                created_by TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS marketing_influencers_name_idx ON marketing_influencers (LOWER(name));
+
+            CREATE TABLE IF NOT EXISTS marketing_orders (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                ref_no INTEGER,
+                influencer_id INTEGER REFERENCES marketing_influencers(id) ON DELETE SET NULL,
+                -- Snapshot of where this parcel actually went. Kept on the order rather than read
+                -- through the influencer, so correcting a creator's current address later never
+                -- rewrites the address a past parcel was sent to.
+                name TEXT, email TEXT, contact_number TEXT, address TEXT,
+                collab_type TEXT,
+                -- [{ product, variant, sku, qty, image, shopify_product_id, shopify_variant_id }]
+                items TEXT,
+                total_qty INTEGER DEFAULT 0,
+                order_date DATE NOT NULL,
+                status TEXT DEFAULT 'Requested',
+                notes TEXT,
+                -- Production & dispatch half of the sheet
+                fulfilled_date DATE,
+                shopify_order_number TEXT,
+                shipping_partner TEXT,
+                awb TEXT,
+                tracking_link TEXT,
+                created_by TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS marketing_orders_ref_idx ON marketing_orders (ref_no);
+            CREATE INDEX IF NOT EXISTS marketing_orders_date_idx ON marketing_orders (order_date DESC);
+            CREATE INDEX IF NOT EXISTS marketing_orders_influencer_idx ON marketing_orders (influencer_id);
+        `);
+    } catch (err) {
+        console.error('ensureMarketingSchema error:', err.message);
+    }
+}
+
 // Start Server
 app.listen(PORT, async () => {
     console.log(`🚀 Normless CRM Backend running on http://localhost:${PORT}`);
@@ -630,6 +698,8 @@ app.listen(PORT, async () => {
     await ensureCrewfitSchema();
     // Ensure GST sales invoicing schema
     await ensureGstSchema();
+    // Ensure influencer marketing schema
+    await ensureMarketingSchema();
 
     // START AUTO-SYNC IMMEDIATELY (no user action needed!)
     startAutoSync();

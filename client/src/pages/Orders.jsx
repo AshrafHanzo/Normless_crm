@@ -1,32 +1,37 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, Fragment } from 'react'
 import { useApi } from '../App'
+import useServerTable from '../hooks/useServerTable'
+import SortTh from '../components/SortTh'
+import Pagination from '../components/Pagination'
 
 export default function Orders() {
   const apiFetch = useApi()
   const [orders, setOrders] = useState([])
-  const [pagination, setPagination] = useState({})
   const [search, setSearch] = useState('')
   const [financialFilter, setFinancialFilter] = useState('')
   const [fulfillmentFilter, setFulfillmentFilter] = useState('')
-  const [page, setPage] = useState(1)
   const [loading, setLoading] = useState(true)
   const [expandedOrder, setExpandedOrder] = useState(null)
+  // Sorting and paging both happen on the server — a header click reorders every matching order,
+  // not the 25 currently on screen.
+  const t = useServerTable({ sort: 'created_at', dir: 'desc' })
+  const pagination = t.pagination
 
   useEffect(() => {
     loadOrders()
-  }, [page, search, financialFilter, fulfillmentFilter])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [t.key, search, financialFilter, fulfillmentFilter])
 
   const loadOrders = async () => {
     setLoading(true)
-    const params = new URLSearchParams({
-      page, limit: 20, search,
+    const result = await apiFetch('/api/orders?' + t.query({
+      search,
       ...(financialFilter && { financial_status: financialFilter }),
       ...(fulfillmentFilter && { fulfillment_status: fulfillmentFilter }),
-    })
-    const result = await apiFetch(`/api/orders?${params}`)
-    if (result) {
+    }))
+    if (result && !result.error) {
       setOrders(result.orders)
-      setPagination(result.pagination)
+      t.setPagination(result.pagination)
     }
     setLoading(false)
   }
@@ -42,7 +47,7 @@ export default function Orders() {
     clearTimeout(searchTimeout)
     searchTimeout = setTimeout(() => {
       setSearch(val)
-      setPage(1)
+      t.resetPage()
     }, 400)
   }
 
@@ -73,7 +78,7 @@ export default function Orders() {
           <span className="search-icon">🔍</span>
           <input type="search" placeholder="Search by order number..." onChange={e => handleSearch(e.target.value)} />
         </div>
-        <select value={financialFilter} onChange={e => { setFinancialFilter(e.target.value); setPage(1) }}>
+        <select value={financialFilter} onChange={e => { setFinancialFilter(e.target.value); t.resetPage() }}>
           <option value="">All Payment Status</option>
           <option value="PAID">Paid</option>
           <option value="PENDING">Pending</option>
@@ -81,7 +86,7 @@ export default function Orders() {
           <option value="PARTIALLY_REFUNDED">Partially Refunded</option>
           <option value="VOIDED">Voided</option>
         </select>
-        <select value={fulfillmentFilter} onChange={e => { setFulfillmentFilter(e.target.value); setPage(1) }}>
+        <select value={fulfillmentFilter} onChange={e => { setFulfillmentFilter(e.target.value); t.resetPage() }}>
           <option value="">All Fulfillment</option>
           <option value="FULFILLED">Fulfilled</option>
           <option value="UNFULFILLED">Unfulfilled</option>
@@ -104,18 +109,18 @@ export default function Orders() {
             <table className="data-table">
               <thead>
                 <tr>
-                  <th>Order</th>
-                  <th>Customer</th>
-                  <th>Date</th>
-                  <th>Payment</th>
-                  <th>Fulfillment</th>
-                  <th>Total</th>
+                  <SortTh label="Order" col="order_number" sort={t.sort} onSort={t.toggle} />
+                  <SortTh label="Customer" col="customer" sort={t.sort} onSort={t.toggle} />
+                  <SortTh label="Date" col="created_at" sort={t.sort} onSort={t.toggle} />
+                  <SortTh label="Payment" col="financial_status" sort={t.sort} onSort={t.toggle} />
+                  <SortTh label="Fulfillment" col="fulfillment_status" sort={t.sort} onSort={t.toggle} />
+                  <SortTh label="Total" col="total_price" sort={t.sort} onSort={t.toggle} />
                 </tr>
               </thead>
               <tbody>
                 {orders.map(o => (
-                  <>
-                    <tr key={o.id} onClick={() => toggleExpand(o.id)}>
+                  <Fragment key={o.id}>
+                    <tr onClick={() => toggleExpand(o.id)}>
                       <td data-label="Order" style={{ fontWeight: 600, color: 'var(--primary-light)' }}>{o.order_number}</td>
                       <td className="cell-primary">
                         <div style={{ fontWeight: 500 }}>{o.first_name || ''} {o.last_name || ''}</div>
@@ -156,25 +161,12 @@ export default function Orders() {
                         </td>
                       </tr>
                     )}
-                  </>
+                  </Fragment>
                 ))}
               </tbody>
             </table>
 
-            {/* Pagination */}
-            {pagination.totalPages > 1 && (
-              <div className="pagination">
-                <button disabled={page <= 1} onClick={() => setPage(p => p - 1)}>‹</button>
-                {Array.from({ length: Math.min(pagination.totalPages, 7) }, (_, i) => {
-                  const p = i + 1
-                  return (
-                    <button key={p} className={page === p ? 'active' : ''} onClick={() => setPage(p)}>{p}</button>
-                  )
-                })}
-                {pagination.totalPages > 7 && <button disabled>...</button>}
-                <button disabled={page >= pagination.totalPages} onClick={() => setPage(p => p + 1)}>›</button>
-              </div>
-            )}
+            <Pagination table={t} noun="orders" />
           </>
         )}
       </div>

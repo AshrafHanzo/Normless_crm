@@ -5,8 +5,15 @@ const { SHIP_ZONES, SHIP_REGIONS, shippingFor } = require('../data/crewfitShippi
 const { renderQuote } = require('../services/invoice');
 const razorpay = require('../config/razorpay');
 const { isValidMobile } = require('../utils/phone');
+const { tableParams, pagination } = require('../utils/table');
 
 const router = express.Router();
+
+// Client column key → SQL expression. Only these can be sorted on.
+const QUOTE_SORTS = {
+  customer_name: 'customer_name', status: 'status', grand_total: 'grand_total',
+  zone_label: 'zone_label', created_at: 'created_at',
+};
 
 function safeJson(v, fallback) { try { return typeof v === 'string' ? JSON.parse(v) : (v || fallback); } catch { return fallback; } }
 const parseQuote = (q) => ({ ...q, line_items: safeJson(q.line_items, []) });
@@ -128,11 +135,26 @@ router.post('/calculate', async (req, res) => {
   }
 });
 
-// GET /api/crewfit/quotes — recent quotes, newest first
+// GET /api/crewfit/quotes — sorted + paged on the server
 router.get('/', async (req, res) => {
   try {
-    const r = await db.query('SELECT * FROM crewfit_quotes ORDER BY created_at DESC LIMIT 200');
-    res.json({ quotes: r.rows.map(parseQuote) });
+    const { search = '', status = '' } = req.query;
+    const t = tableParams(req.query, { sortable: QUOTE_SORTS, defaultSort: 'created_at' });
+
+    const where = [], vals = [];
+    if (status) { vals.push(status); where.push(`status = $${vals.length}`); }
+    if (search.trim()) {
+      vals.push(`%${search.trim()}%`);
+      where.push(`(customer_name ILIKE $${vals.length} OR contact_number ILIKE $${vals.length} OR notes ILIKE $${vals.length})`);
+    }
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+
+    const countRes = await db.query(`SELECT COUNT(*)::int AS n FROM crewfit_quotes ${whereSql}`, vals);
+    const total = countRes.rows[0]?.n || 0;
+
+    const r = await db.query(
+      `SELECT * FROM crewfit_quotes ${whereSql} ${t.orderBy} LIMIT ${t.limit} OFFSET ${t.offset}`, vals);
+    res.json({ quotes: r.rows.map(parseQuote), pagination: pagination(total, t) });
   } catch (err) {
     console.error('list quotes error:', err); res.status(500).json({ error: 'Failed to load quotes' });
   }

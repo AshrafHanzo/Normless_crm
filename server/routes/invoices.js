@@ -15,8 +15,16 @@ const db = require('../db/connection');
 const gst = require('../services/gst-report');
 const purchase = require('../services/gst-purchase');
 const { hasPermission } = require('../utils/permissions');
+const { tableParams, pagination } = require('../utils/table');
 
 const router = express.Router();
+
+// Client column key → SQL expression. Only these can be sorted on.
+const REPORT_SORTS = {
+    period_label: 'period_label', from_date: 'from_date', row_count: 'row_count',
+    taxable_value: 'taxable_value', gst_total: 'gst_total', gross_total: 'gross_total',
+    generated_by: 'generated_by', created_at: 'created_at',
+};
 
 // Deliberately NOT under server/uploads: that directory is served statically and unauthenticated,
 // and these workbooks carry customer names and order values. Downloads go through the authorised
@@ -182,6 +190,7 @@ router.get('/reports', async (req, res) => {
         // which JSON-serialises to the previous day in IST. Send them as plain text instead so the
         // period shown is the period that was requested.
         const kind = req.query.kind === 'purchase' || req.query.kind === 'sales' ? req.query.kind : null;
+        const t = tableParams(req.query, { sortable: REPORT_SORTS, defaultSort: 'created_at' });
         const r = await db.query(
             `SELECT id, kind, period_label,
                     TO_CHAR(from_date, 'YYYY-MM-DD') AS from_date,
@@ -190,10 +199,12 @@ router.get('/reports', async (req, res) => {
                     taxable_value, gst_total, gross_total, invoice_from, invoice_to,
                     generated_by, created_at
              FROM gst_reports ${kind ? 'WHERE kind = $1' : ''}
-             ORDER BY created_at DESC, id DESC LIMIT 200`,
+             ${t.orderBy} LIMIT ${t.limit} OFFSET ${t.offset}`,
             kind ? [kind] : []
         );
-        res.json(r.rows);
+        const countRes = await db.query(
+            `SELECT COUNT(*)::int AS n FROM gst_reports ${kind ? 'WHERE kind = $1' : ''}`, kind ? [kind] : []);
+        res.json({ reports: r.rows, pagination: pagination(countRes.rows[0]?.n || 0, t) });
     } catch (err) {
         console.error('Error loading GST reports:', err);
         res.status(500).json({ error: 'Failed to load report history' });

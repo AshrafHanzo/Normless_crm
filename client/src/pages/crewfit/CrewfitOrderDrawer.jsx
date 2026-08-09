@@ -217,12 +217,19 @@ export const trackingUrl = (order) =>
     ? `https://trackcourier.io/track-and-trace/st-courier/${String(order.tracking_link).trim()}`
     : null
 
-// Porter deliveries don't come with a tracking ID — a different, shorter template
-// is used instead of the tracking-details one.
+// Porter drops and Self Pickup collections don't come with a tracking ID — mirrors
+// NO_TRACKING_MOTS on the server, which lets these reach Dispatched without one.
+export const NO_TRACKING_MOTS = ['Porter', 'Self Pickup']
+export const isNoTrackingMot = (mot) => NO_TRACKING_MOTS.includes(mot)
+
+// The no-tracking MOTs get a different, shorter template instead of the tracking-details one.
 function buildDispatchMessage(order) {
-  if (order.mot === 'Porter') {
-    const L = [`Hi ${order.customer_name || 'there'}! 🎉`, '', `Your Crewfit order (Ref: CF-${order.sl_no}) has been dispatched through *Porter*.`, '']
-    if (order.dispatch_date) L.push(`📅 *Dispatched On:* ${order.dispatch_date}`)
+  if (isNoTrackingMot(order.mot)) {
+    const L = [`Hi ${order.customer_name || 'there'}! 🎉`, '']
+    L.push(order.mot === 'Self Pickup'
+      ? `Your Crewfit order (Ref: CF-${order.sl_no}) is packed and ready for pickup.`
+      : `Your Crewfit order (Ref: CF-${order.sl_no}) has been dispatched through *Porter*.`, '')
+    if (order.dispatch_date) L.push(`📅 *${order.mot === 'Self Pickup' ? 'Ready On' : 'Dispatched On'}:* ${order.dispatch_date}`)
     L.push('', 'We hope you are happy with our service! 🙌', '', 'Thank you for choosing Crewfit!')
     return L.join('\n')
   }
@@ -804,8 +811,8 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
     else if (form.status === 'Ready for Dispatch' && v === 'Fully Paid') patch.status = 'Dispatch Pending'
     setF(patch)
   }
-  // Porter doesn't issue a tracking ID — this is the alternate path to Dispatched for that MOT.
-  const markDispatchedViaPorter = () => {
+  // Porter/Self Pickup don't issue a tracking ID — this is the alternate path to Dispatched.
+  const markDispatchedNoTracking = () => {
     setF({ status: 'Dispatched', dispatch_date: form.dispatch_date || todayStr() })
   }
   const sendDispatchWhatsApp = async () => {
@@ -1202,13 +1209,13 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
             <div className="input-group"><label>Dispatch (MOT)</label><select value={form.mot || ''} onChange={e => setF({ mot: e.target.value })}><option value="">—</option>{(meta?.mots || []).map(v => <option key={v}>{v}</option>)}</select></div>
           </div>
           <div className="form-row">
-            {form.mot === 'Porter' ? (
+            {isNoTrackingMot(form.mot) ? (
               <div className="input-group">
-                <label>Dispatch via Porter</label>
+                <label>{form.mot === 'Self Pickup' ? 'Hand over to customer' : 'Dispatch via Porter'}</label>
                 {form.status === 'Dispatched' ? (
-                  <div className="img-upload-hint">✓ Marked dispatched{form.dispatch_date ? ` on ${form.dispatch_date}` : ''} — Porter doesn't issue a tracking ID</div>
+                  <div className="img-upload-hint">✓ Marked dispatched{form.dispatch_date ? ` on ${form.dispatch_date}` : ''} — {form.mot} doesn't issue a tracking ID</div>
                 ) : (
-                  <button type="button" className="btn btn-secondary" onClick={markDispatchedViaPorter}>Mark as Dispatched (no tracking ID)</button>
+                  <button type="button" className="btn btn-secondary" onClick={markDispatchedNoTracking}>Mark as Dispatched (no tracking ID)</button>
                 )}
               </div>
             ) : (
@@ -1233,7 +1240,7 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
 
           {form.status === 'Dispatch Pending' && (
             <div className="dispatch-banner">
-              <span>🚚 Balance collected — cleared for dispatch. Print the label, hand the parcel to {form.mot || 'the courier'}, then {form.mot === 'Porter' ? 'use the Porter button above' : 'add the tracking ID above'} to mark it Dispatched.</span>
+              <span>🚚 Balance collected — cleared for dispatch. Print the label, hand the parcel to {form.mot || 'the courier'}, then {isNoTrackingMot(form.mot) ? 'use the button above' : 'add the tracking ID above'} to mark it Dispatched.</span>
               <span style={{ display: 'flex', gap: 8 }}>
                 <button type="button" className="btn btn-secondary" onClick={printLabel} disabled={labelBusy}>{labelBusy ? 'Preparing…' : '🖨 Print shipping label'}</button>
               </span>
@@ -1256,13 +1263,13 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
           {form.status === 'Dispatched' && (
             <div className="dispatch-banner">
               <span>
-                📦 Dispatched{form.dispatch_date ? ` on ${form.dispatch_date}` : ''}{form.tracking_link ? ` · Tracking: ${form.tracking_link}` : form.mot === 'Porter' ? ' · via Porter (no tracking ID)' : ''}
+                📦 Dispatched{form.dispatch_date ? ` on ${form.dispatch_date}` : ''}{form.tracking_link ? ` · Tracking: ${form.tracking_link}` : isNoTrackingMot(form.mot) ? ` · via ${form.mot} (no tracking ID)` : ''}
                 {trackingUrl(form) && <> · <a className="track-link" href={trackingUrl(form)} target="_blank" rel="noreferrer">Track</a></>}
                 {form.tracking_sent_at ? <> · <span style={{ color: 'var(--success)' }}>✓ sent</span></> : ''}
               </span>
               <span style={{ display: 'flex', gap: 8 }}>
                 <button type="button" className="mini-btn" onClick={copyDispatchMessage}>📋 Copy</button>
-                <button type="button" className="btn btn-secondary" onClick={sendDispatchWhatsApp}>💬 {form.tracking_sent_at ? 'Resend' : 'Send'} {form.mot === 'Porter' ? 'Dispatch Update' : 'Tracking'} via WhatsApp</button>
+                <button type="button" className="btn btn-secondary" onClick={sendDispatchWhatsApp}>💬 {form.tracking_sent_at ? 'Resend' : 'Send'} {isNoTrackingMot(form.mot) ? 'Dispatch Update' : 'Tracking'} via WhatsApp</button>
               </span>
             </div>
           )}

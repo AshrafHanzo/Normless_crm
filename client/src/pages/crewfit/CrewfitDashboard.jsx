@@ -35,8 +35,10 @@ export default function CrewfitDashboard() {
   if (loading) return <div className="loader"><div className="spinner" /><span>Loading follow-ups…</span></div>
 
   const kpis = (stats && typeof stats.total === 'number') ? [
-    { icon: '📦', label: 'Total Orders', value: stats.total, tone: 'primary' },
-    { icon: '🔄', label: 'Active (in pipeline)', value: stats.active, tone: 'info' },
+    // Units ride inside the orders card — 12 orders can be 20 pieces or 2,000, but it isn't a
+    // headline number in its own right.
+    { icon: '📦', label: 'Total Orders', value: stats.total, sub: `${(stats.totalUnits ?? 0).toLocaleString('en-IN')} units`, tone: 'primary' },
+    { icon: '🔄', label: 'Active (in pipeline)', value: stats.active, sub: `${(stats.activeUnits ?? 0).toLocaleString('en-IN')} units`, tone: 'info' },
     { icon: '✅', label: 'Dispatched', value: stats.dispatched, tone: 'success' },
     { icon: '💰', label: 'Pending Payments', value: fmt(stats.pendingPayments), tone: 'warning' },
   ] : []
@@ -52,7 +54,9 @@ export default function CrewfitDashboard() {
         {kpis.map((k, i) => (
           <div className="kpi-card" key={i}>
             <div className="kpi-head"><div className="kpi-icon">{k.icon}</div></div>
-            <div className="kpi-value" style={{ fontSize: typeof k.value === 'string' ? 22 : 30 }}>{k.value}</div>
+            <div className="kpi-value" style={{ fontSize: typeof k.value === 'string' ? 22 : 30 }}>
+              {k.value}{k.sub && <span className="kpi-sub">{k.sub}</span>}
+            </div>
             <div className="kpi-label">{k.label}</div>
           </div>
         ))}

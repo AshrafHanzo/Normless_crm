@@ -1,22 +1,27 @@
 const express = require('express');
 const db = require('../db/connection');
+const { tableParams, pagination } = require('../utils/table');
 
 const router = express.Router();
+
+// Client column key → SQL expression. Only these can be sorted on.
+const CUSTOMER_SORTS = {
+    name: "COALESCE(NULLIF(TRIM(first_name || ' ' || last_name), ''), email)",
+    email: 'email',
+    orders_count: 'orders_count',
+    total_spent: 'total_spent',
+    crm_status: 'crm_status',
+    crm_priority: 'crm_priority',
+    created_at: 'created_at',
+    updated_at: 'updated_at',
+};
 
 // GET /api/customers - List with search, filter, pagination
 router.get('/', async (req, res) => {
     try {
-        const {
-            search = '',
-            status = '',
-            priority = '',
-            sort = 'total_spent',
-            order = 'DESC',
-            page = 1,
-            limit = 20
-        } = req.query;
+        const { search = '', status = '', priority = '' } = req.query;
+        const t = tableParams(req.query, { sortable: CUSTOMER_SORTS, defaultSort: 'total_spent' });
 
-        const offset = (parseInt(page) - 1) * parseInt(limit);
         let conditions = [];
         let params = [];
         let paramCount = 1;
@@ -42,27 +47,18 @@ router.get('/', async (req, res) => {
 
         const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
-        const allowedSorts = ['total_spent', 'orders_count', 'created_at', 'first_name', 'updated_at'];
-        const sortCol = allowedSorts.includes(sort) ? sort : 'total_spent';
-        const sortDir = order.toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
-
         const countResult = await db.query(`SELECT COUNT(*) as total FROM customers ${whereClause}`, params);
         const total = parseInt(countResult.rows[0]?.total) || 0;
 
         const customers = await db.query(`
             SELECT * FROM customers ${whereClause}
-            ORDER BY ${sortCol} ${sortDir}
+            ${t.orderBy}
             LIMIT $${paramCount} OFFSET $${paramCount + 1}
-        `, [...params, parseInt(limit), offset]);
+        `, [...params, t.limit, t.offset]);
 
         res.json({
             customers: customers.rows,
-            pagination: {
-                total,
-                page: parseInt(page),
-                limit: parseInt(limit),
-                totalPages: Math.ceil(total / parseInt(limit))
-            }
+            pagination: pagination(total, t),
         });
     } catch (err) {
         console.error('Error fetching customers:', err);

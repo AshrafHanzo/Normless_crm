@@ -1,4 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
+import useServerTable from '../../hooks/useServerTable'
+import SortTh from '../../components/SortTh'
+import Pagination from '../../components/Pagination'
 import { useNavigate } from 'react-router-dom'
 import { useApi } from '../../App'
 import { useToast } from '../../components/Toast'
@@ -65,20 +68,25 @@ export default function CrewfitQuotes() {
   const [activeQuote, setActiveQuote] = useState(null)
   const [quotes, setQuotes] = useState([])
   const [loadingQuotes, setLoadingQuotes] = useState(true)
+  // Server-side sort + page — the list used to be a hard-capped "recent 200".
+  const qt = useServerTable({ sort: 'created_at', dir: 'desc' })
   const [copiedId, setCopiedId] = useState(null)
   const [target, setTarget] = useState(null) // for CrewfitOrderDrawer: null | prefilled order object
   const confirmingQuoteId = useRef(null)
   const debounceRef = useRef(null)
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { loadQuotes() }, [qt.key])
+
   useEffect(() => {
     apiFetch('/api/crewfit/quotes/meta').then(m => setMeta(m && m.products ? m : null))
-    loadQuotes()
   }, [])
 
   const loadQuotes = async () => {
     setLoadingQuotes(true)
-    const r = await apiFetch('/api/crewfit/quotes')
+    const r = await apiFetch('/api/crewfit/quotes?' + qt.query())
     setQuotes(r?.quotes || [])
+    if (r?.pagination) qt.setPagination(r.pagination)
     setLoadingQuotes(false)
   }
 
@@ -282,10 +290,17 @@ export default function CrewfitQuotes() {
       </div>
 
       <div className="glass-card" style={{ marginTop: 24 }}>
-        <h3 style={{ marginBottom: 16 }}>Recent quotes</h3>
+        <h3 style={{ marginBottom: 16 }}>Quotes</h3>
         {loadingQuotes ? <div className="loader"><div className="spinner" /></div> : (
           <table className="data-table">
-            <thead><tr><th>Customer</th><th>Items</th><th style={{ textAlign: 'right' }}>Total</th><th>Status</th><th>Order</th><th></th></tr></thead>
+            <thead><tr>
+              <SortTh label="Customer" col="customer_name" sort={qt.sort} onSort={qt.toggle} />
+              <SortTh label="Items" />
+              <SortTh label="Total" col="grand_total" sort={qt.sort} onSort={qt.toggle} align="right" />
+              <SortTh label="Status" col="status" sort={qt.sort} onSort={qt.toggle} />
+              <SortTh label="Order" />
+              <SortTh label="" />
+            </tr></thead>
             <tbody>
               {quotes.map(q => (
                 <tr key={q.id}>
@@ -311,6 +326,7 @@ export default function CrewfitQuotes() {
             </tbody>
           </table>
         )}
+        {!loadingQuotes && <Pagination table={qt} noun="quotes" />}
       </div>
 
       <CrewfitOrderDrawer target={target} onClose={() => { setTarget(null); confirmingQuoteId.current = null }} onSaved={handleOrderSaved} />

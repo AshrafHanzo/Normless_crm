@@ -10,6 +10,7 @@ const GROUPS = [
     { key: 'customers', label: 'Customers', icon: 'users' },
     { key: 'orders', label: 'Orders', icon: 'box' },
     { key: 'scanner', label: 'Scan Order', icon: 'scan' },
+    { key: 'marketing', label: 'Marketing', icon: 'spark' },
     { key: 'invoices', label: 'Invoices', icon: 'invoice' },
   ] },
   { brand: 'crewfit', label: 'Crewfit', glyph: 'shirt', pages: [
@@ -24,17 +25,23 @@ const GROUPS = [
   ] },
 ]
 
-const blankForm = () => ({ username: '', password: '', role: 'operator', normless: true, dashboard: true, customers: true, orders: true, scanner: true, invoices: false, crewfit: false, crewfit_analytics: false, crewfit_followups: false, crewfit_orders: false, crewfit_catalog: false, crewfit_calculator: false, crewfit_payments: false, crewfit_customers: false, crewfit_vendors: false, revenue: false })
+const blankForm = () => ({ username: '', password: '', role: 'operator', normless: true, dashboard: true, customers: true, orders: true, scanner: true, marketing: false, marketing_dispatch: false, invoices: false, crewfit: false, crewfit_analytics: false, crewfit_followups: false, crewfit_orders: false, crewfit_catalog: false, crewfit_calculator: false, crewfit_payments: false, crewfit_customers: false, crewfit_vendors: false, revenue: false })
 const fromUser = (u) => ({
   id: u.id, username: u.username, password: '', role: u.role,
   normless: !!u.can_access_normless, dashboard: !!u.can_view_dashboard, customers: !!u.can_view_customers, orders: !!u.can_view_orders, scanner: !!u.can_scan_orders, invoices: !!u.can_view_invoices,
+  marketing: !!u.can_view_marketing, marketing_dispatch: !!u.can_dispatch_marketing,
   crewfit: !!u.can_access_crewfit, crewfit_analytics: !!u.can_view_crewfit_analytics, crewfit_followups: !!u.can_view_crewfit_followups, crewfit_orders: !!u.can_view_crewfit_orders, crewfit_catalog: !!u.can_view_crewfit_catalog, crewfit_calculator: !!u.can_view_crewfit_calculator, crewfit_payments: !!u.can_view_crewfit_payments, crewfit_customers: !!u.can_view_crewfit_customers, crewfit_vendors: !!u.can_view_crewfit_vendors, revenue: !!u.can_view_revenue,
 })
 const buildPerms = (f) => {
-  if (f.role === 'admin') return { normless: true, crewfit: true, dashboard: true, customers: true, orders: true, scanner: true, invoices: true, crewfit_analytics: true, crewfit_followups: true, crewfit_orders: true, crewfit_catalog: true, crewfit_calculator: true, crewfit_payments: true, crewfit_customers: true, crewfit_vendors: true, revenue: true, sync: false }
+  // Owner and admin both hold every page; the server short-circuits permission checks for them
+  // either way, so these columns are really just kept consistent with the role.
+  if (f.role === 'admin' || f.role === 'owner') return { normless: true, crewfit: true, dashboard: true, customers: true, orders: true, scanner: true, marketing: true, marketing_dispatch: true, invoices: true, crewfit_analytics: true, crewfit_followups: true, crewfit_orders: true, crewfit_catalog: true, crewfit_calculator: true, crewfit_payments: true, crewfit_customers: true, crewfit_vendors: true, revenue: true, sync: f.role === 'owner' }
   return {
     normless: !!f.normless, crewfit: !!f.crewfit, sync: false,
     dashboard: !!(f.normless && f.dashboard), customers: !!(f.normless && f.customers), orders: !!(f.normless && f.orders), scanner: !!(f.normless && f.scanner), invoices: !!(f.normless && f.invoices),
+    marketing: !!(f.normless && f.marketing),
+    // Dispatch is a sub-permission of the page: it can't be held without it.
+    marketing_dispatch: !!(f.normless && f.marketing && f.marketing_dispatch),
     crewfit_analytics: !!(f.crewfit && f.crewfit_analytics), crewfit_followups: !!(f.crewfit && f.crewfit_followups), crewfit_orders: !!(f.crewfit && f.crewfit_orders), crewfit_catalog: !!(f.crewfit && f.crewfit_catalog), crewfit_calculator: !!(f.crewfit && f.crewfit_calculator), crewfit_payments: !!(f.crewfit && f.crewfit_payments), crewfit_customers: !!(f.crewfit && f.crewfit_customers), crewfit_vendors: !!(f.crewfit && f.crewfit_vendors), revenue: !!f.revenue,
   }
 }
@@ -54,6 +61,7 @@ export default function AdminManagement() {
     confirm: toast.confirm,
   })
   const [saving, setSaving] = useState(false)
+  const isOwner = user?.role === 'owner'
 
   useEffect(() => { loadUsers(); loadStats() }, [])
   const loadUsers = async () => { setLoading(true); const r = await apiFetch('/api/admin/users'); if (r && !r.error) setUsers(r); setLoading(false) }
@@ -62,6 +70,14 @@ export default function AdminManagement() {
 
   const save = async () => {
     if (!form.username || (!form.id && !form.password)) { toast.error('Username and password are required'); return }
+    // Promoting to owner hands over the owner-only actions, so it gets an explicit confirmation
+    // rather than going through on a stray dropdown change.
+    const wasOwner = users.find(u => u.id === form.id)?.role === 'owner'
+    if (form.role === 'owner' && !wasOwner && !await toast.confirm({
+      title: `Make ${form.username} an owner?`,
+      message: 'They will be able to delete orders, edit the Crewfit catalog, run a full sync, and promote or demote other users — including you.',
+      confirmLabel: 'Make owner', cancelLabel: 'Cancel', danger: true,
+    })) return
     setSaving(true)
     const permissions = buildPerms(form)
     let res
@@ -109,10 +125,21 @@ export default function AdminManagement() {
           <div className="form-row" style={{ marginBottom: 18 }}>
             <div className="input-group" style={{ marginBottom: 0 }}><label>Username</label><input value={form.username} disabled={!!form.id} onChange={e => setF({ username: e.target.value })} placeholder="e.g. anu@crewfit" /></div>
             {!form.id && <div className="input-group" style={{ marginBottom: 0 }}><label>Password</label><input type="text" value={form.password} onChange={e => setF({ password: e.target.value })} placeholder="Set a password" /></div>}
-            <div className="input-group" style={{ marginBottom: 0 }}><label>Role</label><select value={form.role} onChange={e => setF({ role: e.target.value })}><option value="operator">Operator (limited)</option><option value="admin">Admin (full access)</option></select></div>
+            <div className="input-group" style={{ marginBottom: 0 }}><label>Role</label>
+              {/* An admin may not grant owner, nor change an existing owner — the select is
+                  locked rather than silently showing a role the server would reject. */}
+              <select value={form.role} disabled={!isOwner && form.role === 'owner'} onChange={e => setF({ role: e.target.value })}>
+                <option value="operator">Operator (limited)</option>
+                <option value="admin">Admin (full access)</option>
+                {(isOwner || form.role === 'owner') && <option value="owner">Owner (full control)</option>}
+              </select>
+              {!isOwner && form.role === 'owner' && <div className="img-upload-hint">Only another owner can change this.</div>}
+            </div>
           </div>
 
-          {form.role === 'admin' ? (
+          {form.role === 'owner' ? (
+            <div className="admin-note"><Icon name="shield" size={16} /> Owners get everything an admin does, plus the owner-only actions: deleting orders, editing the Crewfit catalog, running a full sync, and promoting other users to owner. There can be more than one owner.</div>
+          ) : form.role === 'admin' ? (
             <div className="admin-note"><Icon name="shield" size={16} /> Admins get full access to both brands and all pages.</div>
           ) : (
             <>
@@ -127,6 +154,19 @@ export default function AdminManagement() {
                 </span>
               </label>
             </div>
+            {/* Also cross-cutting: which half of an influencer order this user may write. */}
+            {form.normless && form.marketing && (
+              <div className="access-card data-access-card">
+                <label className="page-check" style={{ margin: 0 }}>
+                  <input type="checkbox" checked={!!form.marketing_dispatch} onChange={e => setF({ marketing_dispatch: e.target.checked })} />
+                  <Icon name="truck" size={15} />
+                  <span>
+                    <b>Dispatch influencer orders</b>
+                    <em>Fill in the shipping partner, AWB and tracking link on a Marketing order, and mark it dispatched. Without this, the user can still raise orders and read the dispatch details — production owns that half.</em>
+                  </span>
+                </label>
+              </div>
+            )}
             <div className="access-grid">
               {GROUPS.map(g => (
                 <div key={g.brand} className={`access-card ${form[g.brand] ? 'on' : ''}`}>
@@ -174,7 +214,9 @@ export default function AdminManagement() {
                 </div>
                 <div className="user-card-actions">
                   <button className="btn-icon" onClick={() => setForm(fromUser(u))} title="Edit access"><Icon name="edit" size={15} /></button>
-                  {u.id !== user.id && u.role !== 'owner' && <button className="btn-icon" onClick={() => del(u.id)} title="Delete" style={{ color: 'var(--danger)' }}><Icon name="trash" size={15} /></button>}
+                  {/* An owner may remove another owner — the server still refuses to delete the
+                      last one. Admins can't touch an owner at all. */}
+                  {u.id !== user.id && (u.role !== 'owner' || isOwner) && <button className="btn-icon" onClick={() => del(u.id)} title="Delete" style={{ color: 'var(--danger)' }}><Icon name="trash" size={15} /></button>}
                 </div>
               </div>
             ))}

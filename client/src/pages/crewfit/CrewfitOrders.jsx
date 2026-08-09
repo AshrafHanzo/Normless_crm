@@ -5,6 +5,9 @@ import { useToast } from '../../components/Toast'
 import DateRangeFilter from '../../components/DateRangeFilter'
 import CrewfitOrderDrawer, { openShippingLabel } from './CrewfitOrderDrawer'
 import Icon from '../../components/Icon'
+import useServerTable from '../../hooks/useServerTable'
+import SortTh from '../../components/SortTh'
+import Pagination from '../../components/Pagination'
 
 const fmt = (v) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(v || 0)
 // Only "Dispatched" is a finished state — "Dispatch Pending" is still work in progress.
@@ -20,14 +23,13 @@ export default function CrewfitOrders() {
   const [params, setParams] = useSearchParams()
   const [meta, setMeta] = useState(null)
   const [orders, setOrders] = useState([])
-  const [pagination, setPagination] = useState({ total: 0, page: 1, limit: 25, totalPages: 1 })
   const [loading, setLoading] = useState(true)
   const [filters, setFilters] = useState(emptyFilters)
   const [searchTerm, setSearchTerm] = useState('')
   const [startDate, setStartDate] = useState('')
   const [endDate, setEndDate] = useState('')
-  const [page, setPage] = useState(1)
-  const [limit, setLimit] = useState(25)
+  // Server-side sort + page: a header click reorders every matching order, not this page's 25.
+  const t = useServerTable({ sort: 'sl_no', dir: 'desc' })
   const [labelBusy, setLabelBusy] = useState(null)
   const [target, setTarget] = useState(null) // null | 'new' | order object
 
@@ -37,27 +39,27 @@ export default function CrewfitOrders() {
 
   // Debounce free-text search so we don't hit the API on every keystroke.
   useEffect(() => {
-    const t = setTimeout(() => { setFilters(f => ({ ...f, search: searchTerm })); setPage(1) }, 350)
-    return () => clearTimeout(t)
+    const timer = setTimeout(() => { setFilters(f => ({ ...f, search: searchTerm })); t.resetPage() }, 350)
+    return () => clearTimeout(timer)
   }, [searchTerm])
 
-  useEffect(() => { load() }, [filters, startDate, endDate, page, limit])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { load() }, [filters, startDate, endDate, t.key])
 
   const load = async () => {
     setLoading(true)
-    const qs = new URLSearchParams(Object.entries({ ...filters, startDate, endDate, page, limit }).filter(([, v]) => v)).toString()
-    const res = await apiFetch('/api/crewfit/orders' + (qs ? '?' + qs : ''))
+    const res = await apiFetch('/api/crewfit/orders?' + t.query({ ...filters, startDate, endDate }))
     const list = res?.orders || []
     setOrders(list)
-    setPagination(res?.pagination || { total: list.length, page: 1, limit, totalPages: 1 })
+    if (res?.pagination) t.setPagination(res.pagination)
     setLoading(false)
     const focus = params.get('focus')
     if (focus) { const f = list.find(o => String(o.id) === focus); if (f) setTarget(f); params.delete('focus'); setParams(params, { replace: true }) }
   }
 
-  const setFilter = (k, v) => { setFilters(f => ({ ...f, [k]: v })); setPage(1) }
-  const applyDateFilter = (s, e) => { setStartDate(s); setEndDate(e); setPage(1) }
-  const clearDateFilter = () => { setStartDate(''); setEndDate(''); setPage(1) }
+  const setFilter = (k, v) => { setFilters(f => ({ ...f, [k]: v })); t.resetPage() }
+  const applyDateFilter = (s, e) => { setStartDate(s); setEndDate(e); t.resetPage() }
+  const clearDateFilter = () => { setStartDate(''); setEndDate(''); t.resetPage() }
 
   const printLabel = async (o) => { setLabelBusy(o.id); await openShippingLabel(apiFetch, o, toast); setLabelBusy(null) }
   const quickUpdate = async (id, patch) => { setOrders(os => os.map(o => o.id === id ? { ...o, ...patch } : o)); await apiFetch(`/api/crewfit/orders/${id}`, { method: 'PUT', body: JSON.stringify(patch) }) }
@@ -67,14 +69,11 @@ export default function CrewfitOrders() {
       {(o[field] && !opts.includes(o[field])) && <option value={o[field]}>{o[field]}</option>}{opts.map(v => <option key={v} value={v}>{v}</option>)}</select>)
   }
 
-  const totalPages = pagination.totalPages || 1
-  const rangeStart = pagination.total ? (page - 1) * limit + 1 : 0
-  const rangeEnd = Math.min(page * limit, pagination.total || 0)
 
   return (
     <div className="page-enter">
       <div className="dash-toolbar">
-        <div><h1>Crewfit · Bulk Orders</h1><p style={{ color: 'var(--text-muted)' }}>{pagination.total || 0} orders · manage everything here</p></div>
+        <div><h1>Crewfit · Bulk Orders</h1><p style={{ color: 'var(--text-muted)' }}>{t.pagination.total || 0} orders · manage everything here</p></div>
         <div style={{ display: 'flex', gap: 10 }}>
           <DateRangeFilter startDate={startDate} endDate={endDate} onApply={applyDateFilter} onClear={clearDateFilter} />
           <button className="btn btn-primary" onClick={() => setTarget('new')}>+ New Order</button>
@@ -102,7 +101,20 @@ export default function CrewfitOrders() {
         ) : (
           <div style={{ overflowX: 'auto' }}>
             <table className="data-table">
-              <thead><tr><th>#</th><th>Date</th><th>Customer</th><th>Product</th><th style={{ textAlign: 'center' }}>Qty</th><th style={{ textAlign: 'right' }}>Total</th><th>Deadline</th><th>Status</th><th>Payment</th><th>Layout</th><th>Photos</th><th style={{ textAlign: 'center' }}>Label</th></tr></thead>
+              <thead><tr>
+                <SortTh label="#" col="sl_no" sort={t.sort} onSort={t.toggle} />
+                <SortTh label="Date" col="order_date" sort={t.sort} onSort={t.toggle} />
+                <SortTh label="Customer" col="customer_name" sort={t.sort} onSort={t.toggle} />
+                <SortTh label="Product" col="product" sort={t.sort} onSort={t.toggle} />
+                <SortTh label="Qty" col="qty" sort={t.sort} onSort={t.toggle} align="center" />
+                <SortTh label="Total" col="total_cost" sort={t.sort} onSort={t.toggle} align="right" />
+                <SortTh label="Deadline" col="deadline_at" sort={t.sort} onSort={t.toggle} />
+                <SortTh label="Status" col="status" sort={t.sort} onSort={t.toggle} />
+                <SortTh label="Payment" col="payment_status" sort={t.sort} onSort={t.toggle} />
+                <SortTh label="Layout" col="layout_status" sort={t.sort} onSort={t.toggle} />
+                <SortTh label="Photos" col="prod_photo_status" sort={t.sort} onSort={t.toggle} />
+                <SortTh label="Label" align="center" />
+              </tr></thead>
               <tbody>
                 {orders.map(o => (
                   <tr key={o.id} onClick={() => setTarget(o)} className={o.notes?.trim() ? 'has-note' : ''}>
@@ -147,29 +159,7 @@ export default function CrewfitOrders() {
           </div>
         )}
 
-        {!loading && orders.length > 0 && (
-          <div className="pagination">
-            <span className="pagination-info">Showing {rangeStart}–{rangeEnd} of {pagination.total}</span>
-            <div className="pagination-pages">
-              <button disabled={page <= 1} onClick={() => setPage(p => p - 1)}>‹</button>
-              {Array.from({ length: Math.min(totalPages, 7) }, (_, i) => {
-                const p = i + 1
-                return <button key={p} className={page === p ? 'active' : ''} onClick={() => setPage(p)}>{p}</button>
-              })}
-              {totalPages > 7 && <button disabled>…</button>}
-              <button disabled={page >= totalPages} onClick={() => setPage(p => p + 1)}>›</button>
-            </div>
-            <label className="pagination-limit">
-              Rows per page
-              <select value={limit} onChange={e => { setLimit(Number(e.target.value)); setPage(1) }}>
-                <option value={10}>10</option>
-                <option value={25}>25</option>
-                <option value={50}>50</option>
-                <option value={100}>100</option>
-              </select>
-            </label>
-          </div>
-        )}
+        {!loading && <Pagination table={t} noun="orders" />}
       </div>
 
       <CrewfitOrderDrawer target={target} onClose={() => setTarget(null)} onSaved={() => { setTarget(null); load() }} />

@@ -9,6 +9,7 @@ const { renderInvoice, renderShippingLabel, LABEL_SIZE, nextInvoiceNumber } = re
 const { historyForPhone } = require('./crewfit-customers');
 const { validatePhoneFields } = require('../utils/phone');
 const { canViewRevenue } = require('../utils/permissions');
+const { tableParams, sortAndPage, pagination } = require('../utils/table');
 
 const router = express.Router();
 
@@ -52,6 +53,19 @@ const META = {
 };
 const CLOSED = ['Dispatched', 'Cancelled'];
 
+// Sortable columns on the orders list. Sorting happens on the server across the whole filtered
+// set; the values come from `ORDER_ACCESSORS` because several of them are derived from the JSON
+// line items rather than being columns of their own.
+const ORDER_SORTS = {
+  sl_no: true, customer_name: true, product: true, qty: true, status: true, payment_status: true,
+  layout_status: true, so: true, vendor: true, total_cost: true, order_date: true, deadline_at: true,
+  dispatch_date: true, mock_photo_status: true, prod_photo_status: true,
+};
+// These two never produce a consignment number — Porter is a point-to-point drop and Self Pickup
+// is the customer collecting in person. They reach "Dispatched" without a tracking ID, and there
+// is no tracking to chase them for afterwards.
+const NO_TRACKING_MOTS = ['Porter', 'Self Pickup'];
+
 // Destructive/structural actions — deleting an order, and creating, editing or deleting a
 // catalog product — are the owner's alone. Enforced here rather than only hiding buttons,
 // since the routes are otherwise callable by anyone holding a valid token.
@@ -76,6 +90,22 @@ const todayStr = () => ymd(new Date());
 const addDaysStr = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return ymd(d); };
 
 function safeJson(v, fallback) { try { return typeof v === 'string' ? JSON.parse(v) : (v || fallback); } catch { return fallback; } }
+// Units on an order = the sum of its line items. Orders imported from the old sheet never got
+// line_items populated, only the order-level qty, so fall back to that rather than counting them
+// as zero — the same guard `orderValue` uses for revenue.
+const orderUnits = (o) => {
+  const items = o.line_items || [];
+  if (items.length) return items.reduce((sum, it) => sum + (parseInt(it.qty, 10) || 0), 0);
+  return parseInt(o.qty, 10) || 0;
+};
+
+// Columns whose sort value isn't just the field: quantity and money live across the line items,
+// and the two photo statuses are computed per request.
+const ORDER_ACCESSORS = {
+  qty: orderUnits,
+  total_cost: (o) => Number(o.grand_total ?? o.total_cost) || 0,
+};
+
 const parseOrder = (o) => ({ ...o, deadline_at: toDateStr(o.deadline_at), order_date: toDateStr(o.order_date), dispatch_date: toDateStr(o.dispatch_date), line_items: safeJson(o.line_items, []), invoices: safeJson(o.invoices, []) });
 
 async function fetchAll() {
@@ -106,13 +136,22 @@ router.get('/meta', async (req, res) => {
 router.get('/stats', async (req, res) => {
   try {
     const orders = await fetchAll();
-    const byStatus = {}; let totalValue = 0, active = 0, pendingPayments = 0;
+    const byStatus = {}; let totalValue = 0, active = 0, pendingPayments = 0, totalUnits = 0, activeUnits = 0;
     for (const o of orders) {
       byStatus[o.status] = (byStatus[o.status] || 0) + 1;
       totalValue += Number(o.total_cost) || 0;
-      if (!CLOSED.includes(o.status)) { active++; if (o.payment_status !== 'Fully Paid') pendingPayments += Number(o.total_cost) || 0; }
+      // Cancelled orders were never made, so they don't count towards units on order.
+      const units = o.status === 'Cancelled' ? 0 : orderUnits(o);
+      totalUnits += units;
+      if (!CLOSED.includes(o.status)) {
+        active++; activeUnits += units;
+        if (o.payment_status !== 'Fully Paid') pendingPayments += Number(o.total_cost) || 0;
+      }
     }
-    res.json({ total: orders.length, active, dispatched: byStatus['Dispatched'] || 0, totalValue, pendingPayments, byStatus });
+    res.json({
+      total: orders.length, active, dispatched: byStatus['Dispatched'] || 0,
+      totalUnits, activeUnits, totalValue, pendingPayments, byStatus,
+    });
   } catch (err) {
     console.error('crewfit stats error:', err); res.status(500).json({ error: 'Failed to load stats' });
   }
@@ -253,6 +292,8 @@ router.get('/analytics', async (req, res) => {
       canViewRevenue: showRevenue,
       kpis: {
         totalOrders: orders.length,
+        totalUnits: nonCancelled.reduce((sum, o) => sum + orderUnits(o), 0),
+        activeUnits: orders.filter(o => !CLOSED.includes(o.status)).reduce((sum, o) => sum + orderUnits(o), 0),
         activeOrders: orders.filter(o => !CLOSED.includes(o.status)).length,
         dispatchedOrders: dispatched.length,
         cancelledOrders: orders.length - nonCancelled.length,
@@ -294,13 +335,16 @@ router.get('/reminders', async (req, res) => {
     const photosPending = awaitingBalance.filter(o => !hasAllProdPhotos(o));
     const readyToCollect = awaitingBalance.filter(o => hasAllProdPhotos(o));
     // Balance collected but not shipped yet — the only thing left is a tracking ID, which is
-    // what flips the order to Dispatched. Porter orders sit here until the Porter button is used.
+    // what flips the order to Dispatched. Porter/Self Pickup orders sit here until the
+    // no-tracking dispatch button is used.
     const dispatchPending = active.filter(o => o.status === 'Dispatch Pending');
     // Dispatched orders are excluded from `active` (they're closed) — pull straight from `orders` instead.
     // Scoped to the last 14 days so the backlog of pre-existing dispatches (never tracked before this
     // field existed) doesn't flood the queue with old orders that were surely already followed up on.
+    // Porter and Self Pickup have no tracking to send, so there is nothing to follow up on.
     const trackingCutoff = addDaysStr(-14);
-    const trackingPending = orders.filter(o => o.status === 'Dispatched' && !o.tracking_sent_at && o.dispatch_date && o.dispatch_date >= trackingCutoff);
+    const trackingPending = orders.filter(o => o.status === 'Dispatched' && !o.tracking_sent_at
+      && !NO_TRACKING_MOTS.includes(o.mot) && o.dispatch_date && o.dispatch_date >= trackingCutoff);
     const dueSoon = active.filter(o => o.deadline_at && o.deadline_at >= today && o.deadline_at <= soon);
     const layoutPending = active.filter(o => o.layout_status === 'Pending');
     const noDeadline = active.filter(o => !o.deadline_at);
@@ -329,8 +373,8 @@ router.get('/orders', async (req, res) => {
     const {
       status, payment_status, layout_status, so, vendor, search,
       mock_status, prod_status, startDate, endDate,
-      page = 1, limit = 25,
     } = req.query;
+    const t = tableParams(req.query, { sortable: ORDER_SORTS, defaultSort: 'sl_no' });
     let orders = await fetchAll();
     orders = orders.map(o => ({
       ...o,
@@ -361,12 +405,10 @@ router.get('/orders', async (req, res) => {
       }
     }
 
-    const total = orders.length;
-    const lim = Math.max(1, parseInt(limit) || 25);
-    const pg = Math.max(1, parseInt(page) || 1);
-    const start = (pg - 1) * lim;
-    const paged = orders.slice(start, start + lim);
-    res.json({ orders: paged, pagination: { total, page: pg, limit: lim, totalPages: Math.max(1, Math.ceil(total / lim)) } });
+    // Sorted across the whole filtered set before slicing, so "highest value first" means highest
+    // of everything rather than highest of the page you happen to be on.
+    const { rows, total } = sortAndPage(orders, t, ORDER_ACCESSORS);
+    res.json({ orders: rows, pagination: pagination(total, t) });
   } catch (err) {
     console.error('crewfit orders error:', err); res.status(500).json({ error: 'Failed to load orders' });
   }
@@ -399,10 +441,10 @@ router.put('/orders/:id', async (req, res) => {
     const phoneError = validatePhoneFields(body, current);
     if (phoneError) return res.status(400).json({ error: phoneError });
     // Status can only become "Dispatched" via a tracking ID being present — never a direct manual
-    // pick — except Porter, which doesn't issue tracking IDs at all.
+    // pick — except the MOTs that don't issue tracking IDs at all.
     const effectiveTracking = body.tracking_link !== undefined ? body.tracking_link : current.tracking_link;
     const effectiveMot = body.mot !== undefined ? body.mot : current.mot;
-    if (body.status === 'Dispatched' && !effectiveTracking && effectiveMot !== 'Porter') {
+    if (body.status === 'Dispatched' && !effectiveTracking && !NO_TRACKING_MOTS.includes(effectiveMot)) {
       return res.status(400).json({ error: 'Add a tracking ID before marking this order as Dispatched' });
     }
     if (effectiveTracking && !['Dispatched', 'Cancelled'].includes(current.status)) {
@@ -455,7 +497,7 @@ router.post('/orders', async (req, res) => {
     const phoneError = validatePhoneFields(body);
     if (phoneError) return res.status(400).json({ error: phoneError });
 
-    if (body.status === 'Dispatched' && !body.tracking_link && body.mot !== 'Porter') {
+    if (body.status === 'Dispatched' && !body.tracking_link && !NO_TRACKING_MOTS.includes(body.mot)) {
       return res.status(400).json({ error: 'Add a tracking ID before marking this order as Dispatched' });
     }
     if (body.tracking_link && body.status !== 'Cancelled') {

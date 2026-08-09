@@ -12,6 +12,7 @@ import Customers from './pages/Customers'
 import Orders from './pages/Orders'
 import ScanHub from './pages/ScanHub'
 import Invoices from './pages/Invoices'
+import Marketing from './pages/Marketing'
 import Settings from './pages/Settings'
 import Admin from './pages/Admin'
 import Profile from './pages/Profile'
@@ -135,6 +136,7 @@ function App() {
             <Route path="/customers" element={<ProtectedRoute permission="can_view_customers"><AppLayout><Customers /></AppLayout></ProtectedRoute>} />
             <Route path="/orders" element={<ProtectedRoute permission="can_view_orders"><AppLayout><Orders /></AppLayout></ProtectedRoute>} />
             <Route path="/scan" element={<ProtectedRoute permission="can_scan_orders"><AppLayout><ScanHub /></AppLayout></ProtectedRoute>} />
+            <Route path="/marketing" element={<ProtectedRoute permission="can_view_marketing"><AppLayout><Marketing /></AppLayout></ProtectedRoute>} />
             <Route path="/invoices" element={<ProtectedRoute permission="can_view_invoices"><AppLayout><Invoices /></AppLayout></ProtectedRoute>} />
             <Route path="/settings" element={<ProtectedRoute permission="can_sync_data"><AppLayout><Settings /></AppLayout></ProtectedRoute>} />
             <Route path="/admin" element={<ProtectedRoute><AppLayout>{(user?.role === 'owner' || user?.role === 'admin') ? <Admin /> : <Navigate to="/" replace />}</AppLayout></ProtectedRoute>} />

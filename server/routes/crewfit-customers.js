@@ -1,8 +1,19 @@
 const express = require('express');
 const db = require('../db/connection');
 const { canViewRevenue } = require('../utils/permissions');
+const { tableParams, pagination } = require('../utils/table');
 
 const router = express.Router();
+
+// Client column key → SQL expression, over the aggregated customer view. Only these can be
+// sorted on. `phone_key` breaks ties so a customer can't appear on two pages at once.
+const CUSTOMER_SORTS = {
+  customer_name: 'LOWER(customer_name)',
+  orders_count: 'orders_count',
+  total_value: 'total_value',
+  last_order_date: 'last_order_date',
+  first_order_date: 'first_order_date',
+};
 
 // Crewfit has no customers table — a "customer" is every order sharing a phone number. The
 // number is the identity key because names get typed inconsistently ("TRM", "TRM Audios").
@@ -113,9 +124,8 @@ async function historyForPhone(phone, excludeOrderId) {
 // GET /api/crewfit/customers — searchable, sortable customer list
 router.get('/', async (req, res) => {
   try {
-    const { search = '', sort = 'recent', type = '' } = req.query;
-    const page = Math.max(1, parseInt(req.query.page) || 1);
-    const limit = Math.min(200, Math.max(1, parseInt(req.query.limit) || 25));
+    const { search = '', type = '' } = req.query;
+    const t = tableParams(req.query, { sortable: CUSTOMER_SORTS, defaultSort: 'last_order_date', tiebreak: 'phone_key' });
 
     const filters = [];
     const params = [];
@@ -128,19 +138,12 @@ router.get('/', async (req, res) => {
     else if (type === 'New') filters.push('orders_count = 1');
 
     const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
-    const ORDER = {
-      recent: 'last_order_date DESC NULLS LAST',
-      orders: 'orders_count DESC',
-      value: 'total_value DESC',
-      name: 'LOWER(customer_name) ASC',
-    }[sort] || 'last_order_date DESC NULLS LAST';
-
     const countRes = await db.query(`SELECT COUNT(*)::int AS n FROM (${AGG_SQL}) c ${where}`, params);
     const total = countRes.rows[0]?.n || 0;
 
-    params.push(limit, (page - 1) * limit);
+    params.push(t.limit, t.offset);
     const rows = await db.query(
-      `SELECT * FROM (${AGG_SQL}) c ${where} ORDER BY ${ORDER}, phone_key LIMIT $${params.length - 1} OFFSET $${params.length}`, params);
+      `SELECT * FROM (${AGG_SQL}) c ${where} ${t.orderBy} LIMIT $${params.length - 1} OFFSET $${params.length}`, params);
 
     // Headline numbers describe the whole customer base, not just the page in view.
     const statsRes = await db.query(`SELECT COUNT(*)::int AS total_customers,
@@ -154,7 +157,7 @@ router.get('/', async (req, res) => {
     const showRevenue = await canViewRevenue(req);
     res.json({
       customers: rows.rows.map(c => (showRevenue ? shapeCustomer(c) : stripCustomerMoney(shapeCustomer(c)))),
-      pagination: { total, page, limit, totalPages: Math.max(1, Math.ceil(total / limit)) },
+      pagination: pagination(total, t),
       canViewRevenue: showRevenue,
       stats: {
         totalCustomers: s.total_customers || 0,

@@ -1,22 +1,25 @@
 const express = require('express');
 const db = require('../db/connection');
+const { tableParams, pagination } = require('../utils/table');
 
 const router = express.Router();
+
+// Client column key → SQL expression. Only these can be sorted on.
+const ORDER_SORTS = {
+  order_number: 'o.order_number',
+  customer: "COALESCE(c.first_name || ' ' || c.last_name, c.email)",
+  total_price: 'o.total_price',
+  financial_status: 'o.financial_status',
+  fulfillment_status: 'o.fulfillment_status',
+  created_at: 'o.created_at',
+};
 
 // GET /api/orders - List with filters and pagination
 router.get('/', async (req, res) => {
     try {
-        const {
-            search = '',
-            financial_status = '',
-            fulfillment_status = '',
-            sort = 'created_at',
-            order = 'DESC',
-            page = 1,
-            limit = 20
-        } = req.query;
+        const { search = '', financial_status = '', fulfillment_status = '' } = req.query;
+        const t = tableParams(req.query, { sortable: ORDER_SORTS, defaultSort: 'created_at', tiebreak: 'o.id' });
 
-        const offset = (parseInt(page) - 1) * parseInt(limit);
         let conditions = [];
         let params = [];
         let paramCount = 1;
@@ -41,12 +44,14 @@ router.get('/', async (req, res) => {
         }
 
         const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-
-        const allowedSorts = ['created_at', 'total_price', 'order_number'];
-        const sortCol = allowedSorts.includes(sort) ? sort : 'created_at';
-        const sortDir = order.toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
-
-        const countResult = await db.query(`SELECT COUNT(*) as total FROM orders ${whereClause}`, params);
+        // The count has to see the same joined shape as the page query, since a sort (and one day
+        // a filter) can reference the customer table.
+        const countResult = await db.query(`
+            SELECT COUNT(*) as total
+            FROM orders o
+            LEFT JOIN customers c ON o.customer_shopify_id = c.shopify_id
+            ${whereClause}
+        `, params);
         const total = parseInt(countResult.rows[0]?.total) || 0;
 
         const ordersResult = await db.query(`
@@ -54,18 +59,13 @@ router.get('/', async (req, res) => {
             FROM orders o
             LEFT JOIN customers c ON o.customer_shopify_id = c.shopify_id
             ${whereClause}
-            ORDER BY o.${sortCol} ${sortDir}
+            ${t.orderBy}
             LIMIT $${paramCount} OFFSET $${paramCount + 1}
-        `, [...params, parseInt(limit), offset]);
+        `, [...params, t.limit, t.offset]);
 
         res.json({
             orders: ordersResult.rows,
-            pagination: {
-                total,
-                page: parseInt(page),
-                limit: parseInt(limit),
-                totalPages: Math.ceil(total / parseInt(limit))
-            }
+            pagination: pagination(total, t),
         });
     } catch (err) {
         console.error('Error fetching orders:', err);

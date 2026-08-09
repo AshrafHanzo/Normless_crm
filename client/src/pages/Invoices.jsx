@@ -1,4 +1,7 @@
 import { useState, useEffect } from 'react'
+import useServerTable from '../hooks/useServerTable'
+import SortTh from '../components/SortTh'
+import Pagination from '../components/Pagination'
 import { useApi, useAuth } from '../App'
 import { useToast } from '../components/Toast'
 import DateRangeFilter from '../components/DateRangeFilter'
@@ -40,7 +43,7 @@ function useDownloader(apiFetch, toast) {
 
 /* ────────────────────────────── shared history table ────────────────────────────── */
 
-function ReportHistory({ kind, reports, loading, onDownload, onDelete, isAdmin, downloading }) {
+function ReportHistory({ kind, reports, loading, onDownload, onDelete, isAdmin, downloading, table }) {
   return (
     <>
       <div className="dash-toolbar" style={{ marginBottom: 12 }}>
@@ -57,13 +60,14 @@ function ReportHistory({ kind, reports, loading, onDownload, onDelete, isAdmin, 
           <table className="data-table">
             <thead>
               <tr>
-                <th>Period</th>
-                {kind === 'sales' && <th>Invoice range</th>}
-                <th style={{ textAlign: 'right' }}>{kind === 'sales' ? 'Orders' : 'Bills'}</th>
-                <th style={{ textAlign: 'right' }}>Taxable</th>
-                <th style={{ textAlign: 'right' }}>GST</th>
-                <th style={{ textAlign: 'right' }}>Gross</th>
-                <th>Generated</th><th></th>
+                <SortTh label="Period" col="from_date" sort={table.sort} onSort={table.toggle} />
+                {kind === 'sales' && <SortTh label="Invoice range" />}
+                <SortTh label={kind === 'sales' ? 'Orders' : 'Bills'} col="row_count" sort={table.sort} onSort={table.toggle} align="right" />
+                <SortTh label="Taxable" col="taxable_value" sort={table.sort} onSort={table.toggle} align="right" />
+                <SortTh label="GST" col="gst_total" sort={table.sort} onSort={table.toggle} align="right" />
+                <SortTh label="Gross" col="gross_total" sort={table.sort} onSort={table.toggle} align="right" />
+                <SortTh label="Generated" col="created_at" sort={table.sort} onSort={table.toggle} />
+                <SortTh label="" />
               </tr>
             </thead>
             <tbody>
@@ -107,6 +111,7 @@ function ReportHistory({ kind, reports, loading, onDownload, onDelete, isAdmin, 
             </tbody>
           </table>
         )}
+        {!loading && <Pagination table={table} noun="reports" />}
       </div>
     </>
   )
@@ -123,17 +128,19 @@ function SalesTab({ apiFetch, toast, isAdmin, download }) {
   const [reports, setReports] = useState([])
   const [loadingReports, setLoadingReports] = useState(true)
   const [downloading, setDownloading] = useState(null)
+  const salesReports = useServerTable({ sort: 'created_at', dir: 'desc', limit: 10 })
 
   const loadReports = async () => {
-    const r = await apiFetch('/api/invoices/reports?kind=sales')
-    if (r && !r.error) setReports(r)
+    const r = await apiFetch('/api/invoices/reports?' + salesReports.query({ kind: 'sales' }))
+    if (r && !r.error) { setReports(r.reports || []); salesReports.setPagination(r.pagination) }
     setLoadingReports(false)
   }
 
   // Both setState calls in loadReports run after an await, so nothing updates synchronously here
   // — the rule flags any call that eventually setStates and can't see through the async hop.
   // eslint-disable-next-line react-hooks/set-state-in-effect, react-hooks/exhaustive-deps
-  useEffect(() => { loadReports() }, [])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { loadReports() }, [salesReports.key])
 
   // A preview belongs to the dates it was run for; keeping it on screen after the range changes
   // would invite generating one period while reading another period's totals.
@@ -217,7 +224,7 @@ function SalesTab({ apiFetch, toast, isAdmin, download }) {
         </div>
       )}
 
-      <ReportHistory kind="sales" reports={reports} loading={loadingReports} isAdmin={isAdmin}
+      <ReportHistory kind="sales" table={salesReports} reports={reports} loading={loadingReports} isAdmin={isAdmin}
         downloading={downloading}
         onDownload={async (r) => { setDownloading(r.id); await download(`/api/invoices/reports/${r.id}/download`, r.filename); setDownloading(null) }}
         onDelete={removeReport} />
@@ -478,10 +485,12 @@ function PurchaseTab({ apiFetch, toast, isAdmin, download }) {
   const [reports, setReports] = useState([])
   const [loadingReports, setLoadingReports] = useState(true)
   const [downloading, setDownloading] = useState(null)
+  const billsTable = useServerTable({ sort: 'purchase_date', dir: 'desc' })
+  const purchaseReports = useServerTable({ sort: 'created_at', dir: 'desc', limit: 10 })
 
   const loadBills = async (f = from, t = to) => {
-    const r = await apiFetch(`/api/invoices/purchase?from=${f}&to=${t}`)
-    if (r && !r.error) setData(r)
+    const r = await apiFetch('/api/invoices/purchase?' + billsTable.query({ from: f, to: t }))
+    if (r && !r.error) { setData(r); if (r.pagination) billsTable.setPagination(r.pagination) }
     setLoading(false)
   }
   const loadSuppliers = async () => {
@@ -489,13 +498,17 @@ function PurchaseTab({ apiFetch, toast, isAdmin, download }) {
     if (r && !r.error) setSuppliers(r)
   }
   const loadReports = async () => {
-    const r = await apiFetch('/api/invoices/reports?kind=purchase')
-    if (r && !r.error) setReports(r)
+    const r = await apiFetch('/api/invoices/reports?' + purchaseReports.query({ kind: 'purchase' }))
+    if (r && !r.error) { setReports(r.reports || []); purchaseReports.setPagination(r.pagination) }
     setLoadingReports(false)
   }
 
   // eslint-disable-next-line react-hooks/set-state-in-effect, react-hooks/exhaustive-deps
   useEffect(() => { loadBills(); loadSuppliers(); loadReports() }, [])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { loadBills() }, [billsTable.key])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { loadReports() }, [purchaseReports.key])
 
   const applyRange = (s, e) => { setRange([s, e]); setWarning(''); setLoading(true); loadBills(s, e) }
 
@@ -587,11 +600,14 @@ function PurchaseTab({ apiFetch, toast, isAdmin, download }) {
           <table className="data-table">
             <thead>
               <tr>
-                <th>Date</th><th>Supplier</th><th>Invoice no.</th><th>Particulars</th>
-                <th style={{ textAlign: 'right' }}>Taxable</th>
-                <th style={{ textAlign: 'right' }}>GST</th>
-                <th style={{ textAlign: 'right' }}>Gross</th>
-                <th>Split</th><th></th>
+                <SortTh label="Date" col="purchase_date" sort={billsTable.sort} onSort={billsTable.toggle} />
+                <SortTh label="Supplier" col="company_name" sort={billsTable.sort} onSort={billsTable.toggle} />
+                <SortTh label="Invoice no." col="invoice_no" sort={billsTable.sort} onSort={billsTable.toggle} />
+                <SortTh label="Particulars" col="particulars" sort={billsTable.sort} onSort={billsTable.toggle} />
+                <SortTh label="Taxable" col="taxable" sort={billsTable.sort} onSort={billsTable.toggle} align="right" />
+                <SortTh label="GST" col="gst_amount" sort={billsTable.sort} onSort={billsTable.toggle} align="right" />
+                <SortTh label="Gross" col="gross" sort={billsTable.sort} onSort={billsTable.toggle} align="right" />
+                <SortTh label="Split" /><SortTh label="" />
               </tr>
             </thead>
             <tbody>
@@ -627,9 +643,10 @@ function PurchaseTab({ apiFetch, toast, isAdmin, download }) {
             </tbody>
           </table>
         )}
+        {!loading && <Pagination table={billsTable} noun="bills" />}
       </div>
 
-      <ReportHistory kind="purchase" reports={reports} loading={loadingReports} isAdmin={isAdmin}
+      <ReportHistory kind="purchase" table={purchaseReports} reports={reports} loading={loadingReports} isAdmin={isAdmin}
         downloading={downloading}
         onDownload={async (r) => { setDownloading(r.id); await download(`/api/invoices/reports/${r.id}/download`, r.filename); setDownloading(null) }}
         onDelete={async (r) => {

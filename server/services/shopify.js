@@ -211,6 +211,68 @@ async function fetchOrdersInRange(createdAtMin, createdAtMax) {
 }
 
 /**
+ * The active product catalogue, trimmed to what a picker needs: title, image and the sellable
+ * variants. Uses REST rather than GraphQL because products carry no read-window restriction and
+ * the Link-header pagination is already the pattern here.
+ *
+ * Results are cached in memory — the catalogue changes rarely, and this is called on every open
+ * of the influencer-order form, which shouldn't mean a multi-page Shopify crawl each time.
+ */
+const PRODUCT_CACHE_MS = 5 * 60 * 1000;
+let productCache = { at: 0, products: null };
+
+async function fetchProducts({ force = false } = {}) {
+    if (!force && productCache.products && Date.now() - productCache.at < PRODUCT_CACHE_MS) {
+        return productCache.products;
+    }
+    if (!SHOPIFY_STORE_DOMAIN || !SHOPIFY_ACCESS_TOKEN) {
+        throw new Error('Shopify is not configured on the server');
+    }
+
+    const all = [];
+    let url = `${REST_BASE}/products.json?status=active&limit=250`
+        + `&fields=id,title,handle,status,image,images,variants,product_type`;
+
+    while (url) {
+        const response = await fetch(url, { headers: { 'X-Shopify-Access-Token': SHOPIFY_ACCESS_TOKEN } });
+        if (!response.ok) {
+            throw new Error(`Shopify REST API error ${response.status}: ${await response.text()}`);
+        }
+        const data = await response.json();
+
+        for (const p of data.products || []) {
+            // A variant image beats the product's hero shot — the colour actually being sent is
+            // what the packer and the influencer both need to see.
+            const byId = new Map((p.images || []).map(img => [img.id, img.src]));
+            all.push({
+                id: p.id,
+                title: p.title,
+                product_type: p.product_type || '',
+                image: p.image?.src || null,
+                variants: (p.variants || []).map(v => ({
+                    id: v.id,
+                    title: v.title === 'Default Title' ? '' : v.title,
+                    sku: v.sku || '',
+                    price: v.price || null,
+                    available: typeof v.inventory_quantity === 'number' ? v.inventory_quantity : null,
+                    image: (v.image_id && byId.get(v.image_id)) || p.image?.src || null,
+                })),
+            });
+        }
+
+        url = null;
+        const linkHeader = response.headers.get('Link');
+        const nextMatch = linkHeader && linkHeader.match(/<([^>]+)>;\s*rel="next"/);
+        if (nextMatch) url = nextMatch[1];
+        if (url) await sleep(300);
+    }
+
+    all.sort((a, b) => a.title.localeCompare(b.title));
+    productCache = { at: Date.now(), products: all };
+    return all;
+}
+
+/**
  * Test the API connection
  */
 async function testConnection() {
@@ -221,6 +283,7 @@ async function testConnection() {
 module.exports = {
     fetchAllCustomers,
     fetchAllOrders,
+    fetchProducts,
     countOrders,
     fetchOrdersInRange,
     testConnection,

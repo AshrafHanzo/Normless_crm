@@ -3,8 +3,20 @@ const db = require('../db/connection');
 const razorpay = require('../config/razorpay');
 const { isValidMobile } = require('../utils/phone');
 const { canViewRevenue } = require('../utils/permissions');
+const { tableParams, pagination } = require('../utils/table');
 
 const router = express.Router();
+
+// Client column key → SQL expression. Only these can be sorted on.
+const PAYMENT_SORTS = {
+  customer_name: 'p.customer_name',
+  kind: 'p.kind',
+  amount: 'p.amount',
+  status: 'p.status',
+  created_at: 'p.created_at',
+  paid_at: 'p.paid_at',
+  order_sl_no: 'o.sl_no',
+};
 
 // Razorpay works in paise; every amount crossing that boundary goes through these two so a
 // rupee/paise mix-up can't happen in one direction only.
@@ -140,7 +152,8 @@ async function createLink({ order_id = null, kind, customer_name, contact_number
 // GET /api/crewfit/payments — transaction list
 router.get('/', async (req, res) => {
   try {
-    const { status, kind, search, orderId, startDate, endDate, page = 1, limit = 25 } = req.query;
+    const { status, kind, search, orderId, startDate, endDate } = req.query;
+    const t = tableParams(req.query, { sortable: PAYMENT_SORTS, defaultSort: 'created_at', tiebreak: 'p.id' });
     const where = [];
     const vals = [];
     const add = (sql, v) => { vals.push(v); where.push(sql.replace('?', `$${vals.length}`)); };
@@ -164,12 +177,10 @@ router.get('/', async (req, res) => {
               COALESCE(SUM(CASE WHEN p.status = 'Created' THEN p.amount ELSE 0 END), 0) AS awaiting
        FROM crewfit_payments p LEFT JOIN crewfit_orders o ON o.id = p.order_id ${whereSql}`, vals);
 
-    const lim = Math.max(1, parseInt(limit, 10) || 25);
-    const pg = Math.max(1, parseInt(page, 10) || 1);
     const rows = await db.query(
       `SELECT p.*, o.sl_no AS order_sl_no, o.customer_name AS order_customer
        FROM crewfit_payments p LEFT JOIN crewfit_orders o ON o.id = p.order_id
-       ${whereSql} ORDER BY p.created_at DESC, p.id DESC LIMIT ${lim} OFFSET ${(pg - 1) * lim}`, vals);
+       ${whereSql} ${t.orderBy} LIMIT ${t.limit} OFFSET ${t.offset}`, vals);
 
     const total = parseInt(totals.rows[0].n, 10);
     // Individual link amounts stay — staff still need them to chase a specific payment. Only the
@@ -183,7 +194,7 @@ router.get('/', async (req, res) => {
         count: total,
       },
       canViewRevenue: showRevenue,
-      pagination: { total, page: pg, limit: lim, totalPages: Math.max(1, Math.ceil(total / lim)) },
+      pagination: pagination(total, t),
       mode: razorpay.MODE,
       configured: razorpay.isConfigured,
     });

@@ -1,16 +1,20 @@
 import { useState, useEffect } from 'react'
 import { useApi } from '../App'
 import AutoTextarea from '../components/AutoTextarea'
+import useServerTable from '../hooks/useServerTable'
+import SortTh from '../components/SortTh'
+import Pagination from '../components/Pagination'
 
 export default function Customers() {
   const apiFetch = useApi()
   const [customers, setCustomers] = useState([])
-  const [pagination, setPagination] = useState({})
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [priorityFilter, setPriorityFilter] = useState('')
-  const [page, setPage] = useState(1)
   const [loading, setLoading] = useState(true)
+  // Server-side sort + page: a header click reorders the whole customer base, not this page.
+  const t = useServerTable({ sort: 'total_spent', dir: 'desc' })
+  const pagination = t.pagination
   const [selectedCustomer, setSelectedCustomer] = useState(null)
   const [customerDetail, setCustomerDetail] = useState(null)
   const [drawerLoading, setDrawerLoading] = useState(false)
@@ -26,19 +30,19 @@ export default function Customers() {
 
   useEffect(() => {
     loadCustomers()
-  }, [page, search, statusFilter, priorityFilter])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [t.key, search, statusFilter, priorityFilter])
 
   const loadCustomers = async () => {
     setLoading(true)
-    const params = new URLSearchParams({
-      page, limit: 20, search,
+    const result = await apiFetch('/api/customers?' + t.query({
+      search,
       ...(statusFilter && { status: statusFilter }),
       ...(priorityFilter && { priority: priorityFilter }),
-    })
-    const result = await apiFetch(`/api/customers?${params}`)
-    if (result) {
+    }))
+    if (result && !result.error) {
       setCustomers(result.customers)
-      setPagination(result.pagination)
+      t.setPagination(result.pagination)
     }
     setLoading(false)
   }
@@ -105,7 +109,7 @@ export default function Customers() {
     clearTimeout(searchTimeout)
     searchTimeout = setTimeout(() => {
       setSearch(val)
-      setPage(1)
+      t.resetPage()
     }, 400)
   }
 
@@ -122,14 +126,14 @@ export default function Customers() {
           <span className="search-icon">🔍</span>
           <input type="search" placeholder="Search by name, email, or phone..." onChange={e => handleSearch(e.target.value)} />
         </div>
-        <select value={statusFilter} onChange={e => { setStatusFilter(e.target.value); setPage(1) }}>
+        <select value={statusFilter} onChange={e => { setStatusFilter(e.target.value); t.resetPage() }}>
           <option value="">All Statuses</option>
           <option value="Lead">Lead</option>
           <option value="Active">Active</option>
           <option value="VIP">VIP</option>
           <option value="Inactive">Inactive</option>
         </select>
-        <select value={priorityFilter} onChange={e => { setPriorityFilter(e.target.value); setPage(1) }}>
+        <select value={priorityFilter} onChange={e => { setPriorityFilter(e.target.value); t.resetPage() }}>
           <option value="">All Priorities</option>
           <option value="High">High</option>
           <option value="Medium">Medium</option>
@@ -152,12 +156,12 @@ export default function Customers() {
             <table className="data-table">
               <thead>
                 <tr>
-                  <th>Customer</th>
-                  <th>Phone</th>
-                  <th>Orders</th>
-                  <th>Total Spent</th>
-                  <th>Status</th>
-                  <th>Priority</th>
+                  <SortTh label="Customer" col="name" sort={t.sort} onSort={t.toggle} />
+                  <SortTh label="Phone" />
+                  <SortTh label="Orders" col="orders_count" sort={t.sort} onSort={t.toggle} />
+                  <SortTh label="Total Spent" col="total_spent" sort={t.sort} onSort={t.toggle} />
+                  <SortTh label="Status" col="crm_status" sort={t.sort} onSort={t.toggle} />
+                  <SortTh label="Priority" col="crm_priority" sort={t.sort} onSort={t.toggle} />
                 </tr>
               </thead>
               <tbody>
@@ -182,20 +186,7 @@ export default function Customers() {
               </tbody>
             </table>
 
-            {/* Pagination */}
-            {pagination.totalPages > 1 && (
-              <div className="pagination">
-                <button disabled={page <= 1} onClick={() => setPage(p => p - 1)}>‹</button>
-                {Array.from({ length: Math.min(pagination.totalPages, 7) }, (_, i) => {
-                  const p = i + 1
-                  return (
-                    <button key={p} className={page === p ? 'active' : ''} onClick={() => setPage(p)}>{p}</button>
-                  )
-                })}
-                {pagination.totalPages > 7 && <button disabled>...</button>}
-                <button disabled={page >= pagination.totalPages} onClick={() => setPage(p => p + 1)}>›</button>
-              </div>
-            )}
+            <Pagination table={t} noun="customers" />
           </>
         )}
       </div>

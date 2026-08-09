@@ -5,8 +5,9 @@ import Icon from '../../components/Icon'
 import ComboInput from '../../components/ComboInput'
 import AutoTextarea from '../../components/AutoTextarea'
 import useDirtyGuard from '../../hooks/useDirtyGuard'
-import useTableSort from '../../hooks/useTableSort'
+import useServerTable from '../../hooks/useServerTable'
 import SortTh from '../../components/SortTh'
+import Pagination from '../../components/Pagination'
 import { cleanMobile, mobileError, isValidMobile, mobileInputProps } from '../../utils/phone'
 
 const fmt = (v) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(Number(v) || 0)
@@ -271,11 +272,12 @@ export default function CrewfitVendorOrders() {
   const [term, setTerm] = useState('')
   const [search, setSearch] = useState('')
   const isAdmin = user?.role === 'owner' || user?.role === 'admin'
+  // Server-side sort + page: a header click reorders every matching order, not this page's 25.
+  const t = useServerTable({ sort: 'order_date', dir: 'desc' })
 
   const load = async (v = vendor, s = status, q = search) => {
-    const qs = new URLSearchParams(Object.entries({ vendor: v, status: s, search: q }).filter(([, x]) => x)).toString()
-    const r = await apiFetch('/api/crewfit/vendor-orders' + (qs ? `?${qs}` : ''))
-    if (r && !r.error) setOrders(r.orders || [])
+    const r = await apiFetch('/api/crewfit/vendor-orders?' + t.query({ vendor: v, status: s, search: q }))
+    if (r && !r.error) { setOrders(r.orders || []); if (r.pagination) t.setPagination(r.pagination) }
     setLoading(false)
   }
 
@@ -283,20 +285,21 @@ export default function CrewfitVendorOrders() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { load(); apiFetch('/api/crewfit/vendor-orders/meta').then(m => m && !m.error && setMeta(m)) }, [])
 
-  const applyFilter = (v, s) => { setVendor(v); setStatus(s); setLoading(true); load(v, s, search) }
+  const applyFilter = (v, s) => { setVendor(v); setStatus(s); setLoading(true); t.resetPage(); load(v, s, search) }
 
   // Debounced so the list doesn't refetch on every keystroke.
   useEffect(() => {
-    const t = setTimeout(() => { setSearch(term); setLoading(true); load(vendor, status, term) }, 350)
-    return () => clearTimeout(t)
+    const timer = setTimeout(() => { setSearch(term); setLoading(true); t.resetPage(); load(vendor, status, term) }, 350)
+    return () => clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [term])
 
-  // Sorting is client-side: the list is already fully loaded, so a round trip per column click
-  // would be slower and lose the current scroll position.
-  const { rows: sorted, sort, toggle } = useTableSort(orders, { key: 'order_date', dir: 'desc' }, {
-    products: o => summarise(o.items).join(' '),
-  })
+  // Sorting is done by the server across every matching order, so a header click can't be
+  // satisfied from the page already in memory.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { load() }, [t.key])
+  const sorted = orders
+  const sort = t.sort, toggle = t.toggle
 
   // window.open can't carry the Authorization header, so hitting the route directly just 401s.
   // Fetch it as a blob through apiFetch (which adds the token) and open that instead — the same
@@ -449,6 +452,7 @@ export default function CrewfitVendorOrders() {
             </tbody>
           </table>
         )}
+        {!loading && <Pagination table={t} noun="vendor orders" />}
       </div>
 
       {target && (

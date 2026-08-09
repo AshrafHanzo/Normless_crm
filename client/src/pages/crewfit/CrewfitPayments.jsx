@@ -6,6 +6,9 @@ import { useToast } from '../../components/Toast'
 import DateRangeFilter from '../../components/DateRangeFilter'
 import Icon from '../../components/Icon'
 import { cleanMobile, mobileError, isValidMobile, mobileInputProps } from '../../utils/phone'
+import useServerTable from '../../hooks/useServerTable'
+import SortTh from '../../components/SortTh'
+import Pagination from '../../components/Pagination'
 
 const fmt = (v) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(v || 0)
 const statusClass = (s) => (s === 'Paid' ? 'fulfilled' : s === 'Created' ? 'pending' : 'refunded')
@@ -46,8 +49,13 @@ export default function CrewfitPayments() {
   const [term, setTerm] = useState('')
   const [startDate, setStartDate] = useState('')
   const [endDate, setEndDate] = useState('')
-  const [page, setPage] = useState(1)
+  // Server-side sort + page: a header click reorders every matching link, not this page's 25.
+  const t = useServerTable({ sort: 'created_at', dir: 'desc' })
   const [creating, setCreating] = useState(false)
+  const [form, setForm] = useState(blankForm)
+  // Declared after `form` on purpose — reading it above its useState puts it in the temporal dead
+  // zone, and the ternary only touches it once `creating` flips true, so the crash landed on the
+  // "+ New Payment Link" click rather than on load.
   const guard = useDirtyGuard({
     snapshot: creating ? form : null,
     identity: creating ? 'new' : null,
@@ -56,20 +64,20 @@ export default function CrewfitPayments() {
     title: 'Discard this payment link?',
     message: 'You have started filling in a payment link. Closing now will lose it.',
   })
-  const [form, setForm] = useState(blankForm)
   const [saving, setSaving] = useState(false)
   const [copiedId, setCopiedId] = useState(null)
   const pollRef = useRef(null)
   const inFlight = useRef(false)
 
-  useEffect(() => { const t = setTimeout(() => { setSearch(term); setPage(1) }, 350); return () => clearTimeout(t) }, [term])
-  useEffect(() => { load() }, [status, kind, search, startDate, endDate, page])
+  useEffect(() => { const timer = setTimeout(() => { setSearch(term); t.resetPage() }, 350); return () => clearTimeout(timer) }, [term])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { load() }, [status, kind, search, startDate, endDate, t.key])
 
   const load = async (opts = {}) => {
     if (!opts.silent) setLoading(true)
-    const qs = new URLSearchParams(Object.entries({ status, kind, search, startDate, endDate, page, limit: 25 }).filter(([, v]) => v)).toString()
-    const res = await apiFetch('/api/crewfit/payments' + (qs ? '?' + qs : ''))
+    const res = await apiFetch('/api/crewfit/payments?' + t.query({ status, kind, search, startDate, endDate }))
     setData(res && !res.error ? res : null)
+    if (res?.pagination) t.setPagination(res.pagination)
     if (!opts.silent) setLoading(false)
     return res
   }
@@ -101,7 +109,7 @@ export default function CrewfitPayments() {
     document.addEventListener('visibilitychange', onVisible)
     return () => { clearInterval(pollRef.current); document.removeEventListener('visibilitychange', onVisible) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [openCount, data?.configured, status, kind, search, startDate, endDate, page])
+  }, [openCount, data?.configured, status, kind, search, startDate, endDate, t.key])
 
   const createLink = async (e) => {
     e.preventDefault()
@@ -112,7 +120,7 @@ export default function CrewfitPayments() {
     if (!res || res.error) { toast.error(res?.error || 'Failed to create payment link'); return }
     toast.success(`${fmt(res.amount)} link created for ${res.customer_name}`, { title: 'Payment link ready' })
     guard.reset()
-    setForm(blankForm); setCreating(false); setPage(1); load()
+    setForm(blankForm); setCreating(false); t.resetPage(); load()
   }
 
   const copyLink = (p) => { navigator.clipboard?.writeText(p.razorpay_short_url); setCopiedId(p.id); setTimeout(() => setCopiedId(null), 1600) }
@@ -138,7 +146,6 @@ export default function CrewfitPayments() {
   }
 
   const payments = data?.payments || []
-  const pg = data?.pagination || { total: 0, page: 1, totalPages: 1 }
   // Server is the authority; default to hidden so a slow/failed load never flashes the totals.
   const showRevenue = data?.canViewRevenue === true
 
@@ -155,8 +162,8 @@ export default function CrewfitPayments() {
         </div>
         <div style={{ display: 'flex', gap: 10 }}>
           <DateRangeFilter startDate={startDate} endDate={endDate}
-            onApply={(s, e) => { setStartDate(s); setEndDate(e); setPage(1) }}
-            onClear={() => { setStartDate(''); setEndDate(''); setPage(1) }} />
+            onApply={(s, e) => { setStartDate(s); setEndDate(e); t.resetPage() }}
+            onClear={() => { setStartDate(''); setEndDate(''); t.resetPage() }} />
           <button className="btn btn-primary" onClick={() => setCreating(v => !v)}>+ New Payment Link</button>
         </div>
       </div>
@@ -219,10 +226,10 @@ export default function CrewfitPayments() {
           <input placeholder="Search customer, phone, order number or description…" value={term} onChange={e => setTerm(e.target.value)} /></div>
       </div>
       <div className="filters-row">
-        <select value={status} onChange={e => { setStatus(e.target.value); setPage(1) }} style={{ width: 'auto' }}>
+        <select value={status} onChange={e => { setStatus(e.target.value); t.resetPage() }} style={{ width: 'auto' }}>
           <option value="">All statuses</option><option>Created</option><option>Paid</option><option>Cancelled</option><option>Expired</option>
         </select>
-        <select value={kind} onChange={e => { setKind(e.target.value); setPage(1) }} style={{ width: 'auto' }}>
+        <select value={kind} onChange={e => { setKind(e.target.value); t.resetPage() }} style={{ width: 'auto' }}>
           <option value="">All types</option><option value="advance">Advance 50%</option><option value="balance">Balance 50%</option><option value="custom">Custom</option>
         </select>
       </div>
@@ -232,7 +239,15 @@ export default function CrewfitPayments() {
           <div className="empty-state"><div className="empty-icon">💳</div><p>No payment links yet.</p></div>
         ) : (
           <table className="data-table">
-            <thead><tr><th>Customer</th><th>For</th><th style={{ textAlign: 'right' }}>Amount</th><th>Status</th><th>Created</th><th>Paid</th><th></th></tr></thead>
+            <thead><tr>
+              <SortTh label="Customer" col="customer_name" sort={t.sort} onSort={t.toggle} />
+              <SortTh label="For" col="kind" sort={t.sort} onSort={t.toggle} />
+              <SortTh label="Amount" col="amount" sort={t.sort} onSort={t.toggle} align="right" />
+              <SortTh label="Status" col="status" sort={t.sort} onSort={t.toggle} />
+              <SortTh label="Created" col="created_at" sort={t.sort} onSort={t.toggle} />
+              <SortTh label="Paid" col="paid_at" sort={t.sort} onSort={t.toggle} />
+              <SortTh label="" />
+            </tr></thead>
             <tbody>
               {payments.map(p => (
                 <tr key={p.id}>
@@ -270,15 +285,7 @@ export default function CrewfitPayments() {
           </table>
         )}
 
-        {!loading && pg.totalPages > 1 && (
-          <div className="pagination">
-            <span className="pagination-info">Showing page {pg.page} of {pg.totalPages} · {pg.total} links</span>
-            <div className="pagination-pages">
-              <button disabled={page <= 1} onClick={() => setPage(p => p - 1)}>‹</button>
-              <button disabled={page >= pg.totalPages} onClick={() => setPage(p => p + 1)}>›</button>
-            </div>
-          </div>
-        )}
+        {!loading && <Pagination table={t} noun="links" />}
       </div>
     </div>
   )
