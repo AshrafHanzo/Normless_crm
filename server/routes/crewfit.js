@@ -15,7 +15,11 @@ const router = express.Router();
 
 // Design mock / production photo uploads, stored on local disk under server/uploads/crewfit/<orderId>/
 // and served statically at /uploads/crewfit/... (mounted in server/index.js).
+// Keep in step with nginx's client_max_body_size on the VPS — nginx caps the whole request, so it
+// has to clear MAX_UPLOAD_MB × MAX_UPLOAD_FILES or a full batch is rejected before Express sees it.
 const UPLOAD_ROOT = path.join(__dirname, '..', 'uploads', 'crewfit');
+const MAX_UPLOAD_MB = 10;
+const MAX_UPLOAD_FILES = 5;
 const upload = multer({
   storage: multer.diskStorage({
     destination: (req, file, cb) => {
@@ -28,15 +32,20 @@ const upload = multer({
       cb(null, `${Date.now()}-${crypto.randomBytes(6).toString('hex')}${ext}`);
     },
   }),
-  limits: { fileSize: 8 * 1024 * 1024, files: 5 },
+  limits: { fileSize: MAX_UPLOAD_MB * 1024 * 1024, files: MAX_UPLOAD_FILES },
   fileFilter: (req, file, cb) => {
     if (/^image\/(jpeg|png|webp)$/.test(file.mimetype)) cb(null, true);
     else cb(new Error('Only JPG, PNG or WEBP images are allowed'));
   },
 });
 // multer's own errors land in next(err) — surface them as a normal 400 instead of a 500 crash.
-const uploadImages = (req, res, next) => upload.array('images', 5)(req, res, (err) => {
-  if (err) return res.status(400).json({ error: err.message || 'Upload failed' });
+// Its stock messages ("File too large") don't say what the limit is, so name it here.
+const UPLOAD_ERRORS = {
+  LIMIT_FILE_SIZE: `Image is too large — each file must be under ${MAX_UPLOAD_MB}MB`,
+  LIMIT_FILE_COUNT: `Too many images — up to ${MAX_UPLOAD_FILES} per upload`,
+};
+const uploadImages = (req, res, next) => upload.array('images', MAX_UPLOAD_FILES)(req, res, (err) => {
+  if (err) return res.status(400).json({ error: UPLOAD_ERRORS[err.code] || err.message || 'Upload failed' });
   next();
 });
 

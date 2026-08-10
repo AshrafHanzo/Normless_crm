@@ -61,6 +61,8 @@ export function useApi() {
       if (!res.ok) return { error: data.error || 'Request failed', status: res.status }
       return data
     }
+    // 413 comes from nginx, not us, so it's an HTML page rather than JSON — translate it.
+    if (res.status === 413) return { error: 'Upload is too large for the server to accept', status: 413 }
     if (!res.ok) return { error: `Server Error (${res.status})`, status: res.status }
     return null
   }

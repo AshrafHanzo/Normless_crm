@@ -8,6 +8,7 @@ import { cleanMobile, mobileError, isValidMobile, mobileInputProps } from '../..
 const fmt = (v) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(v || 0)
 const PRINTING = ['Front', 'Back', 'Front & Back', 'Front Chest & Back', 'No Print']
 const STANDARD_SIZES = ['XS', 'S', 'M', 'L', 'XL', 'XXL', '3XL', '4XL', '5XL']
+const MAX_IMAGE_MB = 10 // mirrors MAX_UPLOAD_MB in server/routes/crewfit.js
 
 // "XS-2, S-5, M-3" -> { XS: '2', S: '5', M: '3' }. Returns null if the text doesn't
 // cleanly match that shape (e.g. free-typed kids sizing) — caller falls back to manual mode.
@@ -730,7 +731,14 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
     setF({ line_items: items })
   }
   const uploadItemImages = async (idx, kind, fileList) => {
-    const files = Array.from(fileList || [])
+    const picked = Array.from(fileList || [])
+    if (!picked.length) return
+    // Reject oversized files at pick time. The server enforces this too, but queued images upload
+    // only after the order is saved, so without this check the failure surfaces long after the pick.
+    const files = picked.filter(f => f.size <= MAX_IMAGE_MB * 1024 * 1024)
+    const tooBig = picked.filter(f => f.size > MAX_IMAGE_MB * 1024 * 1024)
+    if (tooBig.length) toast.error(
+      `${tooBig.length === 1 ? `"${tooBig[0].name}" is` : `${tooBig.length} images are`} over ${MAX_IMAGE_MB}MB and can't be uploaded`)
     if (!files.length) return
     if (!form.id || !form.line_items[idx]?._saved) { addPendingImages(idx, kind, files); return }
     setImgBusy(`${idx}-${kind}`)
