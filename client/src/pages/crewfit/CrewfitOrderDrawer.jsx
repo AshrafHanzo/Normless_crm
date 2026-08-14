@@ -819,6 +819,12 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
     else if (form.status === 'Ready for Dispatch' && v === 'Fully Paid') patch.status = 'Dispatch Pending'
     setF(patch)
   }
+  // The other half of the same rule: "Ready for Dispatch" means we're waiting on the balance, so
+  // picking it on an already fully paid order goes straight to the dispatch queue. Without this
+  // the server would rewrite the status on save and the drawer would show a stale one until reload.
+  const onStatusChange = (v) => {
+    setF({ status: v === 'Ready for Dispatch' && form.payment_status === 'Fully Paid' ? 'Dispatch Pending' : v })
+  }
   // Porter/Self Pickup don't issue a tracking ID — this is the alternate path to Dispatched.
   const markDispatchedNoTracking = () => {
     setF({ status: 'Dispatched', dispatch_date: form.dispatch_date || todayStr() })
@@ -1214,7 +1220,7 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
           <div className="form-row">
             <div className="input-group">
               <label>Status</label>
-              <select value={form.status || ''} onChange={e => setF({ status: e.target.value })}>
+              <select value={form.status || ''} onChange={e => onStatusChange(e.target.value)}>
                 {(meta?.statuses || []).filter(v => v !== 'Dispatched' || form.status === 'Dispatched').map(v => <option key={v}>{v}</option>)}
               </select>
             </div>

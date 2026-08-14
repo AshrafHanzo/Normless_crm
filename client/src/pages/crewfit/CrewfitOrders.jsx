@@ -62,7 +62,13 @@ export default function CrewfitOrders() {
   const clearDateFilter = () => { setStartDate(''); setEndDate(''); t.resetPage() }
 
   const printLabel = async (o) => { setLabelBusy(o.id); await openShippingLabel(apiFetch, o, toast); setLabelBusy(null) }
-  const quickUpdate = async (id, patch) => { setOrders(os => os.map(o => o.id === id ? { ...o, ...patch } : o)); await apiFetch(`/api/crewfit/orders/${id}`, { method: 'PUT', body: JSON.stringify(patch) }) }
+  // Optimistic, then reconciled: the server applies pipeline rules of its own (a fully paid
+  // "Ready for Dispatch" is really "Dispatch Pending"), so its copy wins over the guess.
+  const quickUpdate = async (id, patch) => {
+    setOrders(os => os.map(o => o.id === id ? { ...o, ...patch } : o))
+    const res = await apiFetch(`/api/crewfit/orders/${id}`, { method: 'PUT', body: JSON.stringify(patch) })
+    if (res && !res.error) setOrders(os => os.map(o => o.id === id ? { ...o, ...res } : o))
+  }
   const InlineSelect = ({ o, field, options, cls }) => {
     const opts = options || []
     return (<select className={`inline-select ${cls ? 'sb-' + cls(o[field]) : ''}`} value={o[field] || ''} onClick={e => e.stopPropagation()} onChange={e => quickUpdate(o.id, { [field]: e.target.value })}>

@@ -346,7 +346,13 @@ router.get('/reminders', async (req, res) => {
     // Balance collected but not shipped yet — the only thing left is a tracking ID, which is
     // what flips the order to Dispatched. Porter/Self Pickup orders sit here until the
     // no-tracking dispatch button is used.
-    const dispatchPending = active.filter(o => o.status === 'Dispatch Pending');
+    //
+    // "Ready for Dispatch" means production is done and we're waiting on the balance, so a fully
+    // paid one is waiting for nothing: it belongs in this queue whatever its stored status says.
+    // Saving the status and the payment together used to skip the auto-move to "Dispatch Pending"
+    // and strand the order — paid, ready to ship, and in no follow-up group at all.
+    const dispatchPending = active.filter(o => o.status === 'Dispatch Pending'
+      || (o.status === 'Ready for Dispatch' && o.payment_status === 'Fully Paid'));
     // Dispatched orders are excluded from `active` (they're closed) — pull straight from `orders` instead.
     // Scoped to the last 14 days so the backlog of pre-existing dispatches (never tracked before this
     // field existed) doesn't flood the queue with old orders that were surely already followed up on.
@@ -478,11 +484,17 @@ router.put('/orders/:id', async (req, res) => {
       && current.payment_status === 'Pending' && body.payment_status && body.payment_status !== 'Pending') {
       body.deadline_at = addDaysStr(7);
     }
-    // Production is done and the balance has just been collected — the order is cleared to ship.
-    // It parks in "Dispatch Pending" (print the label, hand it to the courier) and only becomes
-    // "Dispatched" once a tracking ID lands, per the rule above.
-    if (current.status === 'Ready for Dispatch' && statusUntouched
-      && body.payment_status === 'Fully Paid' && current.payment_status !== 'Fully Paid') {
+    // Production is done and the balance is collected — the order is cleared to ship. It parks in
+    // "Dispatch Pending" (print the label, hand it to the courier) and only becomes "Dispatched"
+    // once a tracking ID lands, per the rule above.
+    //
+    // Judged on the resulting state rather than on the payment changing, because the balance and
+    // the status often land in the same save: picking "Ready for Dispatch" and "Fully Paid"
+    // together used to count as an explicit status choice and skip this move, leaving the order
+    // parked in a state that means "still waiting for money we already have".
+    const finalStatus = body.status !== undefined ? body.status : current.status;
+    const finalPayment = body.payment_status !== undefined ? body.payment_status : current.payment_status;
+    if (finalStatus === 'Ready for Dispatch' && finalPayment === 'Fully Paid') {
       body.status = 'Dispatch Pending';
     }
 
@@ -512,6 +524,11 @@ router.post('/orders', async (req, res) => {
     if (body.tracking_link && body.status !== 'Cancelled') {
       body.status = 'Dispatched';
       if (!body.dispatch_date) body.dispatch_date = todayStr();
+    }
+    // Same normalisation the update path applies — an order keyed in after the fact can arrive
+    // already produced and already paid.
+    if (body.status === 'Ready for Dispatch' && body.payment_status === 'Fully Paid') {
+      body.status = 'Dispatch Pending';
     }
     // Every order is dated the day it was raised unless one was typed in. Defaulted here rather
     // than only in the drawer because orders also arrive prefilled from a quote, which skips the
