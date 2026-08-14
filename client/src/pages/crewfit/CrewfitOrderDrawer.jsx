@@ -831,7 +831,18 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
       const sentAt = new Date().toISOString()
       setF({ tracking_sent_at: sentAt })
       await apiFetch(`/api/crewfit/orders/${form.id}`, { method: 'PUT', body: JSON.stringify({ tracking_sent_at: sentAt }) })
+      setServerSync(n => n + 1) // already persisted — don't let it read as an unsaved edit on close
     }
+  }
+  // Undo for the "✓ Sent" confirmation on the follow-ups page (and for a stray Send click) — puts
+  // the order back on the "send tracking to customer" list.
+  const clearTrackingSent = async () => {
+    setF({ tracking_sent_at: null })
+    if (!form.id) return
+    const res = await apiFetch(`/api/crewfit/orders/${form.id}`, { method: 'PUT', body: JSON.stringify({ tracking_sent_at: null }) })
+    if (res && res.error) { toast.error(res.error); return }
+    setServerSync(n => n + 1)
+    toast.info('Back on the follow-up list — tracking marked as not sent')
   }
   const copyDispatchMessage = () => navigator.clipboard?.writeText(buildDispatchMessage(form))
   const printLabel = async () => { setLabelBusy(true); await openShippingLabel(apiFetch, form, toast); setLabelBusy(false) }
@@ -899,6 +910,7 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
       const sentAt = new Date().toISOString()
       setF({ photos_sent_at: sentAt })
       await apiFetch(`/api/crewfit/orders/${form.id}`, { method: 'PUT', body: JSON.stringify({ photos_sent_at: sentAt }) })
+      setServerSync(n => n + 1)
     }
   }
   const copyPhotosMessage = () => navigator.clipboard?.writeText(buildPhotosMessage(form, API_URL))
@@ -1276,6 +1288,7 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
                 {form.tracking_sent_at ? <> · <span style={{ color: 'var(--success)' }}>✓ sent</span></> : ''}
               </span>
               <span style={{ display: 'flex', gap: 8 }}>
+                {form.tracking_sent_at && <button type="button" className="mini-btn" onClick={clearTrackingSent} title="Put this order back on the follow-up list">↩ Not sent</button>}
                 <button type="button" className="mini-btn" onClick={copyDispatchMessage}>📋 Copy</button>
                 <button type="button" className="btn btn-secondary" onClick={sendDispatchWhatsApp}>💬 {form.tracking_sent_at ? 'Resend' : 'Send'} {isNoTrackingMot(form.mot) ? 'Dispatch Update' : 'Tracking'} via WhatsApp</button>
               </span>

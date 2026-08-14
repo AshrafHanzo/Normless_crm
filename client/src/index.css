@@ -876,6 +876,11 @@ select { cursor: pointer; appearance: none;
 .reminder-meta { text-align: right; flex-shrink: 0; }
 .reminder-amt { font-size: 13px; font-weight: 700; }
 .reminder-chip { display: inline-block; margin-top: 4px; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; }
+/* "I've sent it" confirmation on a follow-up row. Tinted success so it reads as completing the
+   task rather than as another neutral control competing with the row's own click-to-open. */
+.reminder-action { margin-top: 5px; border-color: color-mix(in srgb, var(--success) 40%, transparent); color: var(--success); }
+.reminder-action:hover:not(:disabled) { background: color-mix(in srgb, var(--success) 12%, transparent); border-color: var(--success); color: var(--success); }
+.reminder-action:disabled { opacity: 0.6; cursor: default; }
 .reminder-more { padding: 10px; text-align: center; font-size: 12.5px; font-weight: 600; color: var(--primary-light); cursor: pointer; }
 
 /* Inline editable dropdowns in tables */

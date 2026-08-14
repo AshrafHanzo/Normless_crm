@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useApi } from '../../App'
+import { useToast } from '../../components/Toast'
 import CrewfitOrderDrawer from './CrewfitOrderDrawer'
 
 const fmt = (v) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(v || 0)
@@ -19,17 +20,34 @@ function daysLabel(dstr) {
 
 export default function CrewfitDashboard() {
   const apiFetch = useApi()
+  const toast = useToast()
   const navigate = useNavigate()
   const [stats, setStats] = useState(null)
   const [reminders, setReminders] = useState(null)
   const [loading, setLoading] = useState(true)
   const [target, setTarget] = useState(null)
+  const [marking, setMarking] = useState(null)
 
   useEffect(() => { load() }, [])
   const load = async () => {
     setLoading(true)
     const [s, r] = await Promise.all([apiFetch('/api/crewfit/stats'), apiFetch('/api/crewfit/reminders')])
     setStats(s); setReminders(r); setLoading(false)
+  }
+
+  // Sending the tracking ID through the drawer's WhatsApp button stamps `tracking_sent_at` and
+  // drops the order off this list. Sending it any other way — the SO's own phone, a call, email —
+  // leaves it here forever, so let them confirm it by hand. Reverse it from the order drawer.
+  const markTrackingSent = async (e, order) => {
+    e.stopPropagation() // the row itself opens the drawer
+    setMarking(order.id)
+    const res = await apiFetch(`/api/crewfit/orders/${order.id}`, {
+      method: 'PUT', body: JSON.stringify({ tracking_sent_at: new Date().toISOString() }),
+    })
+    setMarking(null)
+    if (!res || res.error) { toast.error(res?.error || 'Failed to update order'); return }
+    toast.success(`Tracking marked as sent for ${order.customer_name}`, { title: 'Follow-up cleared' })
+    load()
   }
 
   if (loading) return <div className="loader"><div className="spinner" /><span>Loading follow-ups…</span></div>
@@ -86,7 +104,14 @@ export default function CrewfitDashboard() {
                     </div>
                     <div className="reminder-meta">
                       {g.key === 'trackingPending' ? (
-                        <div className="reminder-amt" style={{ fontSize: 12 }}>{o.tracking_link || '—'}{o.mot ? ` · ${o.mot}` : ''}</div>
+                        <>
+                          <div className="reminder-amt" style={{ fontSize: 12 }}>{o.tracking_link || '—'}{o.mot ? ` · ${o.mot}` : ''}</div>
+                          <button type="button" className="mini-btn reminder-action" disabled={marking === o.id}
+                            onClick={(e) => markTrackingSent(e, o)}
+                            title="Clear this follow-up — I've already sent the tracking ID to the customer">
+                            {marking === o.id ? 'Saving…' : '✓ Sent'}
+                          </button>
+                        </>
                       ) : g.key === 'photosPending' ? (
                         <div className="reminder-amt" style={{ fontSize: 12 }}>📸 {photographed}/{items.length} products photographed</div>
                       ) : (
