@@ -131,6 +131,13 @@ function renderInvoice(doc, order, invoice, allInvoices) {
     .text('This is a computer-generated invoice and does not require a physical signature.', 40, 780, { width: 515, align: 'center' });
 }
 
+// The fabric a line was priced against — "240 GSM · 100% Combed Cotton Airtex (Bio Washed)" —
+// so the customer can tell two similar-looking quotes apart. Either half may be missing on
+// quotes raised before these were recorded.
+function fabricSpec(it) {
+  return [it.gsm ? `${it.gsm} GSM` : null, it.material].filter(Boolean).join(' · ');
+}
+
 // Quotations aren't tax documents — no sequence number, no GSTIN requirement — just a clean,
 // shareable price breakdown for a Crewfit quote.
 function renderQuote(doc, quote) {
@@ -172,14 +179,28 @@ function renderQuote(doc, quote) {
   y += 8;
 
   const items = Array.isArray(quote.line_items) ? quote.line_items : [];
-  doc.fontSize(9).fillColor('#1a1a1a');
   items.forEach((it, i) => {
+    // Rows are as tall as their content now: a long product name wraps, and the fabric spec adds
+    // a second line, so the old fixed 16pt row would have overlapped the next one.
+    if (y > 690) { doc.addPage(); y = 50; }
+    const name = it.product_name || '-';
+    const spec = fabricSpec(it);
+
+    doc.font('Helvetica').fontSize(9).fillColor('#1a1a1a');
+    const nameH = doc.heightOfString(name, { width: 260 });
     doc.text(String(i + 1), 40, y, { width: 20 });
-    doc.text(it.product_name || '-', 65, y, { width: 260 });
+    doc.text(name, 65, y, { width: 260 });
     doc.text(String(it.qty || 0), 335, y, { width: 40, align: 'right' });
     doc.text(it.needs_quote ? 'On request' : money(it.price_per_piece), 380, y, { width: 75, align: 'right' });
     doc.text(it.needs_quote ? '-' : money(it.line_total), 460, y, { width: 95, align: 'right' });
-    y += 16;
+
+    let rowH = nameH;
+    if (spec) {
+      doc.fontSize(8).fillColor('#666');
+      doc.text(spec, 65, y + nameH + 1, { width: 260 });
+      rowH += doc.heightOfString(spec, { width: 260 }) + 1;
+    }
+    y += Math.max(rowH + 6, 16);
   });
   y += 4;
   doc.moveTo(40, y).lineTo(555, y).strokeColor('#ddd').stroke();

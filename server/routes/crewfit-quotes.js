@@ -43,11 +43,26 @@ function suggestPrice(tiers, qty) {
   return { price: numeric[numeric.length - 1].price, exact: false }; // closest tier below qty (past the top tier)
 }
 
+// Quotes raised before the fabric spec was snapshotted onto their line items have nothing to
+// print, so fill those in from the catalog. Only the gaps: a snapshot always wins, otherwise
+// editing a product would rewrite the spec on quotes already sent out.
+async function withFabric(lineItems) {
+  const missing = (lineItems || []).filter(li => li.product_id && !li.gsm && !li.material);
+  if (!missing.length) return lineItems;
+  const ids = [...new Set(missing.map(li => li.product_id))];
+  const r = await db.query('SELECT id, gsm, material FROM crewfit_products WHERE id = ANY($1::int[])', [ids]);
+  const byId = new Map(r.rows.map(p => [p.id, p]));
+  return lineItems.map(li => {
+    const p = (!li.gsm && !li.material) ? byId.get(li.product_id) : null;
+    return p ? { ...li, gsm: p.gsm, material: p.material } : li;
+  });
+}
+
 async function computeQuote({ items, zoneId }) {
   const ids = [...new Set((items || []).map(it => parseInt(it.product_id, 10)).filter(Number.isFinite))];
   let products = [];
   if (ids.length) {
-    const r = await db.query('SELECT id, name, tiers FROM crewfit_products WHERE id = ANY($1::int[])', [ids]);
+    const r = await db.query('SELECT id, name, tiers, gsm, material FROM crewfit_products WHERE id = ANY($1::int[])', [ids]);
     products = r.rows.map(p => ({ ...p, tiers: safeJson(p.tiers, []) }));
   }
   const lineItems = (items || []).map(it => {
@@ -62,6 +77,9 @@ async function computeQuote({ items, zoneId }) {
     const lineTotal = pricePerPiece != null ? pricePerPiece * qty : 0;
     return {
       product_id: product?.id ?? null, product_name: product?.name || 'Unknown product',
+      // Snapshotted, not looked up when the PDF is built: a quote must keep saying what was
+      // actually quoted even after the catalog entry is edited.
+      gsm: product?.gsm || null, material: product?.material || null,
       qty, price_per_piece: pricePerPiece,
       is_estimated: manualPrice == null && !suggested.exact && pricePerPiece != null,
       is_manual: manualPrice != null,
@@ -279,12 +297,14 @@ router.get('/:id/pdf', async (req, res) => {
     const r = await db.query('SELECT * FROM crewfit_quotes WHERE id = $1', [req.params.id]);
     const quote = r.rows[0];
     if (!quote) return res.status(404).json({ error: 'Quote not found' });
+    const parsed = parseQuote(quote);
+    parsed.line_items = await withFabric(parsed.line_items);
 
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="Quote-${quote.id}-${quote.customer_name.replace(/[^a-z0-9]+/gi, '-')}.pdf"`);
     const doc = new PDFDocument({ size: 'A4', margin: 40 });
     doc.pipe(res);
-    renderQuote(doc, parseQuote(quote));
+    renderQuote(doc, parsed);
     doc.end();
   } catch (err) {
     console.error('quote pdf error:', err);
