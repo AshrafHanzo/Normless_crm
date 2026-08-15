@@ -345,6 +345,9 @@ async function ensureCrewfitSchema() {
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
+            -- HSN drives the tax register's HSN-wise summary, and polos, tees and sweatshirts
+            -- are genuinely different headings.
+            ALTER TABLE crewfit_products ADD COLUMN IF NOT EXISTS hsn TEXT;
         `);
         // Per-brand + per-page access columns on admin_users
         try {
@@ -403,6 +406,9 @@ async function ensureCrewfitSchema() {
                 ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS advance NUMERIC;
                 ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS balance NUMERIC;
                 ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS photos_sent_at TIMESTAMP;
+                -- Place of supply decides CGST+SGST vs IGST on the tax invoice and in the register.
+                -- The billing address is free text, so the state has to be held on its own.
+                ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS place_of_supply TEXT;
             `);
         } catch { /* orders table may not exist yet */ }
 
@@ -425,6 +431,41 @@ async function ensureCrewfitSchema() {
                 ALTER TABLE crewfit_quotes ADD COLUMN IF NOT EXISTS gst_amount NUMERIC;
             `);
         } catch (e) { console.error('crewfit_quotes ensure:', e.message); }
+
+        // Crewfit tax documents, promoted out of crewfit_orders.invoices (JSONB) so a tax register
+        // can be built from them: queryable by date, indexable, and — unlike a column on the order
+        // — able to outlive the order it belongs to. Six issued numbers (0001–0006) were already
+        // lost when their orders were deleted; nothing here may go the same way.
+        //
+        // Two independent series. A proforma acknowledges an advance and carries no GST, so it must
+        // never consume a tax invoice number; the tax invoice is issued once for the full order
+        // value when the balance lands. `status` records reclassification: the advance documents
+        // issued before this split existed were sent as tax invoices and are proformas in truth.
+        try {
+            await db.exec(`
+                CREATE TABLE IF NOT EXISTS crewfit_invoices (
+                    id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                    order_id INTEGER,
+                    doc_type TEXT NOT NULL,            -- 'tax_invoice' | 'proforma'
+                    number TEXT NOT NULL,
+                    series TEXT NOT NULL,              -- 'CREWFIT' | 'PRO'
+                    fy TEXT NOT NULL,
+                    seq INTEGER,
+                    issue_date DATE NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'issued',  -- 'issued' | 'reclassified' | 'cancelled'
+                    note TEXT,
+                    qty INTEGER,
+                    taxable NUMERIC, gst_pct NUMERIC, gst_amount NUMERIC, gross NUMERIC,
+                    place_of_supply TEXT, gstin TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS crewfit_invoices_number_idx ON crewfit_invoices (number);
+                CREATE INDEX IF NOT EXISTS crewfit_invoices_order_idx ON crewfit_invoices (order_id);
+                CREATE INDEX IF NOT EXISTS crewfit_invoices_date_idx ON crewfit_invoices (issue_date);
+                CREATE SEQUENCE IF NOT EXISTS crewfit_proforma_seq START 1;
+            `);
+        } catch (e) { console.error('crewfit_invoices ensure:', e.message); }
 
         // Razorpay payment links. One row per link ever generated — the advance and balance
         // halves of an order, plus standalone "custom" links not tied to any order. Kept in

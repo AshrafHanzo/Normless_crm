@@ -569,6 +569,21 @@ router.post('/orders', async (req, res) => {
 // orphaned on disk forever, since nothing else ever references it once the row is gone.
 router.delete('/orders/:id', ownerOnly, async (req, res) => {
   try {
+    // An issued number belongs to the tax series, not to the order. Deleting the order used to
+    // take its documents with it — that is how CREWFIT/26-27/0001–0006 were lost, leaving a gap
+    // nobody can now explain to an auditor. A wrongly issued invoice is cancelled with a credit
+    // note; it is never made to disappear.
+    const docs = await db.query(
+      `SELECT number, doc_type FROM crewfit_invoices WHERE order_id = $1 AND status <> 'cancelled' ORDER BY number`,
+      [req.params.id]
+    );
+    if (docs.rows.length) {
+      const list = docs.rows.map(d => d.number).join(', ');
+      return res.status(409).json({
+        error: `This order has ${docs.rows.length} issued document${docs.rows.length > 1 ? 's' : ''} (${list}) and cannot be deleted. Cancel the document first if it was raised in error.`,
+      });
+    }
+
     const r = await db.query('DELETE FROM crewfit_orders WHERE id = $1 RETURNING sl_no', [req.params.id]);
     if (!r.rows[0]) return res.status(404).json({ error: 'Order not found' });
 
@@ -584,6 +599,42 @@ router.delete('/orders/:id', ownerOnly, async (req, res) => {
     res.status(500).json({ error: 'Failed to delete order' });
   }
 });
+
+/**
+ * Mirror an issued document into crewfit_invoices, the table the tax register and the delete
+ * guard both read. Classified the same way the backfill classified the existing 20: an advance
+ * is a proforma in substance, a balance invoice is the order's tax invoice re-stated at the full
+ * order value. Best-effort — a bookkeeping write must never stop the customer getting their PDF.
+ */
+async function recordInvoiceDoc(order, invoice) {
+  try {
+    const isAdvance = invoice.type === 'advance';
+    const qty = (order.line_items || []).reduce((s, it) => s + (parseInt(it.qty, 10) || 0), 0);
+    const full = {
+      taxable: (Number(order.product_total) || 0) + (Number(order.shipping) || 0),
+      gst_amount: Number(order.gst_amount) || 0,
+      gross: Number(order.grand_total) || 0,
+    };
+    const [, fy, seqStr] = invoice.number.split('/');
+    await db.query(
+      `INSERT INTO crewfit_invoices
+         (order_id, doc_type, number, series, fy, seq, issue_date, status, note, qty,
+          taxable, gst_pct, gst_amount, gross, place_of_supply, gstin)
+       VALUES ($1,$2,$3,'CREWFIT',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+       ON CONFLICT (number) DO NOTHING`,
+      [order.id, isAdvance ? 'proforma' : 'tax_invoice', invoice.number, fy, parseInt(seqStr, 10) || null,
+        invoice.date, isAdvance ? 'reclassified' : 'issued',
+        isAdvance ? 'Advance document; a proforma in substance' : 'Re-stated to the full order value',
+        isAdvance ? null : qty,
+        isAdvance ? Number(invoice.taxable_value) : full.taxable, invoice.gst_pct,
+        isAdvance ? Number(invoice.gst_amount) : full.gst_amount,
+        isAdvance ? Number(invoice.amount) : full.gross,
+        order.place_of_supply || null, order.gst_number || null]
+    );
+  } catch (err) {
+    console.error('could not record invoice document:', err.message);
+  }
+}
 
 // GET /api/crewfit/orders/:id/invoice/:type — type: 'advance' | 'balance'.
 // Issues the invoice (next sequence number, persisted) the first time it's requested,
@@ -644,6 +695,7 @@ router.get('/orders/:id/invoice/:type', async (req, res) => {
     }
     if (dirty) {
       await db.query('UPDATE crewfit_orders SET invoices = $1 WHERE id = $2', [JSON.stringify(invoices), req.params.id]);
+      await recordInvoiceDoc(order, invoice);
     }
 
     res.setHeader('Content-Type', 'application/pdf');
