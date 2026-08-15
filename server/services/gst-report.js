@@ -242,7 +242,9 @@ async function buildWorkbook(rows, label) {
         ws.addRow([
             r.order_name, excelSerial(r.date), r.particulars, r.company, r.invoice_no, r.location,
             r.gst_number, r.gst_pct, r.qty, r.rate, r.taxable, r.gst, r.gross,
-            r.cgst, r.sgst, r.igst, HSN_CODE, r.uqc || UQC, r.qty,
+            // Crewfit rows carry their own HSN (polos and hoodies are different headings); the
+            // Shopify rows don't set one and keep the single code the workbook has always used.
+            r.cgst, r.sgst, r.igst, Number(r.hsn) || HSN_CODE, r.uqc || UQC, r.qty,
         ]);
     }
 

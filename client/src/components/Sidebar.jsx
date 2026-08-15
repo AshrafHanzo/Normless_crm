@@ -27,6 +27,7 @@ const NAV = {
     { to: '/crewfit/quotes', icon: 'spark', label: 'Quotes', perm: 'can_view_crewfit_calculator' },
     { to: '/crewfit/payments', icon: 'card', label: 'Payments', perm: 'can_view_crewfit_payments' },
     { to: '/crewfit/vendor-orders', icon: 'truck', label: 'Vendor Orders', perm: 'can_view_crewfit_vendors' },
+    { to: '/crewfit/invoices', icon: 'invoice', label: 'Invoices', perm: 'can_view_crewfit_invoices' },
   ],
 }
 

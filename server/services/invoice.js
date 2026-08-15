@@ -29,10 +29,29 @@ async function nextInvoiceNumber(db) {
   return `CREWFIT/${fyLabel(new Date())}/${String(r.rows[0].n).padStart(4, '0')}`;
 }
 
-function renderInvoice(doc, order, invoice, allInvoices) {
-  const buyerStateCode = (order.gst_number || '').slice(0, 2);
-  const isInterState = buyerStateCode && buyerStateCode !== SELLER.stateCode;
+/**
+ * Proformas run on their own sequence. An advance on goods carries no GST liability
+ * (Notification 66/2017 — tax falls due at supply), so acknowledging one must never consume a
+ * tax invoice number: that number belongs to the supply, which has not happened yet.
+ */
+async function nextProformaNumber(db) {
+  const r = await db.query("SELECT nextval('crewfit_proforma_seq') AS n");
+  return `PRO/${fyLabel(new Date())}/${String(r.rows[0].n).padStart(4, '0')}`;
+}
 
+/**
+ * Which tax heads apply. Place of supply decides it — the buyer's GSTIN is only available for
+ * registered customers, and an out-of-state consumer sale is still IGST.
+ */
+function taxSplit(order) {
+  const byGstin = (order.gst_number || '').slice(0, 2);
+  if (byGstin) return { interState: byGstin !== SELLER.stateCode };
+  const pos = (order.place_of_supply || '').trim().toLowerCase();
+  return { interState: !!pos && pos !== SELLER.state.toLowerCase() };
+}
+
+/** Shared letterhead + seller/buyer block. Returns the y to carry on from. */
+function documentHeader(doc, order, { title, number, date, numberLabel }) {
   let headerX = 40;
   if (fs.existsSync(LOGO_PATH)) {
     doc.image(LOGO_PATH, 40, 34, { width: 58 });
@@ -41,11 +60,10 @@ function renderInvoice(doc, order, invoice, allInvoices) {
   doc.fontSize(20).fillColor('#1a1a1a').text(SELLER.brandName, headerX, 44);
   doc.fontSize(9).fillColor('#666').text(SELLER.tagline, headerX, 68);
 
-  doc.fontSize(15).fillColor('#1a1a1a')
-    .text(invoice.type === 'advance' ? 'TAX INVOICE (ADVANCE)' : 'TAX INVOICE (FINAL)', 300, 44, { width: 255, align: 'right' });
+  doc.fontSize(15).fillColor('#1a1a1a').text(title, 300, 44, { width: 255, align: 'right' });
   doc.fontSize(9).fillColor('#444')
-    .text(`Invoice No: ${invoice.number}`, 300, 68, { width: 255, align: 'right' })
-    .text(`Invoice Date: ${invoice.date}`, 300, 82, { width: 255, align: 'right' })
+    .text(`${numberLabel}: ${number}`, 300, 68, { width: 255, align: 'right' })
+    .text(`Date: ${date}`, 300, 82, { width: 255, align: 'right' })
     .text(`Order Ref: CF-${order.sl_no}`, 300, 96, { width: 255, align: 'right' });
 
   doc.moveTo(40, 120).lineTo(555, 120).strokeColor('#ddd').stroke();
@@ -64,9 +82,14 @@ function renderInvoice(doc, order, invoice, allInvoices) {
   doc.text(order.billing_address || order.delivery_location || '-', 320, by, { width: 235 });
   by += 28;
   doc.text(`GSTIN: ${order.gst_number || 'Unregistered'}`, 320, by); by += 13;
+  doc.text(`Place of Supply: ${order.place_of_supply || SELLER.state}`, 320, by); by += 13;
   doc.text(`Phone: ${order.billing_mobile || order.contact_number || '-'}`, 320, by);
 
-  let y = 250;
+  return 250;
+}
+
+/** The line-item table. Returns the y below it. */
+function itemsTable(doc, order, y) {
   doc.moveTo(40, y).lineTo(555, y).strokeColor('#ddd').stroke();
   y += 8;
   doc.fontSize(9).fillColor('#888');
@@ -88,7 +111,7 @@ function renderInvoice(doc, order, invoice, allInvoices) {
   items.forEach((it, i) => {
     doc.text(String(i + 1), 40, y, { width: 20 });
     doc.text(`${it.product || '-'}${it.color ? ` (${it.color})` : ''}`, 65, y, { width: 190 });
-    doc.text(HSN_CODE, 260, y, { width: 50 });
+    doc.text(it.hsn || HSN_CODE, 260, y, { width: 50 });
     doc.text(String(it.qty || 0), 315, y, { width: 40, align: 'right' });
     doc.text(money(it.unit_price), 360, y, { width: 60, align: 'right' });
     doc.text(money(it.product_total), 460, y, { width: 95, align: 'right' });
@@ -101,31 +124,84 @@ function renderInvoice(doc, order, invoice, allInvoices) {
   }
   y += 4;
   doc.moveTo(40, y).lineTo(555, y).strokeColor('#ddd').stroke();
-  y += 10;
+  return y + 10;
+}
 
+/** Right-aligned label/value totals block. */
+function totalsBlock(doc, y) {
   const rightX = 340;
-  const row = (label, val, bold) => {
-    doc.fontSize(9).fillColor(bold ? '#1a1a1a' : '#444').font(bold ? 'Helvetica-Bold' : 'Helvetica')
-      .text(label, rightX, y, { width: 120 })
-      .text(val, rightX + 120, y, { width: 95, align: 'right' });
-    y += 15;
+  return {
+    row(label, val, bold) {
+      doc.fontSize(9).fillColor(bold ? '#1a1a1a' : '#444').font(bold ? 'Helvetica-Bold' : 'Helvetica')
+        .text(label, rightX, y, { width: 120 })
+        .text(val, rightX + 120, y, { width: 95, align: 'right' });
+      y += 15;
+    },
+    note(text) {
+      doc.font('Helvetica').fontSize(8).fillColor('#888').text(text, rightX, y, { width: 215, align: 'right' });
+      y += 12;
+    },
+    get y() { return y; },
   };
-  row('Taxable Value', money(invoice.taxable_value));
-  if (isInterState) {
-    row(`IGST @ ${invoice.gst_pct}%`, money(invoice.gst_amount));
-  } else {
-    row(`CGST @ ${(invoice.gst_pct / 2).toFixed(1)}%`, money(invoice.gst_amount / 2));
-    row(`SGST @ ${(invoice.gst_pct / 2).toFixed(1)}%`, money(invoice.gst_amount / 2));
-  }
-  row(`This Invoice Amount (${invoice.type === 'advance' ? 'Advance' : 'Balance'})`, money(invoice.amount), true);
+}
 
-  y += 6;
-  doc.fontSize(8).fillColor('#888').text(`Order Grand Total: ${money(order.grand_total)}`, rightX, y, { width: 215, align: 'right' });
-  y += 12;
-  if (invoice.type === 'balance') {
-    const adv = allInvoices.find(i => i.type === 'advance');
-    if (adv) doc.fontSize(8).fillColor('#888').text(`Advance already invoiced: ${adv.number}`, rightX, y, { width: 215, align: 'right' });
+/**
+ * Proforma invoice for an advance. Deliberately not a tax invoice: it declares no GST, quotes no
+ * tax heads as payable, and says so in as many words — a customer who treats it as one would be
+ * claiming input credit on goods they have not received yet (Sec 16(2)(b)).
+ */
+function renderProforma(doc, order, proforma) {
+  let y = documentHeader(doc, order, {
+    title: 'PROFORMA INVOICE', numberLabel: 'Proforma No', number: proforma.number, date: proforma.date,
+  });
+  y = itemsTable(doc, order, y);
+
+  const t = totalsBlock(doc, y);
+  t.row('Order Value (incl. GST)', money(order.grand_total));
+  t.row('Advance Received', money(proforma.amount), true);
+  t.row('Balance Due', money((Number(order.grand_total) || 0) - (Number(proforma.amount) || 0)));
+
+  doc.font('Helvetica').fontSize(8).fillColor('#666').text(
+    'This is a proforma invoice acknowledging an advance payment. It is NOT a tax invoice and no GST is '
+    + 'charged on it, so no input tax credit may be claimed against it. A tax invoice for the full order '
+    + 'value will be issued once the balance is settled and the goods are supplied.',
+    40, Math.max(t.y + 14, 700), { width: 515 });
+
+  doc.fontSize(8).fillColor('#999')
+    .text('This is a computer-generated document and does not require a physical signature.', 40, 780, { width: 515, align: 'center' });
+}
+
+/**
+ * The tax invoice: one per order, for the full order value, issued when the balance is settled.
+ * `invoice` carries the full-value figures; `proforma` is the advance document it supersedes, if
+ * there was one, referenced so the customer can tie the two together.
+ */
+function renderInvoice(doc, order, invoice, proforma) {
+  const { interState } = taxSplit(order);
+  let y = documentHeader(doc, order, {
+    title: 'TAX INVOICE', numberLabel: 'Invoice No', number: invoice.number, date: invoice.date,
+  });
+  y = itemsTable(doc, order, y);
+
+  const t = totalsBlock(doc, y);
+  t.row('Taxable Value', money(invoice.taxable_value));
+  if (interState) {
+    t.row(`IGST @ ${invoice.gst_pct}%`, money(invoice.gst_amount));
+  } else {
+    t.row(`CGST @ ${(invoice.gst_pct / 2).toFixed(1)}%`, money(invoice.gst_amount / 2));
+    t.row(`SGST @ ${(invoice.gst_pct / 2).toFixed(1)}%`, money(invoice.gst_amount / 2));
   }
+  t.row('Invoice Total', money(invoice.amount), true);
+  if (proforma) t.note(`Advance received against proforma ${proforma.number}`);
+  t.note('Amount Paid in Full — no balance outstanding');
+
+  // A paid-in-full stamp, angled across the totals so it reads as a status rather than a line item.
+  doc.save();
+  doc.rotate(-14, { origin: [130, t.y + 20] })
+    .fontSize(30).font('Helvetica-Bold').fillColor('#16a34a').opacity(0.16)
+    .text('PAID', 60, t.y, { width: 200, align: 'center' });
+  doc.restore();
+  doc.opacity(1).font('Helvetica');
 
   doc.fontSize(8).fillColor('#999')
     .text('This is a computer-generated invoice and does not require a physical signature.', 40, 780, { width: 515, align: 'center' });
@@ -356,4 +432,7 @@ function renderShippingLabel(doc, order) {
   doc.rect(M, M, PW - M * 2, PH - M * 2).strokeColor('#000').lineWidth(1.2).stroke();
 }
 
-module.exports = { renderInvoice, renderQuote, renderShippingLabel, LABEL_SIZE, nextInvoiceNumber, SELLER };
+module.exports = {
+  renderInvoice, renderProforma, renderQuote, renderShippingLabel, LABEL_SIZE,
+  nextInvoiceNumber, nextProformaNumber, taxSplit, SELLER,
+};

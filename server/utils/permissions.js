@@ -8,7 +8,7 @@ const COLUMNS = new Set([
   'can_access_normless', 'can_access_crewfit', 'can_view_crewfit_followups', 'can_view_crewfit_orders',
   'can_view_crewfit_catalog', 'can_view_crewfit_analytics', 'can_view_crewfit_calculator',
   'can_view_crewfit_payments', 'can_view_crewfit_customers', 'can_view_revenue', 'can_view_invoices',
-  'can_view_crewfit_vendors', 'can_view_marketing', 'can_dispatch_marketing',
+  'can_view_crewfit_vendors', 'can_view_crewfit_invoices', 'can_view_marketing', 'can_dispatch_marketing',
 ]);
 
 // Whether this request holds a given permission.

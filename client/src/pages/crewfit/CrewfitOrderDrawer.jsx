@@ -364,27 +364,33 @@ function PaymentCard({ title, amount, payment, busy, disabled, disabledLabel, on
   );
 }
 
-function InvoiceCard({ title, amount, invoice, busy, locked, lockedLabel, onGenerate }) {
+function InvoiceCard({ title, subtitle, icon = '🧾', amount, invoice, busy, locked, lockedLabel, onGenerate, onShare }) {
   const status = invoice ? 'issued' : locked ? 'locked' : 'ready'
   return (
     <div className={`invoice-card invoice-card-${status}`}>
       <div className="invoice-card-head">
-        <span className="invoice-card-icon">🧾</span>
+        <span className="invoice-card-icon">{icon}</span>
         <div className="invoice-card-heading">
           <div className="invoice-card-title">{title}</div>
           <div className="invoice-card-amount">{fmt(amount)}</div>
+          {subtitle && <div className="invoice-card-sub">{subtitle}</div>}
         </div>
         <span className={`invoice-status-pill invoice-status-${status}`}>{status === 'issued' ? 'Issued' : status === 'locked' ? 'Locked' : 'Ready'}</span>
       </div>
       {invoice && (
         <div className="invoice-card-meta">
           <span>{invoice.number}</span>
-          <span>{invoice.date}</span>
+          <span>{invoice.issue_date || invoice.date}</span>
         </div>
       )}
       <button type="button" className="btn btn-secondary invoice-card-btn" disabled={busy || (!invoice && locked)} onClick={onGenerate}>
-        {busy ? 'Generating…' : invoice ? '⬇ Download PDF' : locked ? lockedLabel : 'Generate Invoice'}
+        {busy ? 'Generating…' : invoice ? '⬇ Download PDF' : locked ? lockedLabel : 'Generate'}
       </button>
+      {onShare && !locked && (
+        <button type="button" className="btn btn-secondary invoice-card-btn" disabled={busy} onClick={onShare}>
+          💬 {invoice ? 'Send' : 'Generate & send'} on WhatsApp
+        </button>
+      )}
     </div>
   )
 }
@@ -492,6 +498,7 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
   const [bulkDownloading, setBulkDownloading] = useState(null) // key string while a "download all" is in flight
   const [labelBusy, setLabelBusy] = useState(false)
   const [payments, setPayments] = useState([])
+  const [documents, setDocuments] = useState([]) // issued proformas + tax invoices
   const [payBusy, setPayBusy] = useState(null) // 'advance' | 'balance' while a link call is in flight
   const [deleting, setDeleting] = useState(false)
   const [custHistory, setCustHistory] = useState(null) // prior orders on this phone, or null while unknown
@@ -552,8 +559,8 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
     if (target === 'new') setForm(blankOrder())
     else if (target) openEdit(target)
     else setForm(null)
-    setPayments([])
-    if (target && target !== 'new' && target.id) loadPayments(target.id)
+    setPayments([]); setDocuments([])
+    if (target && target !== 'new' && target.id) { loadPayments(target.id); loadDocuments(target.id) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [target])
 
@@ -561,6 +568,12 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
     const res = await apiFetch(`/api/crewfit/payments/for-order/${orderId}`)
     if (res && !res.error) setPayments(res.payments || [])
     return res
+  }
+  // Tax documents live in their own table now, not on the order — an issued number outlives the
+  // order it was raised for.
+  const loadDocuments = async (orderId) => {
+    const res = await apiFetch(`/api/crewfit/orders/${orderId}/documents`)
+    if (res && !res.error) setDocuments(res.documents || [])
   }
 
   // While an unpaid link is on screen, re-check it with Razorpay every 10s so the card flips to
@@ -993,21 +1006,43 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
 
   const preview = form ? buildDescription({ ...form, ...recompute(form), _advanceLink: advanceLink() }) : ''
   const balanceMessage = form ? buildBalanceMessage({ ...form, ...recompute(form) }, paymentFor('balance')) : ''
-  const advInvoice = form?.invoices?.find(i => i.type === 'advance')
-  const balInvoice = form?.invoices?.find(i => i.type === 'balance')
+  const proformaDoc = documents.find(d => d.doc_type === 'proforma' && d.status !== 'cancelled')
+  const taxInvoice = documents.find(d => d.doc_type === 'tax_invoice' && d.status !== 'cancelled')
 
+  /** Issues the document if it doesn't exist yet, then downloads it. Returns the saved file name. */
   const downloadInvoice = async (type) => {
     setInvoiceBusy(type)
     const res = await apiFetch(`/api/crewfit/orders/${form.id}/invoice/${type}`, { responseType: 'blob' })
-    if (!res || res.error) { setInvoiceBusy(null); toast.error(res?.error || 'Failed to generate invoice'); return }
+    if (!res || res.error) { setInvoiceBusy(null); toast.error(res?.error || 'Failed to generate invoice'); return null }
     const url = URL.createObjectURL(res.blob)
     const a = document.createElement('a')
-    a.href = url; a.download = res.filename || `invoice-${type}-${form.sl_no}.pdf`
+    const name = res.filename || `${type}-CF-${form.sl_no}.pdf`
+    a.href = url; a.download = name
     document.body.appendChild(a); a.click(); a.remove()
     URL.revokeObjectURL(url)
-    const fresh = await apiFetch(`/api/crewfit/orders/${form.id}`)
-    if (fresh && !fresh.error) { setF({ invoices: fresh.invoices }); setServerSync(n => n + 1) }
+    await loadDocuments(form.id)
     setInvoiceBusy(null)
+    return name
+  }
+
+  // WhatsApp can't carry an attachment through a wa.me link, and the PDF sits behind auth so a URL
+  // would 401 for the customer. Download it, then open the chat with the covering message ready —
+  // the SO attaches the file they just saved.
+  const shareTaxInvoice = async () => {
+    const name = await downloadInvoice('final')
+    if (!name) return
+    const num = toWaNumber(waSource(form))
+    const msg = [
+      `Hi ${form.billing_name || form.customer_name || ''},`.trim(),
+      '',
+      `Please find attached the GST tax invoice for your Crewfit order CF-${form.sl_no}.`,
+      `Invoice No: ${taxInvoice?.number || '(see attachment)'}`,
+      `Amount: ${fmt(form.grand_total)} (paid in full)`,
+      '',
+      'Thank you for your order!',
+    ].join('\n')
+    window.open(num ? `https://wa.me/${num}?text=${encodeURIComponent(msg)}` : `https://wa.me/?text=${encodeURIComponent(msg)}`, '_blank')
+    toast.info(`${name} downloaded — attach it in the WhatsApp chat that just opened`, { title: 'Invoice ready to send' })
   }
 
   if (!form) return null
@@ -1185,18 +1220,25 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
                 />
               </div>
 
-              <div className="form-section">GST Invoices</div>
+              <div className="form-section">Tax Documents</div>
               <div className="invoice-grid">
                 <InvoiceCard
-                  title="Invoice 1 — Advance" amount={form.advance} invoice={advInvoice}
-                  busy={invoiceBusy === 'advance'} locked={form.payment_status === 'Pending'}
-                  lockedLabel="Awaiting advance payment" onGenerate={() => downloadInvoice('advance')}
+                  title="Proforma — Advance" subtitle="No GST charged" icon="📄"
+                  amount={form.advance} invoice={proformaDoc}
+                  busy={invoiceBusy === 'proforma'} locked={form.payment_status === 'Pending'}
+                  lockedLabel="Awaiting advance payment" onGenerate={() => downloadInvoice('proforma')}
                 />
                 <InvoiceCard
-                  title="Invoice 2 — Balance" amount={form.balance} invoice={balInvoice}
-                  busy={invoiceBusy === 'balance'} locked={form.payment_status !== 'Fully Paid'}
-                  lockedLabel="Awaiting full payment" onGenerate={() => downloadInvoice('balance')}
+                  title="Tax Invoice — Full Amount" subtitle="Issued on full payment" icon="🧾"
+                  amount={form.grand_total} invoice={taxInvoice}
+                  busy={invoiceBusy === 'final'} locked={form.payment_status !== 'Fully Paid'}
+                  lockedLabel="Awaiting full payment" onGenerate={() => downloadInvoice('final')}
+                  onShare={taxInvoice || form.payment_status === 'Fully Paid' ? shareTaxInvoice : null}
                 />
+              </div>
+              <div className="invoice-note">
+                An advance is acknowledged with a proforma, which carries no GST. The tax invoice is
+                issued once, for the full order value, when the balance is settled.
               </div>
             </>
           )}
