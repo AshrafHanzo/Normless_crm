@@ -361,7 +361,12 @@ router.get('/reminders', async (req, res) => {
     const trackingPending = orders.filter(o => o.status === 'Dispatched' && !o.tracking_sent_at
       && !NO_TRACKING_MOTS.includes(o.mot) && o.dispatch_date && o.dispatch_date >= trackingCutoff);
     const dueSoon = active.filter(o => o.deadline_at && o.deadline_at >= today && o.deadline_at <= soon);
-    const layoutPending = active.filter(o => o.layout_status === 'Pending');
+    // Design work starts once the advance lands, not when the order is keyed in — the designer
+    // works off this list, so an unpaid order appearing here is an invitation to do free work.
+    const layoutPending = active.filter(o => o.layout_status === 'Pending' && o.payment_status !== 'Pending');
+    // ...which would leave an unpaid order with nothing chasing it at all, so the thing it is
+    // actually waiting on gets its own queue.
+    const advancePending = active.filter(o => o.payment_status === 'Pending' && o.status !== 'Cancelled');
     const noDeadline = active.filter(o => !o.deadline_at);
 
     const groups = [
@@ -371,11 +376,12 @@ router.get('/reminders', async (req, res) => {
       { key: 'dispatchPending', label: 'Dispatch pending — courier it & add tracking ID', icon: '🚚', tone: 'info', orders: dispatchPending },
       { key: 'trackingPending', label: 'Dispatched — send tracking to customer', icon: '📨', tone: 'primary', orders: trackingPending },
       { key: 'dueSoon', label: 'Due within 2 days', icon: '⏰', tone: 'warning', orders: dueSoon },
-      { key: 'layoutPending', label: 'Layout pending', icon: '🎨', tone: 'primary', orders: layoutPending },
+      { key: 'advancePending', label: 'Awaiting advance — chase payment', icon: '💰', tone: 'warning', orders: advancePending },
+      { key: 'layoutPending', label: 'Advance paid — layout pending', icon: '🎨', tone: 'primary', orders: layoutPending },
       { key: 'noDeadline', label: 'No deadline set', icon: '📅', tone: 'muted', orders: noDeadline },
     ].map(g => ({ ...g, count: g.orders.length }));
 
-    const badge = new Set([...overdue, ...photosPending, ...readyToCollect, ...dispatchPending, ...trackingPending, ...dueSoon, ...layoutPending].map(o => o.id)).size;
+    const badge = new Set([...overdue, ...photosPending, ...readyToCollect, ...dispatchPending, ...trackingPending, ...dueSoon, ...advancePending, ...layoutPending].map(o => o.id)).size;
     res.json({ groups, badge, activeCount: active.length });
   } catch (err) {
     console.error('crewfit reminders error:', err); res.status(500).json({ error: 'Failed to load reminders' });
