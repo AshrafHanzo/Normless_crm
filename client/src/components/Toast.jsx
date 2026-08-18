@@ -69,6 +69,17 @@ function ConfirmDialog({ req, onResolve }) {
         </div>
         <h3 className="confirm-title">{req.title}</h3>
         {req.message && <p className="confirm-message">{req.message}</p>}
+        {/* Which record this is about. A confirmation that only states the change is easy to
+            answer for the wrong row — the details are what make "yes" an informed answer. */}
+        {!!req.details?.length && (
+          <dl className="confirm-details">
+            {req.details.filter(d => d && d.value !== undefined && d.value !== null && d.value !== '').map(d => (
+              <div className="confirm-detail" key={d.label}>
+                <dt>{d.label}</dt><dd>{d.value}</dd>
+              </div>
+            ))}
+          </dl>
+        )}
         {needsText && (
           <div className="input-group confirm-input">
             <label>Type <b>{req.requireText}</b> to confirm</label>

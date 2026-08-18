@@ -833,11 +833,22 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
    * confirmed rather than taken on a single click. `extra` names the knock-on effect, because
    * "are you sure" is worth little if it doesn't say what else is about to change.
    */
-  const confirmChange = async (label, from, to, extra) => {
+  const confirmChange = async (label, from, to, extra, extraDetails = []) => {
     if (!from || from === to) return true
+    const products = [...new Set((form.line_items || []).map(it => it.product).filter(Boolean))].join(', ')
     return toast.confirm({
       title: `Change ${label} to "${to}"?`,
       message: [`This order is currently "${from}".`, extra].filter(Boolean).join(' '),
+      // Named, so a change can't be confirmed against the wrong order — several look alike in a
+      // list, and payment and layout are exactly the ones worth being sure about.
+      details: [
+        { label: 'Order', value: form.sl_no ? `CF-${form.sl_no}` : 'New order' },
+        { label: 'Customer', value: form.billing_name || form.customer_name },
+        { label: 'Phone', value: form.billing_mobile || form.contact_number },
+        { label: 'Product', value: products || form.product },
+        { label: 'Order value', value: form.grand_total ? fmt(form.grand_total) : null },
+        ...extraDetails,
+      ],
       confirmLabel: `Change ${label}`,
     })
   }
@@ -850,7 +861,10 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
     else if (form.status === 'Ready for Dispatch' && v === 'Fully Paid') patch.status = 'Dispatch Pending'
     const moved = patch.status && patch.status !== form.status
     if (!await confirmChange('payment', form.payment_status, v,
-      moved ? `The order status will also move to "${patch.status}".` : null)) return
+      moved ? `The order status will also move to "${patch.status}".` : null, [
+        { label: 'Advance', value: form.advance ? fmt(form.advance) : null },
+        { label: 'Balance', value: form.balance ? fmt(form.balance) : null },
+      ])) return
     setF(patch)
   }
   // The other half of the same rule: "Ready for Dispatch" means we're waiting on the balance, so
@@ -859,12 +873,18 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
   const onStatusChange = async (v) => {
     const next = v === 'Ready for Dispatch' && form.payment_status === 'Fully Paid' ? 'Dispatch Pending' : v
     if (!await confirmChange('status', form.status, v,
-      next !== v ? `This order is already fully paid, so it will move straight to "${next}".` : null)) return
+      next !== v ? `This order is already fully paid, so it will move straight to "${next}".` : null, [
+        { label: 'Payment', value: form.payment_status },
+        { label: 'Deadline', value: form.deadline_at || form.deadline_text },
+      ])) return
     setF({ status: next })
   }
   const onLayoutChange = async (v) => {
     if (!await confirmChange('layout', form.layout_status, v,
-      v === 'Done' ? 'It will drop off the designer\'s layout queue.' : null)) return
+      v === 'Done' ? 'It will drop off the designer\'s layout queue.' : null, [
+        { label: 'Deadline', value: form.deadline_at || form.deadline_text },
+        { label: 'Mock folder', value: form.mock_folder },
+      ])) return
     setF({ layout_status: v })
   }
   // Porter/Self Pickup don't issue a tracking ID — this is the alternate path to Dispatched.

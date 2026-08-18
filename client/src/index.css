@@ -1461,6 +1461,15 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .confirm-icon-danger { color: var(--danger); background: var(--danger-bg); }
 .confirm-title { font-size: 17px; margin-bottom: 8px; }
 .confirm-message { font-size: 13.5px; color: var(--text-secondary); line-height: 1.55; white-space: pre-line; }
+/* Which record a confirmation is about, so "yes" is an informed answer rather than a reflex. */
+.confirm-details {
+  margin: 14px 0 0; padding: 10px 12px; border-radius: 10px;
+  background: var(--surface); border: 1px solid var(--border); text-align: left;
+}
+.confirm-detail { display: flex; align-items: baseline; gap: 10px; padding: 3px 0; }
+.confirm-detail + .confirm-detail { border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent); }
+.confirm-detail dt { flex: 0 0 auto; min-width: 88px; font-size: 11.5px; color: var(--text-muted); }
+.confirm-detail dd { margin: 0; flex: 1; font-size: 13px; font-weight: 600; text-align: right; word-break: break-word; }
 .confirm-input { margin: 18px 0 4px; text-align: left; }
 .confirm-input label { font-weight: 500; }
 .confirm-actions { display: flex; gap: 10px; margin-top: 20px; }
