@@ -370,6 +370,9 @@ async function ensureCrewfitSchema() {
                 -- Crewfit purchase orders raised to manufacturing vendors.
                 ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_crewfit_vendors BOOLEAN DEFAULT false;
                 ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_crewfit_invoices BOOLEAN DEFAULT false;
+                -- Write access to bulk orders, separate from seeing them: a read-only operator
+                -- can open every order but change none.
+                ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_edit_crewfit_orders BOOLEAN DEFAULT false;
                 -- Normless influencer marketing: the roster and the seeding orders raised against it.
                 ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_marketing BOOLEAN DEFAULT false;
                 -- Separate from the page itself: only production fills in AWB/tracking and marks
@@ -380,7 +383,8 @@ async function ensureCrewfitSchema() {
                 can_view_crewfit_followups=true, can_view_crewfit_orders=true, can_view_crewfit_catalog=true,
                 can_view_crewfit_analytics=true, can_view_crewfit_calculator=true, can_view_crewfit_payments=true,
                 can_view_crewfit_customers=true, can_view_revenue=true, can_view_invoices=true,
-                can_view_crewfit_vendors=true, can_view_crewfit_invoices=true, can_view_marketing=true, can_dispatch_marketing=true
+                can_view_crewfit_vendors=true, can_view_crewfit_invoices=true, can_edit_crewfit_orders=true,
+                can_view_marketing=true, can_dispatch_marketing=true
                 WHERE role IN ('owner','admin')`);
         } catch (e) { console.error('admin perms ensure:', e.message); }
 

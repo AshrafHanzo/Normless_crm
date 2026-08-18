@@ -8,7 +8,7 @@ const db = require('../db/connection');
 const { renderInvoice, renderProforma, renderShippingLabel, LABEL_SIZE, nextInvoiceNumber, nextProformaNumber } = require('../services/invoice');
 const { historyForPhone } = require('./crewfit-customers');
 const { validatePhoneFields } = require('../utils/phone');
-const { canViewRevenue } = require('../utils/permissions');
+const { canViewRevenue, hasPermission } = require('../utils/permissions');
 const { tableParams, sortAndPage, pagination } = require('../utils/table');
 
 const router = express.Router();
@@ -83,6 +83,20 @@ const ownerOnly = (req, res, next) => {
     return res.status(403).json({ error: 'Only the account owner can do this' });
   }
   next();
+};
+
+/**
+ * Write access to bulk orders, which is separate from being able to see them: a read-only
+ * operator opens every order and changes none. Enforced here rather than only in the UI —
+ * hiding a button stops an accident, not a request.
+ */
+const canEditOrders = async (req, res, next) => {
+  try {
+    if (!await hasPermission(req, 'can_edit_crewfit_orders')) {
+      return res.status(403).json({ error: 'You have read-only access to bulk orders' });
+    }
+    next();
+  } catch (err) { next(err); }
 };
 
 // Calendar dates must be formatted from local parts, never via toISOString(). These are DATE
@@ -452,7 +466,7 @@ const EDITABLE = ['status', 'payment_status', 'layout_status', 'customer_type', 
   'customer_name', 'contact_number', 'mock_folder', 'description', 'product', ...EXTRA];
 
 // PUT /api/crewfit/orders/:id — inline field / dropdown updates
-router.put('/orders/:id', async (req, res) => {
+router.put('/orders/:id', canEditOrders, async (req, res) => {
   try {
     const current = (await db.query('SELECT status, payment_status, tracking_link, dispatch_date, mot, deadline_at, contact_number, whatsapp_number, billing_mobile FROM crewfit_orders WHERE id = $1', [req.params.id])).rows[0];
     if (!current) return res.status(404).json({ error: 'Not found' });
@@ -518,7 +532,7 @@ router.put('/orders/:id', async (req, res) => {
 });
 
 // POST /api/crewfit/orders — create
-router.post('/orders', async (req, res) => {
+router.post('/orders', canEditOrders, async (req, res) => {
   try {
     const body = { ...req.body };
     const phoneError = validatePhoneFields(body);
@@ -639,7 +653,7 @@ const docRow = async (orderId, type) => (await db.query(
  * 'advance' and 'balance' are accepted as aliases so older links keep working.
  */
 const DOC_ALIAS = { advance: 'proforma', balance: 'final', proforma: 'proforma', final: 'final' };
-router.get('/orders/:id/invoice/:type', async (req, res) => {
+router.get('/orders/:id/invoice/:type', canEditOrders, async (req, res) => {
   try {
     const type = DOC_ALIAS[req.params.type];
     if (!type) return res.status(400).json({ error: 'Invalid document type' });
@@ -770,7 +784,7 @@ function ensureLineItems(order) {
 
 // POST /api/crewfit/orders/:id/images — attach up to 5 images per product line item.
 // kind: 'mock' (designer mockups, pending client confirmation) | 'prod' (post-production photos).
-router.post('/orders/:id/images', uploadImages, async (req, res) => {
+router.post('/orders/:id/images', canEditOrders, uploadImages, async (req, res) => {
   try {
     const { kind, itemIndex } = req.body;
     const idx = parseInt(itemIndex, 10);
@@ -806,7 +820,7 @@ router.post('/orders/:id/images', uploadImages, async (req, res) => {
 });
 
 // DELETE /api/crewfit/orders/:id/images — body: { kind, itemIndex, url }
-router.delete('/orders/:id/images', async (req, res) => {
+router.delete('/orders/:id/images', canEditOrders, async (req, res) => {
   try {
     const { kind, itemIndex, url } = req.body;
     const idx = parseInt(itemIndex, 10);

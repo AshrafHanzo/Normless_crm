@@ -96,6 +96,7 @@ router.post('/login', async (req, res) => {
                 can_view_invoices: user.can_view_invoices,
                 can_view_crewfit_vendors: user.can_view_crewfit_vendors,
                 can_view_crewfit_invoices: user.can_view_crewfit_invoices,
+                can_edit_crewfit_orders: user.can_edit_crewfit_orders,
                 can_view_marketing: user.can_view_marketing,
                 can_dispatch_marketing: user.can_dispatch_marketing
             }
@@ -149,6 +150,7 @@ router.get('/verify', async (req, res) => {
                 can_view_invoices: user.can_view_invoices,
                 can_view_crewfit_vendors: user.can_view_crewfit_vendors,
                 can_view_crewfit_invoices: user.can_view_crewfit_invoices,
+                can_edit_crewfit_orders: user.can_edit_crewfit_orders,
                 can_view_marketing: user.can_view_marketing,
                 can_dispatch_marketing: user.can_dispatch_marketing
             }

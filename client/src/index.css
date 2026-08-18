@@ -1605,3 +1605,11 @@ html, body { max-width: 100%; overflow-x: hidden; }
   background: color-mix(in srgb, var(--warning) 14%, transparent);
   color: var(--warning); border: 1px solid color-mix(in srgb, var(--warning) 35%, transparent);
 }
+
+/* A permission that depends on the page above it — indented so the nesting is visible. */
+.page-check-sub { padding-left: 18px; }
+.page-check-sub > span { font-size: 12.5px; }
+/* The drawer form is wrapped in a fieldset purely to disable it in read-only mode — it must not
+   introduce any of the browser's default fieldset chrome or box model. */
+.drawer-fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.readonly-note { font-size: 12.5px; color: var(--text-muted); align-self: center; }

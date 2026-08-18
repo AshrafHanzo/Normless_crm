@@ -488,6 +488,9 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
   // Deleting an order is unrecoverable and takes its photos with it — owner only, matching
   // the server-side guard on DELETE /orders/:id.
   const isOwner = user?.role === 'owner'
+  // Read-only operators open every order and change none. The server enforces this too — this
+  // just stops them filling in a form that was never going to save.
+  const canEdit = isOwner || user?.role === 'admin' || !!user?.can_edit_crewfit_orders
   const [meta, setMeta] = useState(null)
   const [products, setProducts] = useState([])
   const [form, setForm] = useState(null)
@@ -824,19 +827,45 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
     }
     setF(patch)
   }
+  /**
+   * These three drive the whole pipeline — payment moves the status, the status decides which
+   * follow-up queue the order sits in and when the designer starts work — so each one is
+   * confirmed rather than taken on a single click. `extra` names the knock-on effect, because
+   * "are you sure" is worth little if it doesn't say what else is about to change.
+   */
+  const confirmChange = async (label, from, to, extra) => {
+    if (!from || from === to) return true
+    return toast.confirm({
+      title: `Change ${label} to "${to}"?`,
+      message: [`This order is currently "${from}".`, extra].filter(Boolean).join(' '),
+      confirmLabel: `Change ${label}`,
+    })
+  }
+
   // Payment-driven status moves, mirrored from the server so the drawer updates as you pick:
   // recording the advance starts production, collecting the balance clears the order to ship.
-  const onPaymentChange = (v) => {
+  const onPaymentChange = async (v) => {
     const patch = { payment_status: v }
     if (form.status === 'Awaiting Payment' && v && v !== 'Pending') patch.status = 'Pending'
     else if (form.status === 'Ready for Dispatch' && v === 'Fully Paid') patch.status = 'Dispatch Pending'
+    const moved = patch.status && patch.status !== form.status
+    if (!await confirmChange('payment', form.payment_status, v,
+      moved ? `The order status will also move to "${patch.status}".` : null)) return
     setF(patch)
   }
   // The other half of the same rule: "Ready for Dispatch" means we're waiting on the balance, so
   // picking it on an already fully paid order goes straight to the dispatch queue. Without this
   // the server would rewrite the status on save and the drawer would show a stale one until reload.
-  const onStatusChange = (v) => {
-    setF({ status: v === 'Ready for Dispatch' && form.payment_status === 'Fully Paid' ? 'Dispatch Pending' : v })
+  const onStatusChange = async (v) => {
+    const next = v === 'Ready for Dispatch' && form.payment_status === 'Fully Paid' ? 'Dispatch Pending' : v
+    if (!await confirmChange('status', form.status, v,
+      next !== v ? `This order is already fully paid, so it will move straight to "${next}".` : null)) return
+    setF({ status: next })
+  }
+  const onLayoutChange = async (v) => {
+    if (!await confirmChange('layout', form.layout_status, v,
+      v === 'Done' ? 'It will drop off the designer\'s layout queue.' : null)) return
+    setF({ layout_status: v })
   }
   // Porter/Self Pickup don't issue a tracking ID — this is the alternate path to Dispatched.
   const markDispatchedNoTracking = () => {
@@ -1056,6 +1085,9 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
           <button className="btn-icon" onClick={guard.requestClose}>✕</button>
         </div>
         <form className="drawer-body" onSubmit={save}>
+          {/* A native fieldset disables every control inside it in one go, so a read-only user
+              can't type into a form that has no Save button to persist it. */}
+          <fieldset disabled={!canEdit} className="drawer-fieldset">
           <AccordionSections>
           <div className="form-section">Customer</div>
           <div className="form-row">
@@ -1267,7 +1299,7 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
               </select>
             </div>
             <div className="input-group"><label>Payment</label><select value={form.payment_status || ''} onChange={e => onPaymentChange(e.target.value)}>{(meta?.payments || []).map(v => <option key={v}>{v}</option>)}</select></div>
-            <div className="input-group"><label>Layout</label><select value={form.layout_status || ''} onChange={e => setF({ layout_status: e.target.value })}>{(meta?.layouts || []).map(v => <option key={v}>{v}</option>)}</select></div>
+            <div className="input-group"><label>Layout</label><select value={form.layout_status || ''} onChange={e => onLayoutChange(e.target.value)}>{(meta?.layouts || []).map(v => <option key={v}>{v}</option>)}</select></div>
             <div className="input-group"><label>Vendor</label><select value={form.vendor || ''} onChange={e => setF({ vendor: e.target.value })}><option value="">—</option>{(meta?.vendors || []).map(v => <option key={v}>{v}</option>)}</select></div>
           </div>
           <div className="form-row">
@@ -1371,11 +1403,14 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
           <div className="form-section">Internal notes</div>
           <div className="input-group"><AutoTextarea value={form.notes || ''} onChange={e => setF({ notes: e.target.value })} placeholder="Anything the team should know about this order — flagged on the orders list once saved." /></div>
           </AccordionSections>
+          </fieldset>
 
           <div style={{ display: 'flex', gap: 10, position: 'sticky', bottom: 0, background: 'var(--bg-secondary)', padding: '12px 0' }}>
-            <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? 'Saving…' : (form.id ? 'Save changes' : 'Create order')}</button>
-            <button type="button" className="btn btn-secondary" onClick={guard.requestClose}>Cancel</button>
-            {isOwner && form.id && (
+            {canEdit
+              ? <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? 'Saving…' : (form.id ? 'Save changes' : 'Create order')}</button>
+              : <span className="readonly-note">Read-only access — you can view this order but not change it.</span>}
+            <button type="button" className="btn btn-secondary" onClick={guard.requestClose}>Close</button>
+            {isOwner && canEdit && form.id && (
               <button type="button" className="btn btn-danger" style={{ marginLeft: 'auto' }} disabled={deleting} onClick={deleteOrder}>
                 {deleting ? 'Deleting…' : '🗑 Delete order'}
               </button>

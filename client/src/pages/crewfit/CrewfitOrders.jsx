@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { useApi } from '../../App'
+import { useApi, useAuth } from '../../App'
 import { useToast } from '../../components/Toast'
 import DateRangeFilter from '../../components/DateRangeFilter'
 import CrewfitOrderDrawer, { openShippingLabel } from './CrewfitOrderDrawer'
@@ -20,6 +20,8 @@ const emptyFilters = { search: '', status: '', payment_status: '', layout_status
 export default function CrewfitOrders() {
   const apiFetch = useApi()
   const toast = useToast()
+  const { user } = useAuth()
+  const canEdit = ['owner', 'admin'].includes(user?.role) || !!user?.can_edit_crewfit_orders
   const [params, setParams] = useSearchParams()
   const [meta, setMeta] = useState(null)
   const [orders, setOrders] = useState([])
@@ -62,18 +64,6 @@ export default function CrewfitOrders() {
   const clearDateFilter = () => { setStartDate(''); setEndDate(''); t.resetPage() }
 
   const printLabel = async (o) => { setLabelBusy(o.id); await openShippingLabel(apiFetch, o, toast); setLabelBusy(null) }
-  // Optimistic, then reconciled: the server applies pipeline rules of its own (a fully paid
-  // "Ready for Dispatch" is really "Dispatch Pending"), so its copy wins over the guess.
-  const quickUpdate = async (id, patch) => {
-    setOrders(os => os.map(o => o.id === id ? { ...o, ...patch } : o))
-    const res = await apiFetch(`/api/crewfit/orders/${id}`, { method: 'PUT', body: JSON.stringify(patch) })
-    if (res && !res.error) setOrders(os => os.map(o => o.id === id ? { ...o, ...res } : o))
-  }
-  const InlineSelect = ({ o, field, options, cls }) => {
-    const opts = options || []
-    return (<select className={`inline-select ${cls ? 'sb-' + cls(o[field]) : ''}`} value={o[field] || ''} onClick={e => e.stopPropagation()} onChange={e => quickUpdate(o.id, { [field]: e.target.value })}>
-      {(o[field] && !opts.includes(o[field])) && <option value={o[field]}>{o[field]}</option>}{opts.map(v => <option key={v} value={v}>{v}</option>)}</select>)
-  }
 
 
   return (
@@ -82,7 +72,7 @@ export default function CrewfitOrders() {
         <div><h1>Crewfit · Bulk Orders</h1><p style={{ color: 'var(--text-muted)' }}>{t.pagination.total || 0} orders · manage everything here</p></div>
         <div style={{ display: 'flex', gap: 10 }}>
           <DateRangeFilter startDate={startDate} endDate={endDate} onApply={applyDateFilter} onClear={clearDateFilter} />
-          <button className="btn btn-primary" onClick={() => setTarget('new')}>+ New Order</button>
+          {canEdit && <button className="btn btn-primary" onClick={() => setTarget('new')}>+ New Order</button>}
         </div>
       </div>
 
@@ -144,9 +134,12 @@ export default function CrewfitOrders() {
                     <td data-label="Qty" style={{ textAlign: 'center' }}>{o.qty || '—'}</td>
                     <td data-label="Total" style={{ textAlign: 'right', fontWeight: 700 }}>{o.total_cost ? fmt(o.total_cost) : '—'}</td>
                     <td data-label="Deadline" style={{ fontSize: 12.5 }}>{(o.deadline_at || '').slice(0, 10) || <span style={{ color: 'var(--text-muted)' }}>{o.deadline_text || '—'}</span>}</td>
-                    <td data-label="Status">{meta && <InlineSelect o={o} field="status" options={meta.statuses.filter(s => s !== 'Dispatched')} cls={statusClass} />}</td>
-                    <td data-label="Payment">{meta && <InlineSelect o={o} field="payment_status" options={meta.payments} cls={payClass} />}</td>
-                    <td data-label="Layout">{meta && <InlineSelect o={o} field="layout_status" options={meta.layouts} cls={(v) => v === 'Done' ? 'fulfilled' : 'refunded'} />}</td>
+                    {/* Read-only here on purpose: these used to be dropdowns, and a stray click on a
+                        crowded row silently rewrote an order's status. Changing them is done in the
+                        drawer, where it is deliberate and confirmed. */}
+                    <td data-label="Status"><span className={`status-badge ${statusClass(o.status)}`}>{o.status || '—'}</span></td>
+                    <td data-label="Payment"><span className={`status-badge ${payClass(o.payment_status)}`}>{o.payment_status || '—'}</span></td>
+                    <td data-label="Layout"><span className={`status-badge ${o.layout_status === 'Done' ? 'fulfilled' : 'refunded'}`}>{o.layout_status || '—'}</span></td>
                     <td data-label="Photos" onClick={e => e.stopPropagation()}>
                       <div className="photo-status-badges">
                         <span className={`status-badge ${photoClass(o.mock_photo_status)}`}>Mock: {o.mock_photo_status}</span>

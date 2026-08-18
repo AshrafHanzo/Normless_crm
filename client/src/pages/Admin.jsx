@@ -17,6 +17,7 @@ const GROUPS = [
     { key: 'crewfit_analytics', label: 'Dashboard', icon: 'dashboard' },
     { key: 'crewfit_followups', label: 'Follow-ups', icon: 'bell' },
     { key: 'crewfit_orders', label: 'Bulk Orders', icon: 'box' },
+    { key: 'crewfit_orders_edit', label: 'Bulk Orders — can edit', icon: 'edit', sub: 'crewfit_orders' },
     { key: 'crewfit_customers', label: 'Customers', icon: 'users' },
     { key: 'crewfit_catalog', label: 'Catalog', icon: 'shirt' },
     { key: 'crewfit_calculator', label: 'Quotes', icon: 'spark' },
@@ -26,24 +27,26 @@ const GROUPS = [
   ] },
 ]
 
-const blankForm = () => ({ username: '', password: '', role: 'operator', normless: true, dashboard: true, customers: true, orders: true, scanner: true, marketing: false, marketing_dispatch: false, invoices: false, crewfit: false, crewfit_analytics: false, crewfit_followups: false, crewfit_orders: false, crewfit_catalog: false, crewfit_calculator: false, crewfit_payments: false, crewfit_customers: false, crewfit_vendors: false, crewfit_invoices: false, revenue: false })
+const blankForm = () => ({ username: '', password: '', role: 'operator', normless: true, dashboard: true, customers: true, orders: true, scanner: true, marketing: false, marketing_dispatch: false, invoices: false, crewfit: false, crewfit_analytics: false, crewfit_followups: false, crewfit_orders: false, crewfit_catalog: false, crewfit_calculator: false, crewfit_payments: false, crewfit_customers: false, crewfit_vendors: false, crewfit_invoices: false, crewfit_orders_edit: false, revenue: false })
 const fromUser = (u) => ({
   id: u.id, username: u.username, password: '', role: u.role,
   normless: !!u.can_access_normless, dashboard: !!u.can_view_dashboard, customers: !!u.can_view_customers, orders: !!u.can_view_orders, scanner: !!u.can_scan_orders, invoices: !!u.can_view_invoices,
   marketing: !!u.can_view_marketing, marketing_dispatch: !!u.can_dispatch_marketing,
-  crewfit: !!u.can_access_crewfit, crewfit_analytics: !!u.can_view_crewfit_analytics, crewfit_followups: !!u.can_view_crewfit_followups, crewfit_orders: !!u.can_view_crewfit_orders, crewfit_catalog: !!u.can_view_crewfit_catalog, crewfit_calculator: !!u.can_view_crewfit_calculator, crewfit_payments: !!u.can_view_crewfit_payments, crewfit_customers: !!u.can_view_crewfit_customers, crewfit_vendors: !!u.can_view_crewfit_vendors, crewfit_invoices: !!u.can_view_crewfit_invoices, revenue: !!u.can_view_revenue,
+  crewfit: !!u.can_access_crewfit, crewfit_analytics: !!u.can_view_crewfit_analytics, crewfit_followups: !!u.can_view_crewfit_followups, crewfit_orders: !!u.can_view_crewfit_orders, crewfit_catalog: !!u.can_view_crewfit_catalog, crewfit_calculator: !!u.can_view_crewfit_calculator, crewfit_payments: !!u.can_view_crewfit_payments, crewfit_customers: !!u.can_view_crewfit_customers, crewfit_vendors: !!u.can_view_crewfit_vendors, crewfit_invoices: !!u.can_view_crewfit_invoices, crewfit_orders_edit: !!u.can_edit_crewfit_orders, revenue: !!u.can_view_revenue,
 })
 const buildPerms = (f) => {
   // Owner and admin both hold every page; the server short-circuits permission checks for them
   // either way, so these columns are really just kept consistent with the role.
-  if (f.role === 'admin' || f.role === 'owner') return { normless: true, crewfit: true, dashboard: true, customers: true, orders: true, scanner: true, marketing: true, marketing_dispatch: true, invoices: true, crewfit_analytics: true, crewfit_followups: true, crewfit_orders: true, crewfit_catalog: true, crewfit_calculator: true, crewfit_payments: true, crewfit_customers: true, crewfit_vendors: true, crewfit_invoices: true, revenue: true, sync: f.role === 'owner' }
+  if (f.role === 'admin' || f.role === 'owner') return { normless: true, crewfit: true, dashboard: true, customers: true, orders: true, scanner: true, marketing: true, marketing_dispatch: true, invoices: true, crewfit_analytics: true, crewfit_followups: true, crewfit_orders: true, crewfit_catalog: true, crewfit_calculator: true, crewfit_payments: true, crewfit_customers: true, crewfit_vendors: true, crewfit_invoices: true, crewfit_orders_edit: true, revenue: true, sync: f.role === 'owner' }
   return {
     normless: !!f.normless, crewfit: !!f.crewfit, sync: false,
     dashboard: !!(f.normless && f.dashboard), customers: !!(f.normless && f.customers), orders: !!(f.normless && f.orders), scanner: !!(f.normless && f.scanner), invoices: !!(f.normless && f.invoices),
     marketing: !!(f.normless && f.marketing),
     // Dispatch is a sub-permission of the page: it can't be held without it.
     marketing_dispatch: !!(f.normless && f.marketing && f.marketing_dispatch),
-    crewfit_analytics: !!(f.crewfit && f.crewfit_analytics), crewfit_followups: !!(f.crewfit && f.crewfit_followups), crewfit_orders: !!(f.crewfit && f.crewfit_orders), crewfit_catalog: !!(f.crewfit && f.crewfit_catalog), crewfit_calculator: !!(f.crewfit && f.crewfit_calculator), crewfit_payments: !!(f.crewfit && f.crewfit_payments), crewfit_customers: !!(f.crewfit && f.crewfit_customers), crewfit_vendors: !!(f.crewfit && f.crewfit_vendors), crewfit_invoices: !!(f.crewfit && f.crewfit_invoices), revenue: !!f.revenue,
+    crewfit_analytics: !!(f.crewfit && f.crewfit_analytics), crewfit_followups: !!(f.crewfit && f.crewfit_followups), crewfit_orders: !!(f.crewfit && f.crewfit_orders), crewfit_catalog: !!(f.crewfit && f.crewfit_catalog), crewfit_calculator: !!(f.crewfit && f.crewfit_calculator), crewfit_payments: !!(f.crewfit && f.crewfit_payments), crewfit_customers: !!(f.crewfit && f.crewfit_customers), crewfit_vendors: !!(f.crewfit && f.crewfit_vendors), crewfit_invoices: !!(f.crewfit && f.crewfit_invoices),
+    // Editing is a sub-permission of seeing the page: it can't be held without it.
+    crewfit_orders_edit: !!(f.crewfit && f.crewfit_orders && f.crewfit_orders_edit), revenue: !!f.revenue,
   }
 }
 
@@ -176,12 +179,17 @@ export default function AdminManagement() {
                     <button className={`toggle ${form[g.brand] ? 'on' : ''}`} onClick={() => setF({ [g.brand]: !form[g.brand] })}><span /></button>
                   </div>
                   <div className="access-pages">
-                    {g.pages.map(p => (
-                      <label key={p.key} className={`page-check ${!form[g.brand] ? 'disabled' : ''}`}>
-                        <input type="checkbox" disabled={!form[g.brand]} checked={!!form[p.key]} onChange={e => setF({ [p.key]: e.target.checked })} />
-                        <Icon name={p.icon} size={15} /><span>{p.label}</span>
-                      </label>
-                    ))}
+                    {g.pages.map(p => {
+                      // A sub-permission can't be held without the page it belongs to, so it greys
+                      // out with its parent and sits indented under it.
+                      const blocked = !form[g.brand] || (p.sub && !form[p.sub])
+                      return (
+                        <label key={p.key} className={`page-check ${blocked ? 'disabled' : ''} ${p.sub ? 'page-check-sub' : ''}`}>
+                          <input type="checkbox" disabled={blocked} checked={!!form[p.key] && !blocked} onChange={e => setF({ [p.key]: e.target.checked })} />
+                          <Icon name={p.icon} size={15} /><span>{p.label}</span>
+                        </label>
+                      )
+                    })}
                   </div>
                 </div>
               ))}
