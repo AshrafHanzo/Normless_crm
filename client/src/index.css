@@ -1622,3 +1622,25 @@ html, body { max-width: 100%; overflow-x: hidden; }
    introduce any of the browser's default fieldset chrome or box model. */
 .drawer-fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 .readonly-note { font-size: 12.5px; color: var(--text-muted); align-self: center; }
+
+/* ── Inventory grid ─────────────────────────────────────────────────────────── */
+/* One cell per colour × size. Colour carries the state so a whole row of stock can be read
+   without stopping to compare numbers. */
+.inventory-grid td, .inventory-grid th { padding: 8px 10px; }
+.inv-cell {
+  min-width: 52px; padding: 7px 10px; border-radius: 8px; font-size: 13.5px; font-weight: 700;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text-primary); cursor: pointer;
+}
+.inv-cell:hover { border-color: var(--border-hover); }
+.inv-ok { background: var(--success-bg); color: var(--success); border-color: transparent; }
+.inv-low { background: var(--warning-bg); color: var(--warning); border-color: transparent; }
+.inv-out { background: var(--danger-bg); color: var(--danger); border-color: transparent; }
+.inv-negative { background: var(--danger); color: #fff; border-color: transparent; }
+.inv-empty { color: var(--text-muted); }
+.inv-modes { display: flex; gap: 8px; justify-content: center; margin-top: 14px; }
+.inv-ledger { max-height: 320px; overflow-y: auto; margin-top: 12px; text-align: left; }
+.review-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 8px 0; font-size: 13px; border-top: 1px solid var(--border);
+}
+.review-row:first-child { border-top: 0; }

@@ -41,7 +41,7 @@ router.get('/users', async (req, res) => {
       SELECT id, username, role, is_active, last_login, login_count, created_at,
              can_view_dashboard, can_view_customers, can_view_orders, can_scan_orders, can_sync_data,
              can_access_normless, can_access_crewfit,
-             can_view_crewfit_followups, can_view_crewfit_orders, can_view_crewfit_catalog, can_view_crewfit_analytics, can_view_crewfit_calculator, can_view_crewfit_payments, can_view_crewfit_customers, can_view_revenue, can_view_invoices, can_view_crewfit_vendors, can_view_crewfit_invoices, can_edit_crewfit_orders, can_view_marketing, can_dispatch_marketing
+             can_view_crewfit_followups, can_view_crewfit_orders, can_view_crewfit_catalog, can_view_crewfit_analytics, can_view_crewfit_calculator, can_view_crewfit_payments, can_view_crewfit_customers, can_view_revenue, can_view_invoices, can_view_crewfit_vendors, can_view_crewfit_invoices, can_edit_crewfit_orders, can_view_marketing, can_dispatch_marketing, can_view_inventory, can_edit_inventory
       FROM admin_users
       ORDER BY created_at DESC
     `);
@@ -82,13 +82,14 @@ router.post('/users', async (req, res) => {
         can_view_dashboard, can_view_customers, can_view_orders, can_scan_orders, can_sync_data,
         can_access_normless, can_access_crewfit,
         can_view_crewfit_followups, can_view_crewfit_orders, can_view_crewfit_catalog, can_view_crewfit_analytics, can_view_crewfit_calculator, can_view_crewfit_payments, can_view_crewfit_customers, can_view_revenue, can_view_invoices, can_view_crewfit_vendors, can_view_crewfit_invoices, can_edit_crewfit_orders, can_view_marketing, can_dispatch_marketing
-      ) VALUES ($1, $2, $3, true, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
+      ) VALUES ($1, $2, $3, true, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
     `, [
       username, hash, role || 'operator',
       !!p.dashboard, !!p.customers, !!p.orders, !!p.scanner, !!p.sync,
       !!p.normless, !!p.crewfit, !!p.crewfit_followups, !!p.crewfit_orders, !!p.crewfit_catalog, !!p.crewfit_analytics, !!p.crewfit_calculator, !!p.crewfit_payments, !!p.crewfit_customers, !!p.revenue, !!p.invoices, !!p.crewfit_vendors,
       !!p.crewfit_invoices, !!p.crewfit_orders_edit,
-      !!p.marketing, !!p.marketing_dispatch
+      !!p.marketing, !!p.marketing_dispatch,
+      !!p.inventory, !!p.inventory_edit
     ]);
 
     res.json({ success: true, message: 'User created' });
@@ -125,6 +126,7 @@ router.put('/users/:id', async (req, res) => {
       crewfit_payments: 'can_view_crewfit_payments', crewfit_customers: 'can_view_crewfit_customers', revenue: 'can_view_revenue',
       invoices: 'can_view_invoices', crewfit_vendors: 'can_view_crewfit_vendors',
       crewfit_invoices: 'can_view_crewfit_invoices', crewfit_orders_edit: 'can_edit_crewfit_orders',
+      inventory: 'can_view_inventory', inventory_edit: 'can_edit_inventory',
       marketing: 'can_view_marketing', marketing_dispatch: 'can_dispatch_marketing',
     };
 

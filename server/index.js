@@ -245,6 +245,7 @@ app.use('/api/crewfit/payments', authMiddleware, crewfitPaymentsRoutes);
 app.use('/api/crewfit/customers', authMiddleware, crewfitCustomersRoutes);
 app.use('/api/crewfit/vendor-orders', authMiddleware, crewfitVendorOrderRoutes);
 app.use('/api/crewfit/invoices', authMiddleware, require('./routes/crewfit-invoices'));
+app.use('/api/inventory', authMiddleware, require('./routes/inventory'));
 app.use('/api/crewfit', authMiddleware, crewfitRoutes);
 app.use('/api/marketing', authMiddleware, marketingRoutes);
 
@@ -384,7 +385,8 @@ async function ensureCrewfitSchema() {
                 can_view_crewfit_analytics=true, can_view_crewfit_calculator=true, can_view_crewfit_payments=true,
                 can_view_crewfit_customers=true, can_view_revenue=true, can_view_invoices=true,
                 can_view_crewfit_vendors=true, can_view_crewfit_invoices=true, can_edit_crewfit_orders=true,
-                can_view_marketing=true, can_dispatch_marketing=true
+                can_view_marketing=true, can_dispatch_marketing=true,
+                can_view_inventory=true, can_edit_inventory=true
                 WHERE role IN ('owner','admin')`);
         } catch (e) { console.error('admin perms ensure:', e.message); }
 
@@ -558,6 +560,91 @@ async function ensureCrewfitSchema() {
     } catch (err) {
         console.error('ensureCrewfitSchema error:', err.message);
     }
+}
+
+// Blank-garment inventory (Normless → Inventory menu).
+//
+// Stock is held per BLANK — a plain garment in one colour and size — not per design. Seventy-odd
+// Oversize designs are all printed on the same blank, so "Oversized Tee / Black / L" is a single
+// pool that any of them draws from. Shopify's own per-variant counts track finished designs and
+// will never agree with these, by design.
+async function ensureInventorySchema() {
+    try {
+        await db.exec(`
+            CREATE TABLE IF NOT EXISTS inventory_items (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                blank_type TEXT NOT NULL,
+                color TEXT NOT NULL,
+                size TEXT NOT NULL,
+                qty INTEGER NOT NULL DEFAULT 0,
+                reorder_level INTEGER NOT NULL DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS inventory_items_key_idx
+                ON inventory_items (blank_type, color, size);
+
+            -- Every change to a count, with what caused it. An order contributes exactly one row
+            -- per (order, variant): the sync re-imports the same orders every 30 seconds, so the
+            -- unique key below is what stops a sale being deducted twice. Re-processing an edited
+            -- order updates the row and moves stock by the difference.
+            CREATE TABLE IF NOT EXISTS inventory_movements (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                item_id INTEGER NOT NULL,
+                delta INTEGER NOT NULL,
+                reason TEXT NOT NULL,           -- 'order' | 'restock' | 'adjustment' | 'opening'
+                source_ref TEXT,                -- '<shopify_order_id>:<variant_id>' for orders
+                order_number TEXT,
+                note TEXT,
+                needs_review BOOLEAN DEFAULT false,
+                review_reason TEXT,
+                created_by TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS inventory_movements_source_idx
+                ON inventory_movements (source_ref) WHERE source_ref IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS inventory_movements_item_idx ON inventory_movements (item_id);
+
+            -- Local cache of what each Shopify product IS, so an order line can be resolved to a
+            -- blank without calling Shopify per order. Refreshed on demand from the Products API.
+            CREATE TABLE IF NOT EXISTS shopify_products (
+                shopify_id BIGINT PRIMARY KEY,
+                title TEXT,
+                product_type TEXT,
+                sku_prefix TEXT,
+                blank_type TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            -- Every blank the Shopify catalogue implies, whether or not any has been counted yet.
+            -- Without this the grid could only show blanks that already have stock, and a shop
+            -- starting from zero would have no cell to type its first count into.
+            CREATE TABLE IF NOT EXISTS inventory_catalog (
+                blank_type TEXT NOT NULL,
+                color TEXT NOT NULL,
+                size TEXT NOT NULL,
+                PRIMARY KEY (blank_type, color, size)
+            );
+
+            -- Order lines we could not resolve to a blank, kept rather than dropped: silently
+            -- ignoring a sale is how an inventory drifts away from the shelf.
+            CREATE TABLE IF NOT EXISTS inventory_unmapped (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                source_ref TEXT UNIQUE,
+                order_number TEXT,
+                product_title TEXT,
+                product_type TEXT,
+                variant TEXT,
+                qty INTEGER,
+                reason TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        `);
+        await db.exec(`
+            ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_inventory BOOLEAN DEFAULT false;
+            ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_edit_inventory BOOLEAN DEFAULT false;
+        `);
+    } catch (e) { console.error('inventory schema ensure:', e.message); }
 }
 
 // GST sales invoicing (Normless → Invoices menu)
@@ -745,6 +832,7 @@ app.listen(PORT, async () => {
     await ensureCrewfitSchema();
     // Ensure GST sales invoicing schema
     await ensureGstSchema();
+    await ensureInventorySchema();
     // Ensure influencer marketing schema
     await ensureMarketingSchema();
 

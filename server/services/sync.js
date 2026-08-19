@@ -61,6 +61,22 @@ async function syncAll() {
         console.log(`✅ Synced ${orders.length} orders`);
         totalSynced += orders.length;
 
+        // Draw the blanks these orders consume. Safe to run on every sync: each (order, variant)
+        // owns one movement row, so re-importing the same order corrects it rather than deducting
+        // again. Never allowed to fail the sync — stock is bookkeeping, orders are the record.
+        try {
+            const inventory = require('./inventory');
+            const rows = orders.map(o => ({
+                shopify_id: o.shopify_id, order_number: o.order_number,
+                financial_status: o.financial_status, fulfillment_status: o.fulfillment_status,
+                line_items_json: o.line_items_json,
+            }));
+            const applied = await inventory.applyOrders(rows);
+            if (applied.changed) console.log(`📦 Inventory: ${applied.changed} stock movement(s) from ${applied.orders} order(s)`);
+        } catch (e) {
+            console.error('inventory update skipped:', e.message);
+        }
+
         // Log sync
         await db.query(`
             INSERT INTO sync_logs (type, status, records_synced, started_at, completed_at)

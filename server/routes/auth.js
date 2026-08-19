@@ -97,6 +97,8 @@ router.post('/login', async (req, res) => {
                 can_view_crewfit_vendors: user.can_view_crewfit_vendors,
                 can_view_crewfit_invoices: user.can_view_crewfit_invoices,
                 can_edit_crewfit_orders: user.can_edit_crewfit_orders,
+                can_view_inventory: user.can_view_inventory,
+                can_edit_inventory: user.can_edit_inventory,
                 can_view_marketing: user.can_view_marketing,
                 can_dispatch_marketing: user.can_dispatch_marketing
             }

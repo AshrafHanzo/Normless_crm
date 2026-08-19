@@ -27,6 +27,7 @@ import CrewfitPayments from './pages/crewfit/CrewfitPayments'
 import CrewfitCustomers from './pages/crewfit/CrewfitCustomers'
 import CrewfitVendorOrders from './pages/crewfit/CrewfitVendorOrders'
 import CrewfitInvoices from './pages/crewfit/CrewfitInvoices'
+import Inventory from './pages/Inventory'
 
 // API base. In dev, VITE_API_URL (from .env.development.local) points at the
 // production backend + Postgres so previews use the real database.
@@ -141,6 +142,7 @@ function App() {
             <Route path="/scan" element={<ProtectedRoute permission="can_scan_orders"><AppLayout><ScanHub /></AppLayout></ProtectedRoute>} />
             <Route path="/marketing" element={<ProtectedRoute permission="can_view_marketing"><AppLayout><Marketing /></AppLayout></ProtectedRoute>} />
             <Route path="/invoices" element={<ProtectedRoute permission="can_view_invoices"><AppLayout><Invoices /></AppLayout></ProtectedRoute>} />
+            <Route path="/inventory" element={<ProtectedRoute permission="can_view_inventory"><AppLayout><Inventory /></AppLayout></ProtectedRoute>} />
             <Route path="/settings" element={<ProtectedRoute permission="can_sync_data"><AppLayout><Settings /></AppLayout></ProtectedRoute>} />
             <Route path="/admin" element={<ProtectedRoute><AppLayout>{(user?.role === 'owner' || user?.role === 'admin') ? <Admin /> : <Navigate to="/" replace />}</AppLayout></ProtectedRoute>} />
             <Route path="/profile" element={<ProtectedRoute><AppLayout><Profile /></AppLayout></ProtectedRoute>} />
