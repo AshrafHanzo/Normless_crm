@@ -2,6 +2,37 @@ const db = require('../db/connection');
 const shopify = require('./shopify');
 
 /**
+ * Shopify's line items, with the product images we had already resolved carried across.
+ *
+ * Matched on variant id, since that is what an image belongs to. Returns the incoming payload
+ * untouched when there is nothing stored to carry over.
+ */
+function mergeLineItems(incomingJson, storedJson) {
+    if (!storedJson) return incomingJson;
+    try {
+        const incoming = JSON.parse(incomingJson || '[]');
+        const stored = JSON.parse(storedJson || '[]');
+        if (!Array.isArray(incoming) || !Array.isArray(stored)) return incomingJson;
+
+        const images = new Map();
+        for (const s of stored) {
+            if (s?.shopify_variant_id && (s.image || (s.all_images || []).length)) {
+                images.set(String(s.shopify_variant_id), { image: s.image, all_images: s.all_images || [] });
+            }
+        }
+        if (!images.size) return incomingJson;
+
+        return JSON.stringify(incoming.map(li => {
+            const hit = images.get(String(li.shopify_variant_id));
+            return hit ? { ...li, image: li.image || hit.image, all_images: (li.all_images || []).length ? li.all_images : hit.all_images } : li;
+        }));
+    } catch {
+        // Unparseable either side — Shopify's copy is the one that matters.
+        return incomingJson;
+    }
+}
+
+/**
  * Full sync - fetches ALL customers and orders from Shopify
  */
 async function syncAll() {
@@ -41,7 +72,17 @@ async function syncAll() {
         console.log('📥 Fetching orders...');
         const orders = await shopify.fetchAllOrders();
 
+        // Line items are refreshed, not left frozen: a customer who changes size after ordering
+        // must move the right blank in inventory. They can't simply be overwritten either —
+        // Shopify's payload carries image: null, and the scanner caches product images into these
+        // rows, so a blind refresh would wipe them and make the scanner re-fetch every time.
+        // Merge instead: Shopify owns what was bought, we keep the images we resolved.
+        const storedItems = new Map((await db.query(
+            'SELECT shopify_id, line_items_json FROM orders WHERE shopify_id = ANY($1)',
+            [orders.map(o => o.shopify_id)])).rows.map(r => [r.shopify_id, r.line_items_json]));
+
         for (const item of orders) {
+            item.line_items_json = mergeLineItems(item.line_items_json, storedItems.get(item.shopify_id));
             await db.query(`
                 INSERT INTO orders (shopify_id, order_number, customer_shopify_id, total_price, currency, financial_status, fulfillment_status, line_items_json, created_at)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
@@ -51,7 +92,8 @@ async function syncAll() {
                     total_price = excluded.total_price,
                     currency = excluded.currency,
                     financial_status = excluded.financial_status,
-                    fulfillment_status = excluded.fulfillment_status
+                    fulfillment_status = excluded.fulfillment_status,
+                    line_items_json = excluded.line_items_json
             `, [
                 item.shopify_id, item.order_number, item.customer_shopify_id, item.total_price, item.currency,
                 item.financial_status, item.fulfillment_status, item.line_items_json, item.created_at
@@ -105,4 +147,5 @@ function getLastSync() {
     return db.query('SELECT * FROM sync_logs ORDER BY id DESC LIMIT 1').then(res => res.rows[0] || null).catch(() => null);
 }
 
-module.exports = { syncAll, getLastSync };
+module.exports = {
+    mergeLineItems, syncAll, getLastSync };
