@@ -32,6 +32,9 @@ export default function Inventory() {
   const [mode, setMode] = useState('set')
   const [ledger, setLedger] = useState(null)
   const [since, setSince] = useState(todayStr())
+  // Bulk mode holds a draft of the whole grid: `${blank}|${color}|${size}` → typed string. Only
+  // cells that actually differ are sent, so an untouched grid saves nothing.
+  const [bulk, setBulk] = useState(null)     // null = off, else { mode, draft }
 
   const load = async () => {
     const r = await apiFetch('/api/inventory')
@@ -101,6 +104,51 @@ export default function Inventory() {
     if (r) { toast.success(`${num(r.orders)} orders processed, ${num(r.changed)} movements`); load() }
   }
 
+  const startBulk = (mode) => {
+    const draft = {}
+    for (const c of cells) {
+      const k = `${c.blank_type}|${c.color}|${c.size}`
+      if (draft[k] === undefined) draft[k] = mode === 'set' ? String(byKey.get(k)?.qty ?? 0) : ''
+    }
+    setBulk({ mode, draft })
+  }
+  const setDraft = (k, v) => setBulk(b => ({ ...b, draft: { ...b.draft, [k]: v } }))
+
+  /** Cells whose typed value would actually move stock. */
+  const bulkChanges = () => {
+    if (!bulk) return []
+    return Object.entries(bulk.draft).flatMap(([k, raw]) => {
+      const v = String(raw).trim()
+      if (v === '') return []
+      const n = Number(v)
+      if (!Number.isFinite(n)) return []
+      const [blank_type, color, size] = k.split('|')
+      if (bulk.mode === 'set' && n === (byKey.get(k)?.qty ?? 0)) return []
+      if (bulk.mode === 'add' && n === 0) return []
+      return [{ blank_type, color, size, qty: n }]
+    })
+  }
+
+  const saveBulk = async () => {
+    const entries = bulkChanges()
+    if (!entries.length) { toast.info('Nothing changed'); return }
+    if (!await toast.confirm({
+      title: bulk.mode === 'set' ? `Set the count on ${entries.length} blank${entries.length > 1 ? 's' : ''}?` : `Add stock to ${entries.length} blank${entries.length > 1 ? 's' : ''}?`,
+      message: bulk.mode === 'set'
+        ? 'Each of these is set to the number you typed, whatever it reads now. The difference is recorded as a correction, so the ledger still explains it.'
+        : 'The number you typed is added to what each blank already holds.',
+      details: entries.slice(0, 6).map(e => ({ label: `${e.blank_type} ${e.color} ${e.size}`, value: bulk.mode === 'set' ? String(e.qty) : `+${e.qty}` }))
+        .concat(entries.length > 6 ? [{ label: '…and more', value: `${entries.length - 6} others` }] : []),
+      confirmLabel: 'Save counts',
+    })) return
+    setBusy('bulk')
+    const res = await apiFetch('/api/inventory/stock/bulk', { method: 'POST', body: JSON.stringify({ mode: bulk.mode, entries }) })
+    setBusy(null)
+    if (!res || res.error) { toast.error(res?.error || 'Failed to save'); return }
+    toast.success(`${res.changed} blank${res.changed === 1 ? '' : 's'} updated`)
+    setBulk(null); load()
+  }
+
   const openLedger = async (item) => {
     const r = await apiFetch(`/api/inventory/movements?item_id=${item.id}`)
     if (r && !r.error) setLedger({ item, movements: r.movements })
@@ -126,6 +174,9 @@ export default function Inventory() {
             <button className="btn btn-secondary" onClick={syncCatalog} disabled={!!busy}>
               {busy === 'catalog' ? 'Reading…' : 'Refresh catalog'}
             </button>
+            {!bulk
+              ? <button className="btn btn-primary" onClick={() => startBulk('set')} disabled={!!busy}>Bulk edit</button>
+              : <button className="btn btn-secondary" onClick={() => setBulk(null)} disabled={busy === 'bulk'}>Exit bulk edit</button>}
           </div>
         )}
       </div>
@@ -185,6 +236,21 @@ export default function Inventory() {
                         <td className="cell-primary">{color}</td>
                         {sizes.map((sz, i) => {
                           const item = row[i]
+                          const k = `${type}|${color}|${sz}`
+                          if (bulk) {
+                            const raw = bulk.draft[k] ?? ''
+                            const n = Number(String(raw).trim())
+                            const dirty = String(raw).trim() !== '' && Number.isFinite(n)
+                              && (bulk.mode === 'set' ? n !== (item?.qty ?? 0) : n !== 0)
+                            return (
+                              <td key={sz} style={{ textAlign: 'center' }}>
+                                <input className={`inv-input ${dirty ? 'inv-input-dirty' : ''}`} type="number" value={raw}
+                                  placeholder={bulk.mode === 'add' ? '+0' : '0'}
+                                  onChange={e => setDraft(k, e.target.value)}
+                                  title={item ? `${item.qty} in stock now` : 'Not counted yet'} />
+                              </td>
+                            )
+                          }
                           return (
                             <td key={sz} style={{ textAlign: 'center' }}>
                               <button type="button" className={`inv-cell inv-${cellTone(item)}`}
@@ -240,6 +306,27 @@ export default function Inventory() {
               <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>{u.reason}</span>
             </div>
           ))}
+        </div>
+      )}
+
+      {bulk && (
+        <div className="bulk-bar">
+          <div className="bulk-modes">
+            <button className={`mini-btn ${bulk.mode === 'set' ? 'mini-btn-active' : ''}`} onClick={() => startBulk('set')}>Counted stock</button>
+            <button className={`mini-btn ${bulk.mode === 'add' ? 'mini-btn-active' : ''}`} onClick={() => startBulk('add')}>Received more</button>
+            <span className="bulk-hint">
+              {bulk.mode === 'set'
+                ? 'Type what you counted. Each cell is set to that number, whatever it reads now.'
+                : 'Type how many arrived. Leave a cell blank to leave it alone.'}
+            </span>
+          </div>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+            <b>{bulkChanges().length} changed</b>
+            <button className="btn btn-secondary" onClick={() => setBulk(null)} disabled={busy === 'bulk'}>Cancel</button>
+            <button className="btn btn-primary" onClick={saveBulk} disabled={busy === 'bulk'}>
+              {busy === 'bulk' ? 'Saving…' : 'Save counts'}
+            </button>
+          </div>
         </div>
       )}
 

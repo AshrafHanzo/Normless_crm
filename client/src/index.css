@@ -1644,3 +1644,19 @@ html, body { max-width: 100%; overflow-x: hidden; }
   padding: 8px 0; font-size: 13px; border-top: 1px solid var(--border);
 }
 .review-row:first-child { border-top: 0; }
+
+/* Bulk stock entry: the whole grid becomes typeable, with one save at the end. */
+.inv-input {
+  width: 68px; padding: 6px 8px; text-align: center; font-weight: 700; font-size: 13px;
+  border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--text-primary);
+}
+.inv-input:focus { border-color: var(--primary); outline: none; }
+/* A cell that would actually move stock — so a long stock-take shows its own progress. */
+.inv-input-dirty { border-color: var(--primary); background: color-mix(in srgb, var(--primary) 12%, transparent); }
+.bulk-bar {
+  position: sticky; bottom: 0; z-index: 5; display: flex; align-items: center; justify-content: space-between;
+  gap: 16px; flex-wrap: wrap; margin-top: 18px; padding: 12px 16px; border-radius: 12px;
+  background: var(--bg-secondary); border: 1px solid var(--border); box-shadow: 0 -6px 20px rgba(0,0,0,0.18);
+}
+.bulk-modes { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.bulk-hint { font-size: 12px; color: var(--text-muted); }

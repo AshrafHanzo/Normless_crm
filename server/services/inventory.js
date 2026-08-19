@@ -234,6 +234,31 @@ async function applyOrder(tx, order, index) {
     return changed;
 }
 
+/**
+ * Move one blank's stock and record why.
+ *
+ * A stock-take is stored as the correction it implies — "counted 40, was 37" becomes +3 — so the
+ * ledger still explains the number rather than having it appear from nowhere. Returns null when
+ * nothing changed, so a bulk save can skip untouched cells instead of writing 53 no-op rows.
+ */
+async function setStock(tx, { blank_type, color, size, qty, mode = 'add', note }, user) {
+    await tx.query(
+        `INSERT INTO inventory_items (blank_type, color, size, qty) VALUES ($1,$2,$3,0)
+         ON CONFLICT (blank_type, color, size) DO NOTHING`, [blank_type, color, size]);
+    const cur = (await tx.query(
+        'SELECT id, qty FROM inventory_items WHERE blank_type=$1 AND color=$2 AND size=$3',
+        [blank_type, color, size])).rows[0];
+
+    const delta = mode === 'set' ? qty - cur.qty : qty;
+    if (delta === 0) return null;
+
+    await tx.query('UPDATE inventory_items SET qty = qty + $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2', [delta, cur.id]);
+    await tx.query(
+        `INSERT INTO inventory_movements (item_id, delta, reason, note, created_by) VALUES ($1,$2,$3,$4,$5)`,
+        [cur.id, delta, mode === 'set' ? 'opening' : 'restock', note || null, user || null]);
+    return { id: cur.id, delta, from: cur.qty, to: cur.qty + delta };
+}
+
 /** Apply a batch of orders. Used by the sync and by the "process history" action. */
 async function applyOrders(orders) {
     if (!orders.length) return { orders: 0, changed: 0 };
@@ -256,5 +281,5 @@ async function applySince(since) {
 module.exports = {
     BLANK_TYPES, SIZE_ORDER, TYPE_TO_BLANK, SKU_TO_BLANK,
     refreshProductCache, productIndex, blankTypeFor, splitVariant,
-    deductionsFor, holdState, applyOrder, applyOrders, applySince,
+    deductionsFor, holdState, applyOrder, applyOrders, applySince, setStock,
 };

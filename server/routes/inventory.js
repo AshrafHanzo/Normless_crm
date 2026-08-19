@@ -112,30 +112,49 @@ router.post('/stock', canEdit, async (req, res) => {
         if (!['set', 'add'].includes(mode)) return res.status(400).json({ error: 'mode must be "set" or "add"' });
 
         const out = await db.transaction(async (tx) => {
-            const ins = await tx.query(
-                `INSERT INTO inventory_items (blank_type, color, size, qty) VALUES ($1,$2,$3,0)
-                 ON CONFLICT (blank_type, color, size) DO NOTHING`, [blank_type, color, size]);
-            void ins;
-            const cur = (await tx.query(
-                'SELECT id, qty FROM inventory_items WHERE blank_type=$1 AND color=$2 AND size=$3',
+            await inv.setStock(tx, { blank_type, color, size, qty: n, mode, note }, req.user?.username);
+            return (await tx.query(
+                'SELECT * FROM inventory_items WHERE blank_type=$1 AND color=$2 AND size=$3',
                 [blank_type, color, size])).rows[0];
-
-            // A stock-take is stored as the movement it implies, so the ledger still explains the
-            // count: "counted 40, was 37" is a +3 correction, not a number appearing from nowhere.
-            const delta = mode === 'set' ? n - cur.qty : n;
-            if (delta !== 0) {
-                await tx.query('UPDATE inventory_items SET qty = qty + $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2', [delta, cur.id]);
-                await tx.query(
-                    `INSERT INTO inventory_movements (item_id, delta, reason, note, created_by)
-                     VALUES ($1,$2,$3,$4,$5)`,
-                    [cur.id, delta, mode === 'set' ? 'opening' : 'restock', note || null, req.user?.username || null]);
-            }
-            return (await tx.query('SELECT * FROM inventory_items WHERE id = $1', [cur.id])).rows[0];
         });
         res.json({ success: true, item: out });
     } catch (err) {
         console.error('inventory stock error:', err);
         res.status(500).json({ error: 'Failed to update stock' });
+    }
+});
+
+// POST /api/inventory/stock/bulk { mode, note, entries: [{ blank_type, color, size, qty }] }
+// One transaction for the whole grid: a stock-take that half-applied would be worse than one that
+// failed outright, because you cannot tell by looking which cells took.
+router.post('/stock/bulk', canEdit, async (req, res) => {
+    try {
+        const { mode = 'set', note, entries } = req.body || {};
+        if (!Array.isArray(entries) || !entries.length) return res.status(400).json({ error: 'entries must be a non-empty array' });
+        if (entries.length > 1000) return res.status(400).json({ error: 'Too many entries in one save' });
+        if (!['set', 'add'].includes(mode)) return res.status(400).json({ error: 'mode must be "set" or "add"' });
+
+        for (const e of entries) {
+            if (!e?.blank_type || !e?.color || !e?.size) return res.status(400).json({ error: 'Every entry needs blank_type, color and size' });
+            if (!Number.isFinite(Number(e.qty))) return res.status(400).json({ error: `Quantity for ${e.blank_type} ${e.color} ${e.size} is not a number` });
+        }
+
+        const changes = await db.transaction(async (tx) => {
+            const applied = [];
+            for (const e of entries) {
+                const r = await inv.setStock(tx, {
+                    blank_type: e.blank_type, color: e.color, size: e.size,
+                    qty: Number(e.qty), mode, note: note || (mode === 'set' ? 'Bulk stock count' : 'Bulk stock received'),
+                }, req.user?.username);
+                if (r) applied.push({ ...e, ...r });
+            }
+            return applied;
+        });
+
+        res.json({ success: true, changed: changes.length, skipped: entries.length - changes.length });
+    } catch (err) {
+        console.error('inventory bulk stock error:', err);
+        res.status(500).json({ error: 'Failed to save the stock counts' });
     }
 });
 
