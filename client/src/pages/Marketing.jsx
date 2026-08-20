@@ -38,10 +38,14 @@ const summarise = (items) => (items || []).map(i => [i.product, i.variant].filte
 /* ─────────────────────────── influencer drawer ─────────────────────────── */
 
 function InfluencerDrawer({ target, meta, onClose, onSaved, apiFetch, toast }) {
-  const [form, setForm] = useState(() => (target === 'new' ? blankInfluencer() : {
-    ...blankInfluencer(), ...target,
-    total_content: target.total_content ?? 0,
-  }))
+  const [form, setForm] = useState(() => {
+    if (target === 'new') return blankInfluencer()
+    // A column that is NULL in the database would land straight in a controlled input, which
+    // React treats as switching the field to uncontrolled. Fall back to the blank form's value.
+    const blank = blankInfluencer()
+    const filled = Object.fromEntries(Object.entries(target).map(([k, v]) => [k, v ?? blank[k] ?? '']))
+    return { ...blank, ...filled, total_content: target.total_content ?? 0 }
+  })
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const setF = (patch) => setForm(f => ({ ...f, ...patch }))
@@ -430,6 +434,7 @@ export default function Marketing() {
 
   const isAdmin = user?.role === 'owner' || user?.role === 'admin'
   const canDispatch = isAdmin || !!user?.can_dispatch_marketing
+  const canApprove = isAdmin || !!user?.can_approve_marketing
   // Sorting and paging are done by the server, so a column header changes the query rather than
   // reordering the 25 rows already on screen.
   const infTable = useServerTable({ sort: 'name', dir: 'asc' })
@@ -496,6 +501,38 @@ export default function Marketing() {
     if (!keepOpen) setOrderTarget(null)
     else setOrderTarget(saved)
     loadOrders()
+  }
+
+  /** Release an order for dispatch, or send it back for another look. */
+  const setApproval = async (o, approve) => {
+    if (!await toast.confirm({
+      title: approve ? `Approve ${o.ref}?` : `Send ${o.ref} back?`,
+      message: approve
+        ? 'It moves to Dispatch Pending and production can ship it. Your name is recorded against the approval.'
+        : 'It returns to Pending Approval and cannot be dispatched until it is approved again.',
+      details: [
+        { label: 'Influencer', value: o.name },
+        { label: 'Items', value: `${o.total_qty} unit${o.total_qty === 1 ? '' : 's'}` },
+        { label: 'Collab', value: o.collab_type },
+      ],
+      confirmLabel: approve ? 'Approve' : 'Send back', danger: !approve,
+    })) return
+    const res = await apiFetch(`/api/marketing/orders/${o.id}/${approve ? 'approve' : 'unapprove'}`, { method: 'POST' })
+    if (!res || res.error) { toast.error(res?.error || 'Failed'); return }
+    toast.success(approve ? `${o.ref} approved — ready for dispatch` : `${o.ref} sent back for approval`)
+    loadOrders()
+  }
+
+  /** Open the influencer behind an order, straight from the list. */
+  const openInfluencer = async (o) => {
+    if (!o.influencer_id) { toast.info('This order was raised without a linked influencer'); return }
+    const known = allInfluencers.find(i => String(i.id) === String(o.influencer_id))
+      || influencers.find(i => String(i.id) === String(o.influencer_id))
+    if (known) { setInfluencerTarget(known); return }
+    // The roster list is paged and filtered, so the one we want may not be loaded — fetch it.
+    const r = await apiFetch(`/api/marketing/influencers/${o.influencer_id}`)
+    if (r && !r.error && r.influencer) setInfluencerTarget(r.influencer)
+    else toast.error('That influencer could not be found — they may have been removed')
   }
 
   const del = async (kind, row) => {
@@ -596,15 +633,37 @@ export default function Marketing() {
                   <tr key={o.id} onClick={() => setOrderTarget(o)} style={{ cursor: 'pointer' }}>
                     <td className="cell-primary"><span className="badge-primary">{o.ref}</span></td>
                     <td>
-                      <div style={{ fontWeight: 600 }}>{o.name}</div>
-                      {o.collab_type && <span className={COLLAB_CLASS[o.collab_type] || 'badge-secondary'} style={{ fontSize: 10.5 }}>{o.collab_type}</span>}
+                      {/* The order carries a snapshot of the creator's details, so reaching the
+                          live profile from here saves a trip through the roster tab. */}
+                      <button type="button" className="link-name" onClick={e => { e.stopPropagation(); openInfluencer(o) }}
+                        title={o.influencer_id ? 'Open this influencer' : 'No influencer linked to this order'}>
+                        {o.name}
+                      </button>
+                      <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 2 }}>
+                        {o.collab_type && <span className={COLLAB_CLASS[o.collab_type] || 'badge-secondary'} style={{ fontSize: 10.5 }}>{o.collab_type}</span>}
+                        {o.profile_url && (
+                          <a className="track-link" href={o.profile_url} target="_blank" rel="noreferrer"
+                            onClick={e => e.stopPropagation()} title="Open their social profile">↗ Profile</a>
+                        )}
+                      </div>
                     </td>
                     <td data-label="Items" style={{ fontSize: 12.5 }}>
                       {summarise(o.items).map((s, i) => <div key={i}>{s}</div>)}
                     </td>
                     <td data-label="Qty" style={{ textAlign: 'center', fontWeight: 700 }}>{o.total_qty}</td>
                     <td data-label="Date" style={{ fontSize: 12.5, color: 'var(--text-muted)' }}>{day(o.order_date)}</td>
-                    <td data-label="Status"><span className={`status-badge ${STATUS_CLASS[o.status] || 'pending'}`}>{o.status}</span></td>
+                    <td data-label="Status">
+                      <span className={`status-badge ${STATUS_CLASS[o.status] || 'pending'}`}>{o.status}</span>
+                      {o.status === 'Pending Approval' && canApprove && (
+                        <button className="mini-btn approve-btn" onClick={e => { e.stopPropagation(); setApproval(o, true) }}>✓ Approve</button>
+                      )}
+                      {o.status === 'Dispatch Pending' && canApprove && (
+                        <button className="mini-btn" style={{ marginTop: 5 }} onClick={e => { e.stopPropagation(); setApproval(o, false) }}>↩ Send back</button>
+                      )}
+                      {o.approved_by && o.status !== 'Pending Approval' && (
+                        <div style={{ fontSize: 10.5, color: 'var(--text-muted)', marginTop: 3 }}>by {o.approved_by}</div>
+                      )}
+                    </td>
                     <td data-label="Dispatch" style={{ fontSize: 12 }}>
                       {o.shipping_partner ? <div>{o.shipping_partner}</div> : <span style={{ color: 'var(--text-muted)' }}>—</span>}
                       {o.awb && (o.tracking_link

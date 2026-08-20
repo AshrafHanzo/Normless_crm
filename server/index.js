@@ -374,6 +374,7 @@ async function ensureCrewfitSchema() {
                 -- Write access to bulk orders, separate from seeing them: a read-only operator
                 -- can open every order but change none.
                 ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_edit_crewfit_orders BOOLEAN DEFAULT false;
+                ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_approve_marketing BOOLEAN DEFAULT false;
                 -- Normless influencer marketing: the roster and the seeding orders raised against it.
                 ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_marketing BOOLEAN DEFAULT false;
                 -- Separate from the page itself: only production fills in AWB/tracking and marks
@@ -386,7 +387,7 @@ async function ensureCrewfitSchema() {
                 can_view_crewfit_customers=true, can_view_revenue=true, can_view_invoices=true,
                 can_view_crewfit_vendors=true, can_view_crewfit_invoices=true, can_edit_crewfit_orders=true,
                 can_view_marketing=true, can_dispatch_marketing=true,
-                can_view_inventory=true, can_edit_inventory=true
+                can_view_inventory=true, can_edit_inventory=true, can_approve_marketing=true
                 WHERE role IN ('owner','admin')`);
         } catch (e) { console.error('admin perms ensure:', e.message); }
 
@@ -830,7 +831,7 @@ async function ensureMarketingSchema() {
                 items TEXT,
                 total_qty INTEGER DEFAULT 0,
                 order_date DATE NOT NULL,
-                status TEXT DEFAULT 'Requested',
+                status TEXT DEFAULT 'Pending Approval',
                 notes TEXT,
                 -- Production & dispatch half of the sheet
                 fulfilled_date DATE,
@@ -842,6 +843,15 @@ async function ensureMarketingSchema() {
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
+            -- Who released this order for dispatch. An order is raised by marketing and only
+            -- leaves once someone signs it off, so the approval is recorded on the order rather
+            -- than inferred from its status.
+            ALTER TABLE marketing_orders ADD COLUMN IF NOT EXISTS approved_by TEXT;
+            ALTER TABLE marketing_orders ADD COLUMN IF NOT EXISTS approved_at TIMESTAMP;
+            -- The sheet's original vocabulary predates the approval step; these are the same two
+            -- stages named for what they are now waiting on.
+            UPDATE marketing_orders SET status = 'Pending Approval' WHERE status = 'Requested';
+            UPDATE marketing_orders SET status = 'Dispatch Pending' WHERE status = 'Packed';
             CREATE UNIQUE INDEX IF NOT EXISTS marketing_orders_ref_idx ON marketing_orders (ref_no);
             CREATE INDEX IF NOT EXISTS marketing_orders_date_idx ON marketing_orders (order_date DESC);
             CREATE INDEX IF NOT EXISTS marketing_orders_influencer_idx ON marketing_orders (influencer_id);

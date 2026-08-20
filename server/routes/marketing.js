@@ -20,7 +20,11 @@ const CONTENT_TYPES = ['Gym content', 'GRWM content', 'Lifestyle content', 'Revi
 const COLLAB_TYPES = ['Barter', 'Paid', 'Barter / Paid'];
 const PLATFORMS = ['Instagram', 'YouTube', 'Facebook', 'X'];
 // Mirrors the sheet's own vocabulary, plus the two ends the sheet only implies.
-const STATUSES = ['Requested', 'Packed', 'Dispatched', 'Delivered', 'Cancelled'];
+// An order is raised by marketing, signed off by someone with the authority, then shipped by
+// production. "Pending Approval" and "Dispatch Pending" name what each stage is waiting on.
+const STATUSES = ['Pending Approval', 'Dispatch Pending', 'Dispatched', 'Delivered', 'Cancelled'];
+const AWAITING_APPROVAL = 'Pending Approval';
+const APPROVED = 'Dispatch Pending';
 const CLOSED = ['Delivered', 'Cancelled'];
 // "Offline" in the sheet means the creator collected in person — no courier, no AWB.
 const SHIPPING_PARTNERS = ['Delhivery', 'DTDC', 'Blue Dart', 'India Post', 'Shiprocket', 'Offline'];
@@ -48,6 +52,7 @@ router.use(async (req, res, next) => {
 
 const isAdmin = (req) => req.user?.role === 'owner' || req.user?.role === 'admin';
 const canDispatch = (req) => hasPermission(req, 'can_dispatch_marketing');
+const canApprove = (req) => hasPermission(req, 'can_approve_marketing');
 
 const parseJson = (raw, fallback) => { try { return JSON.parse(raw || 'null') ?? fallback; } catch { return fallback; } };
 const trim = (v) => String(v ?? '').trim();
@@ -165,6 +170,19 @@ router.get('/influencers', async (req, res) => {
   }
 });
 
+// GET /api/marketing/influencers/:id — one creator, for opening a profile straight from an order
+// whose influencer is not on the currently loaded (paged, filtered) roster page.
+router.get('/influencers/:id', async (req, res) => {
+  try {
+    const r = await db.query(`SELECT ${INFLUENCER_COLUMNS} FROM marketing_influencers WHERE id = $1`, [req.params.id]);
+    if (!r.rows[0]) return res.status(404).json({ error: 'Influencer not found' });
+    res.json({ influencer: r.rows[0] });
+  } catch (err) {
+    console.error('Error loading influencer:', err);
+    res.status(500).json({ error: 'Failed to load influencer' });
+  }
+});
+
 // POST /api/marketing/influencers
 router.post('/influencers', async (req, res) => {
   const bad = validateInfluencer(req.body || {});
@@ -224,7 +242,7 @@ router.delete('/influencers/:id', async (req, res) => {
 const ORDER_COLUMNS = `id, ref_no, influencer_id, name, email, contact_number, address, collab_type,
   items, total_qty, TO_CHAR(order_date, 'YYYY-MM-DD') AS order_date, status, notes,
   TO_CHAR(fulfilled_date, 'YYYY-MM-DD') AS fulfilled_date, shopify_order_number,
-  shipping_partner, awb, tracking_link, created_by, created_at`;
+  shipping_partner, awb, tracking_link, created_by, created_at, approved_by, approved_at`;
 
 const hydrateOrder = (row) => ({ ...row, items: parseJson(row.items, []), ref: refLabel(row) });
 
@@ -289,6 +307,16 @@ router.get('/orders', async (req, res) => {
        ${whereSql} ${t.orderBy} LIMIT ${t.limit} OFFSET ${t.offset}`, vals
     );
     const orders = r.rows.map(hydrateOrder);
+    // The creator's live profile link, attached separately rather than joined: marketing_orders
+    // and marketing_influencers share column names (name, collab_type), so a join would make the
+    // filters and sorts above ambiguous. Everything else about the recipient stays the snapshot
+    // taken when the order was raised.
+    const ids = [...new Set(orders.map(o => o.influencer_id).filter(Boolean))];
+    if (ids.length) {
+      const links = new Map((await db.query(
+        'SELECT id, profile_url FROM marketing_influencers WHERE id = ANY($1)', [ids])).rows.map(i => [i.id, i.profile_url]));
+      orders.forEach(o => { o.profile_url = links.get(o.influencer_id) || null; });
+    }
     // Summary describes every order that matches the filters, not just the page in view — a
     // count that changed as you paged would be meaningless.
     const sums = await db.query(
@@ -302,6 +330,7 @@ router.get('/orders', async (req, res) => {
     res.json({
       orders,
       canDispatch: await canDispatch(req),
+      canApprove: await canApprove(req),
       pagination: pagination(s.total || 0, t),
       summary: {
         total: s.total || 0,
@@ -332,7 +361,8 @@ router.post('/orders', async (req, res) => {
        RETURNING ${ORDER_COLUMNS}`,
       [body.influencer_id || null, trim(body.name), nullable(body.email), nullable(body.contact_number),
        nullable(body.address), nullable(body.collab_type), JSON.stringify(items), totalQty(items),
-       body.order_date || todayStr(), STATUSES.includes(body.status) ? body.status : 'Requested',
+       // A new order always starts unapproved; a client cannot ask to skip the stage.
+       body.order_date || todayStr(), AWAITING_APPROVAL,
        nullable(body.notes), req.user?.username || null]
     );
     res.json({ success: true, order: hydrateOrder(r.rows[0]) });
@@ -368,6 +398,56 @@ router.put('/orders/:id', async (req, res) => {
   }
 });
 
+/**
+ * POST /api/marketing/orders/:id/approve — release an order for dispatch.
+ *
+ * Held separately from the marketing edit route: whoever raises an order should not be the one
+ * who signs it off, which is the only reason the stage exists.
+ */
+router.post('/orders/:id/approve', async (req, res) => {
+  if (!await canApprove(req)) {
+    return res.status(403).json({ error: 'You do not have permission to approve influencer orders' });
+  }
+  try {
+    const current = (await db.query('SELECT status FROM marketing_orders WHERE id = $1', [req.params.id])).rows[0];
+    if (!current) return res.status(404).json({ error: 'Order not found' });
+    if (current.status !== AWAITING_APPROVAL) {
+      return res.status(409).json({ error: `This order is already ${current.status.toLowerCase()} — only an order awaiting approval can be approved.` });
+    }
+    const r = await db.query(
+      `UPDATE marketing_orders SET status = $1, approved_by = $2, approved_at = CURRENT_TIMESTAMP,
+              updated_at = CURRENT_TIMESTAMP WHERE id = $3 RETURNING ${ORDER_COLUMNS}`,
+      [APPROVED, req.user?.username || null, req.params.id]);
+    res.json({ success: true, order: hydrateOrder(r.rows[0]) });
+  } catch (err) {
+    console.error('Error approving influencer order:', err);
+    res.status(500).json({ error: 'Failed to approve the order' });
+  }
+});
+
+// POST /api/marketing/orders/:id/unapprove — send it back for a second look.
+router.post('/orders/:id/unapprove', async (req, res) => {
+  if (!await canApprove(req)) {
+    return res.status(403).json({ error: 'You do not have permission to approve influencer orders' });
+  }
+  try {
+    const current = (await db.query('SELECT status, awb FROM marketing_orders WHERE id = $1', [req.params.id])).rows[0];
+    if (!current) return res.status(404).json({ error: 'Order not found' });
+    // Once it has shipped the approval is a matter of record, not a decision still open.
+    if (current.status !== APPROVED) {
+      return res.status(409).json({ error: 'Only an approved order that has not shipped can be sent back.' });
+    }
+    const r = await db.query(
+      `UPDATE marketing_orders SET status = $1, approved_by = NULL, approved_at = NULL,
+              updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING ${ORDER_COLUMNS}`,
+      [AWAITING_APPROVAL, req.params.id]);
+    res.json({ success: true, order: hydrateOrder(r.rows[0]) });
+  } catch (err) {
+    console.error('Error unapproving influencer order:', err);
+    res.status(500).json({ error: 'Failed to send the order back' });
+  }
+});
+
 // POST /api/marketing/orders/:id/dispatch — the production half
 router.post('/orders/:id/dispatch', async (req, res) => {
   if (!await canDispatch(req)) {
@@ -387,6 +467,11 @@ router.post('/orders/:id/dispatch', async (req, res) => {
       'SELECT status, awb, shipping_partner, fulfilled_date FROM marketing_orders WHERE id = $1', [req.params.id]
     )).rows[0];
     if (!current) return res.status(404).json({ error: 'Order not found' });
+
+    // Approval is the whole point of the stage, so it cannot be skipped by filling in an AWB.
+    if (current.status === AWAITING_APPROVAL) {
+      return res.status(409).json({ error: 'This order has not been approved yet — it cannot be dispatched until someone signs it off.' });
+    }
 
     const partner = body.shipping_partner !== undefined ? nullable(body.shipping_partner) : current.shipping_partner;
     const awb = body.awb !== undefined ? nullable(body.awb) : current.awb;
@@ -445,6 +530,7 @@ router.get('/meta', async (req, res) => {
       statuses: STATUSES, shippingPartners: SHIPPING_PARTNERS, noAwbPartners: NO_AWB_PARTNERS,
       locations,
       canDispatch: await canDispatch(req),
+      canApprove: await canApprove(req),
       isAdmin: isAdmin(req),
     });
   } catch (err) {

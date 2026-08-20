@@ -1683,3 +1683,15 @@ html, body { max-width: 100%; overflow-x: hidden; }
 /* The status still being held has no end yet, so it reads as ongoing rather than finished. */
 .run-open { border-color: var(--primary); color: var(--primary); }
 .history-list { max-height: 320px; overflow-y: auto; }
+
+/* An influencer's name on the order list, which opens their profile. */
+.link-name {
+  background: none; border: 0; padding: 0; font: inherit; font-weight: 600;
+  color: var(--text-primary); cursor: pointer; text-align: left;
+}
+.link-name:hover { color: var(--primary); text-decoration: underline; }
+.approve-btn {
+  display: block; margin-top: 5px;
+  border-color: color-mix(in srgb, var(--success) 40%, transparent); color: var(--success);
+}
+.approve-btn:hover { background: color-mix(in srgb, var(--success) 12%, transparent); border-color: var(--success); }
