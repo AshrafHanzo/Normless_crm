@@ -48,4 +48,4 @@ async function hasPermission(req, column) {
 // Whether this request may see money totals (overall collected/outstanding revenue).
 const canViewRevenue = (req) => hasPermission(req, 'can_view_revenue');
 
-module.exports = { hasPermission, canViewRevenue };
+module.exports = { hasPermission, canViewRevenue, COLUMNS };

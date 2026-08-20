@@ -7,6 +7,24 @@ const db = require('../db/connection');
 
 const router = express.Router();
 
+// Every permission column, from the same allowlist the server checks against.
+const { COLUMNS: PERMISSION_COLUMNS } = require('../utils/permissions');
+
+/**
+ * The user object handed to the client, by login and by verify alike.
+ *
+ * Both endpoints used to spell this out by hand and they drifted: a permission added to login but
+ * not to verify appears to work, then vanishes on the next page load when verify overwrites the
+ * user — which is exactly how inventory access went missing. Derived from the permission list, so
+ * a new column can only be absent from both or neither.
+ */
+function publicUser(user) {
+    const out = { id: user.id, username: user.username, role: user.role };
+    for (const col of PERMISSION_COLUMNS) out[col] = user[col];
+    return out;
+}
+
+
 // Configure email transporter (using Gmail)
 const transporter = nodemailer.createTransport({
     service: 'gmail',
@@ -74,34 +92,7 @@ router.post('/login', async (req, res) => {
 
         res.json({ 
             token, 
-            user: { 
-                id: user.id, 
-                username: user.username, 
-                role: user.role,
-                can_view_dashboard: user.can_view_dashboard,
-                can_view_customers: user.can_view_customers,
-                can_view_orders: user.can_view_orders,
-                can_scan_orders: user.can_scan_orders,
-                can_sync_data: user.can_sync_data,
-                can_access_normless: user.can_access_normless,
-                can_access_crewfit: user.can_access_crewfit,
-                can_view_crewfit_followups: user.can_view_crewfit_followups,
-                can_view_crewfit_orders: user.can_view_crewfit_orders,
-                can_view_crewfit_catalog: user.can_view_crewfit_catalog,
-                can_view_crewfit_analytics: user.can_view_crewfit_analytics,
-                can_view_crewfit_calculator: user.can_view_crewfit_calculator,
-                can_view_crewfit_payments: user.can_view_crewfit_payments,
-                can_view_crewfit_customers: user.can_view_crewfit_customers,
-                can_view_revenue: user.can_view_revenue,
-                can_view_invoices: user.can_view_invoices,
-                can_view_crewfit_vendors: user.can_view_crewfit_vendors,
-                can_view_crewfit_invoices: user.can_view_crewfit_invoices,
-                can_edit_crewfit_orders: user.can_edit_crewfit_orders,
-                can_view_inventory: user.can_view_inventory,
-                can_edit_inventory: user.can_edit_inventory,
-                can_view_marketing: user.can_view_marketing,
-                can_dispatch_marketing: user.can_dispatch_marketing
-            }
+            user: publicUser(user)
         });
     } catch (error) {
         console.error('Login error:', error);
@@ -130,32 +121,7 @@ router.get('/verify', async (req, res) => {
 
         res.json({ 
             valid: true, 
-            user: { 
-                id: user.id, 
-                username: user.username, 
-                role: user.role,
-                can_view_dashboard: user.can_view_dashboard,
-                can_view_customers: user.can_view_customers,
-                can_view_orders: user.can_view_orders,
-                can_scan_orders: user.can_scan_orders,
-                can_sync_data: user.can_sync_data,
-                can_access_normless: user.can_access_normless,
-                can_access_crewfit: user.can_access_crewfit,
-                can_view_crewfit_followups: user.can_view_crewfit_followups,
-                can_view_crewfit_orders: user.can_view_crewfit_orders,
-                can_view_crewfit_catalog: user.can_view_crewfit_catalog,
-                can_view_crewfit_analytics: user.can_view_crewfit_analytics,
-                can_view_crewfit_calculator: user.can_view_crewfit_calculator,
-                can_view_crewfit_payments: user.can_view_crewfit_payments,
-                can_view_crewfit_customers: user.can_view_crewfit_customers,
-                can_view_revenue: user.can_view_revenue,
-                can_view_invoices: user.can_view_invoices,
-                can_view_crewfit_vendors: user.can_view_crewfit_vendors,
-                can_view_crewfit_invoices: user.can_view_crewfit_invoices,
-                can_edit_crewfit_orders: user.can_edit_crewfit_orders,
-                can_view_marketing: user.can_view_marketing,
-                can_dispatch_marketing: user.can_dispatch_marketing
-            }
+            user: publicUser(user)
         });
     } catch {
         res.status(401).json({ valid: false });
