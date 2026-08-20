@@ -100,9 +100,17 @@ function AdminRoute({ children }) {
 function AppLayout({ children }) {
   const { brand } = useAuth()
   const location = useLocation()
+  // Open unless the user has said otherwise, and remembered across visits — a menu that reopens
+  // itself every navigation is worse than one that never collapsed.
+  const [collapsed, setCollapsed] = useState(() => localStorage.getItem('crm_sidebar') === 'collapsed')
+  const toggleSidebar = () => setCollapsed(c => {
+    const next = !c
+    localStorage.setItem('crm_sidebar', next ? 'collapsed' : 'open')
+    return next
+  })
   return (
-    <div className={`app-layout brand-${brand}`}>
-      <Sidebar />
+    <div className={`app-layout brand-${brand} ${collapsed ? 'sidebar-collapsed' : ''}`}>
+      <Sidebar collapsed={collapsed} onToggleCollapse={toggleSidebar} />
       <main className="main-content">
         <ErrorBoundary key={location.pathname}>{children}</ErrorBoundary>
       </main>

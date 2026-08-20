@@ -466,6 +466,10 @@ select { cursor: pointer; appearance: none;
    DASHBOARD
    ============================================================ */
 .dash-toolbar { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; flex-wrap: wrap; margin-bottom: 24px; }
+/* When the controls wrap onto their own line, space-between leaves them at the left — which is
+   where a date picker's panel then opens back over the sidebar. Keep them against the right edge.
+   Scoped to toolbars that actually have controls, so a lone heading is not pushed across. */
+.dash-toolbar > :last-child:not(:first-child) { margin-left: auto; }
 .date-filter { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .date-filter input[type="date"] { width: auto; padding: 9px 12px; font-size: 13px; }
 
@@ -479,9 +483,12 @@ select { cursor: pointer; appearance: none;
 .drf-trigger:hover { border-color: var(--border-hover); background: var(--surface-hover); }
 .drf-panel {
   position: absolute; top: calc(100% + 8px); right: 0; z-index: 60; display: flex;
+  max-width: calc(100vw - 24px);
   background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg); overflow: hidden; animation: fadeIn 0.15s ease;
 }
+/* Flipped when the panel would otherwise reach back past the left edge of the page. */
+.drf-panel-left { right: auto; left: 0; }
 .drf-sidebar { width: 180px; flex-shrink: 0; padding: 10px 0; border-right: 1px solid var(--border); overflow-y: auto; max-height: 480px; }
 .drf-preset {
   display: block; width: 100%; text-align: left; padding: 9px 18px; font-size: 13px; border: none;
@@ -1695,3 +1702,38 @@ html, body { max-width: 100%; overflow-x: hidden; }
   border-color: color-mix(in srgb, var(--success) 40%, transparent); color: var(--success);
 }
 .approve-btn:hover { background: color-mix(in srgb, var(--success) 12%, transparent); border-color: var(--success); }
+
+/* ── Collapsible sidebar ────────────────────────────────────────────────────── */
+/* Collapsing only narrows the rail — every link stays reachable as an icon, so nothing is
+   hidden behind a menu the way a full hide-away would. */
+.sidebar-collapse-btn {
+  margin-left: auto; display: flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; flex-shrink: 0; border-radius: 7px;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text-secondary); cursor: pointer;
+}
+.sidebar-collapse-btn:hover { color: var(--text-primary); border-color: var(--border-hover); }
+
+.app-layout.sidebar-collapsed { --sidebar-width: 76px; }
+.sidebar-collapsed .sidebar { padding: 20px 12px; }
+/* Labels go, icons stay centred. The links keep a title attribute, so hovering still names them. */
+.sidebar-collapsed .brand-text,
+.sidebar-collapsed .sidebar-section-label,
+.sidebar-collapsed .sidebar-link > span:not(.link-icon),
+.sidebar-collapsed .brand-switch button span,
+.sidebar-collapsed .theme-toggle-row span,
+.sidebar-collapsed .sidebar-user-info { display: none; }
+.sidebar-collapsed .sidebar-brand { justify-content: center; padding: 8px 0 16px; position: relative; }
+.sidebar-collapsed .sidebar-link,
+.sidebar-collapsed .theme-toggle-row { justify-content: center; padding-left: 0; padding-right: 0; }
+.sidebar-collapsed .brand-switch { flex-direction: column; gap: 6px; }
+.sidebar-collapsed .brand-switch button { justify-content: center; padding: 8px 0; }
+/* Avatar over logout: side by side they need more room than the rail has. */
+.sidebar-collapsed .sidebar-user-card { flex-direction: column; align-items: center; gap: 8px; padding: 10px 0; }
+/* Stacked under the logo once the brand text it sat beside is gone. */
+.sidebar-collapsed .sidebar-brand { flex-direction: column; gap: 10px; padding: 8px 0 14px; }
+.sidebar-collapsed .sidebar-collapse-btn { margin-left: 0; }
+/* The rail is 76px wide; nothing inside it may exceed that or it spills over the page. */
+.sidebar-collapsed .sidebar-nav,
+.sidebar-collapsed .brand-switch,
+.sidebar-collapsed .sidebar-bottom { min-width: 0; }
+.sidebar-collapsed .brand-switch button { min-width: 0; overflow: hidden; }

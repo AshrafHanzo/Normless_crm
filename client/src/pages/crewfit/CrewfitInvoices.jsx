@@ -114,20 +114,17 @@ export default function CrewfitInvoices() {
 
   return (
     <div className="page-enter">
-      <div className="page-header">
-        <h1>Crewfit · Invoices</h1>
-        <p>GST sales register for bulk orders — filed separately from Normless, on its own invoice series.</p>
-      </div>
-
-      {/* Controls sit on the right of the toolbar, as on every other page: the date picker's panel
-          is anchored right:0, so a left-hand trigger would open it off-screen. */}
+      {/* Title and controls share one row, so the date picker sits in the page's top-right corner
+          rather than wrapping onto a line of its own where its panel opens back over the sidebar. */}
       <div className="dash-toolbar">
         <div>
+          <h1>Crewfit · Invoices</h1>
           <p style={{ color: 'var(--text-muted)' }}>
-            Built from issued tax invoices. Proformas are excluded — an advance carries no GST.
+            GST sales register for bulk orders, on its own invoice series.
+            Built from issued tax invoices — proformas carry no GST.
           </p>
         </div>
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
           <DateRangeFilter startDate={from} endDate={to}
             onApply={(s, e) => { if (s && e) applyRange(s, e) }}
             onClear={() => applyRange(...lastMonth())} />

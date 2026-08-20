@@ -33,7 +33,7 @@ const NAV = {
   ],
 }
 
-export default function Sidebar() {
+export default function Sidebar({ collapsed = false, onToggleCollapse }) {
   const { user, logout, brand, setBrand } = useAuth()
   const { isDark, toggleTheme } = useTheme()
   const navigate = useNavigate()
@@ -60,6 +60,13 @@ export default function Sidebar() {
           {/* Both brands ship a real mark now, so the gradient chip + glyph is retired here. */}
           <div className={`brand-mark brand-mark-${brand} ${brand === 'crewfit' ? 'cf-logo' : 'n-logo'}`} role="img" aria-label={b.name} />
           <div className="brand-text"><h2>{b.name}</h2><span>{b.tag}</span></div>
+          {onToggleCollapse && (
+            <button type="button" className="sidebar-collapse-btn" onClick={onToggleCollapse}
+              title={collapsed ? 'Expand menu' : 'Collapse menu'}
+              aria-label={collapsed ? 'Expand menu' : 'Collapse menu'} aria-expanded={!collapsed}>
+              <Icon name={collapsed ? 'chevronRight' : 'chevronLeft'} size={16} />
+            </button>
+          )}
         </div>
 
         {(() => {
@@ -67,8 +74,9 @@ export default function Sidebar() {
           return brands.length > 1 ? (
             <div className="brand-switch">
               {brands.map(([key, val]) => (
-                <button key={key} className={brand === key ? 'active' : ''} onClick={() => switchBrand(key)}>
-                  <Icon name={val.glyph} size={15} strokeWidth={2.2} />{val.name}
+                <button key={key} className={brand === key ? 'active' : ''} onClick={() => switchBrand(key)} title={val.name}>
+                  {/* Wrapped so the collapsed rail can hide the label and keep the glyph. */}
+                  <Icon name={val.glyph} size={15} strokeWidth={2.2} /><span>{val.name}</span>
                 </button>
               ))}
             </div>
@@ -79,7 +87,7 @@ export default function Sidebar() {
           <div className="sidebar-section">
             <div className="sidebar-section-label">Main</div>
             {mainItems.map(item => (
-              <NavLink key={item.to} to={item.to} end={item.end} onClick={close} className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>
+              <NavLink key={item.to} to={item.to} end={item.end} onClick={close} title={item.label} className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>
                 <span className="link-icon"><Icon name={item.icon} size={19} /></span><span>{item.label}</span>
               </NavLink>
             ))}
@@ -89,12 +97,12 @@ export default function Sidebar() {
             <div className="sidebar-section">
               <div className="sidebar-section-label">System</div>
               {systemItems.map(item => (
-                <NavLink key={item.to} to={item.to} end={item.end} onClick={close} className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>
+                <NavLink key={item.to} to={item.to} end={item.end} onClick={close} title={item.label} className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>
                   <span className="link-icon"><Icon name={item.icon} size={19} /></span><span>{item.label}</span>
                 </NavLink>
               ))}
               {isAdmin && (
-                <NavLink to="/admin" onClick={close} className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>
+                <NavLink to="/admin" onClick={close} title="Admin" className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>
                   <span className="link-icon"><Icon name="shield" size={19} /></span><span>Admin</span>
                 </NavLink>
               )}

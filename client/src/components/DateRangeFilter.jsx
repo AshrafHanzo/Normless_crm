@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useLayoutEffect } from 'react'
 import Icon from './Icon'
 
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
@@ -91,6 +91,22 @@ export default function DateRangeFilter({ startDate, endDate, onApply, onClear }
   const [hoverDate, setHoverDate] = useState(null)
   const [viewMonth, setViewMonth] = useState(startOfMonth(addMonths(new Date(), -1)))
   const ref = useRef(null)
+  const panelRef = useRef(null)
+  // The panel hangs off the right of its trigger, which is right for a control in the top-right
+  // corner and wrong for one that has wrapped to the left of a narrow page — there it reaches back
+  // past the viewport edge and disappears under the sidebar. Measured after layout and flipped.
+  const [align, setAlign] = useState('right')
+  useLayoutEffect(() => {
+    if (!open || !panelRef.current) return
+    const box = panelRef.current.getBoundingClientRect()
+    const main = document.querySelector('.main-content')
+    const leftLimit = main ? main.getBoundingClientRect().left : 0
+    if (box.left < leftLimit) setAlign('left')
+    else if (align === 'left' && box.right > window.innerWidth) setAlign('right')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open])
+  // Re-measure from scratch each time it opens: the page may have resized while it was closed.
+  useEffect(() => { if (!open) setAlign('right') }, [open])
 
   useEffect(() => {
     if (!open) return
@@ -136,7 +152,7 @@ export default function DateRangeFilter({ startDate, endDate, onApply, onClear }
         <span>{triggerLabel}</span>
       </button>
       {open && (
-        <div className="drf-panel">
+        <div className={`drf-panel ${align === 'left' ? 'drf-panel-left' : ''}`} ref={panelRef}>
           <div className="drf-sidebar">
             {presets.map(p => (
               <div key={p.label}>
