@@ -52,8 +52,9 @@ router.get('/', async (req, res) => {
         const unmapped = (await db.query(
             `SELECT product_title, product_type, variant, SUM(qty)::int AS qty, MAX(reason) AS reason,
                     COUNT(*)::int AS lines
-               FROM inventory_unmapped GROUP BY product_title, product_type, variant
-               ORDER BY SUM(qty) DESC LIMIT 50`)).rows;
+               FROM inventory_unmapped WHERE NOT dismissed
+              GROUP BY product_title, product_type, variant
+              ORDER BY SUM(qty) DESC LIMIT 50`)).rows;
 
         const review = (await db.query(
             `SELECT m.id, m.order_number, m.note, m.review_reason, m.delta,
@@ -155,6 +156,66 @@ router.post('/stock/bulk', canEdit, async (req, res) => {
     } catch (err) {
         console.error('inventory bulk stock error:', err);
         res.status(500).json({ error: 'Failed to save the stock counts' });
+    }
+});
+
+// POST /api/inventory/unmapped/dismiss { product_title, variant } — or {} for all.
+// Dismissing only forgets the warning, never the sale: the order itself is untouched, and if the
+// same line is seen again it comes back, because the stock behind it still was never deducted.
+router.post('/unmapped/dismiss', canEdit, async (req, res) => {
+    try {
+        const { product_title, variant, all } = req.body || {};
+        // Flagged, not deleted: the sync re-reports every unresolved line on each run, so a deleted
+        // row would simply come back. The record is also the only trace that the sale went
+        // uncounted, which is worth keeping.
+        if (all) {
+            const r = await db.query('UPDATE inventory_unmapped SET dismissed = true WHERE NOT dismissed RETURNING id');
+            return res.json({ success: true, dismissed: r.rowCount });
+        }
+        if (!product_title) return res.status(400).json({ error: 'product_title is required' });
+        const r = await db.query(
+            `UPDATE inventory_unmapped SET dismissed = true
+              WHERE product_title = $1 AND COALESCE(variant,'') = COALESCE($2,'') AND NOT dismissed RETURNING id`,
+            [product_title, variant || '']);
+        res.json({ success: true, dismissed: r.rowCount });
+    } catch (err) {
+        console.error('inventory dismiss error:', err);
+        res.status(500).json({ error: 'Failed to dismiss' });
+    }
+});
+
+// POST /api/inventory/reorder-levels { entries: [{ blank_type, color, size, reorder_level }] }
+// The level a blank should not fall below. Set per cell because demand is per cell — Red / M
+// outsells Brown / XS many times over, so one number across the grid would be wrong everywhere.
+router.post('/reorder-levels', canEdit, async (req, res) => {
+    try {
+        const { entries } = req.body || {};
+        if (!Array.isArray(entries) || !entries.length) return res.status(400).json({ error: 'entries must be a non-empty array' });
+        if (entries.length > 1000) return res.status(400).json({ error: 'Too many entries in one save' });
+        for (const e of entries) {
+            if (!e?.blank_type || !e?.color || !e?.size) return res.status(400).json({ error: 'Every entry needs blank_type, color and size' });
+            const n = Number(e.reorder_level);
+            if (!Number.isFinite(n) || n < 0) return res.status(400).json({ error: `Reorder level for ${e.blank_type} ${e.color} ${e.size} must be 0 or more` });
+        }
+        const changed = await db.transaction(async (tx) => {
+            let n = 0;
+            for (const e of entries) {
+                // The row may not exist yet — a level can be set on a blank before it is counted.
+                await tx.query(
+                    `INSERT INTO inventory_items (blank_type, color, size, qty) VALUES ($1,$2,$3,0)
+                     ON CONFLICT (blank_type, color, size) DO NOTHING`, [e.blank_type, e.color, e.size]);
+                const r = await tx.query(
+                    `UPDATE inventory_items SET reorder_level = $1, updated_at = CURRENT_TIMESTAMP
+                      WHERE blank_type = $2 AND color = $3 AND size = $4 AND reorder_level <> $1`,
+                    [Number(e.reorder_level), e.blank_type, e.color, e.size]);
+                n += r.rowCount;
+            }
+            return n;
+        });
+        res.json({ success: true, changed });
+    } catch (err) {
+        console.error('inventory reorder level error:', err);
+        res.status(500).json({ error: 'Failed to save reorder levels' });
     }
 });
 

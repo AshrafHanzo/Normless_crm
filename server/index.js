@@ -637,8 +637,10 @@ async function ensureInventorySchema() {
                 variant TEXT,
                 qty INTEGER,
                 reason TEXT,
+                dismissed BOOLEAN DEFAULT false,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
+            ALTER TABLE inventory_unmapped ADD COLUMN IF NOT EXISTS dismissed BOOLEAN DEFAULT false;
         `);
         await db.exec(`
             ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_inventory BOOLEAN DEFAULT false;

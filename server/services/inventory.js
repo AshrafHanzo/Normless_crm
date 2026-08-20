@@ -228,6 +228,8 @@ async function applyOrder(tx, order, index) {
         await tx.query(
             `INSERT INTO inventory_unmapped (source_ref, order_number, product_title, product_type, variant, qty, reason)
              VALUES ($1,$2,$3,$4,$5,$6,$7)
+             -- dismissed is deliberately not touched: the sync re-reports every unresolved line on
+             -- every run, so resetting it here would undo the dismissal within thirty seconds.
              ON CONFLICT (source_ref) DO UPDATE SET qty = excluded.qty, reason = excluded.reason`,
             [ref, u.order_number, u.title, u.product_type, u.variant, u.qty, u.reason]);
     }

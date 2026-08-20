@@ -30,11 +30,15 @@ export default function Inventory() {
   const [edit, setEdit] = useState(null)   // { blank_type, color, size, item } being counted
   const [qty, setQty] = useState('')
   const [mode, setMode] = useState('set')
+  const [reorder, setReorder] = useState('0')
   const [ledger, setLedger] = useState(null)
   const [since, setSince] = useState(todayStr())
   // Bulk mode holds a draft of the whole grid: `${blank}|${color}|${size}` → typed string. Only
   // cells that actually differ are sent, so an untouched grid saves nothing.
   const [bulk, setBulk] = useState(null)     // null = off, else { mode, draft }
+  // Clicking a KPI narrows the grid to the cells it counts — a number you cannot act on is
+  // just decoration.
+  const [focus, setFocus] = useState(null)   // null | 'low' | 'negative'
 
   const load = async () => {
     const r = await apiFetch('/api/inventory')
@@ -63,17 +67,25 @@ export default function Inventory() {
     const item = byKey.get(`${blank_type}|${color}|${size}`)
     setEdit({ blank_type, color, size, item })
     setQty(item ? String(item.qty) : '0')
+    setReorder(String(item?.reorder_level ?? 0))
     setMode('set')
   }
 
   const saveCount = async () => {
     const n = Number(qty)
+    const level = Number(reorder)
     if (!Number.isFinite(n)) { toast.error('Enter a number'); return }
+    if (!Number.isFinite(level) || level < 0) { toast.error('Reorder level must be 0 or more'); return }
     setBusy('save')
+    const key = { blank_type: edit.blank_type, color: edit.color, size: edit.size }
     const res = await apiFetch('/api/inventory/stock', {
       method: 'POST',
-      body: JSON.stringify({ ...edit, item: undefined, qty: n, mode, note: mode === 'set' ? 'Stock count' : 'Stock received' }),
+      body: JSON.stringify({ ...key, qty: n, mode, note: mode === 'set' ? 'Stock count' : 'Stock received' }),
     })
+    // The level is a setting, not a movement, so it is saved separately and only when it changed.
+    if (res && !res.error && level !== (edit.item?.reorder_level ?? 0)) {
+      await apiFetch('/api/inventory/reorder-levels', { method: 'POST', body: JSON.stringify({ entries: [{ ...key, reorder_level: level }] }) })
+    }
     setBusy(null)
     if (!res || res.error) { toast.error(res?.error || 'Failed to update stock'); return }
     toast.success(`${edit.blank_type} ${edit.color} ${edit.size} → ${res.item.qty}`)
@@ -108,7 +120,12 @@ export default function Inventory() {
     const draft = {}
     for (const c of cells) {
       const k = `${c.blank_type}|${c.color}|${c.size}`
-      if (draft[k] === undefined) draft[k] = mode === 'set' ? String(byKey.get(k)?.qty ?? 0) : ''
+      if (draft[k] !== undefined) continue
+      // 'set' and 'reorder' start from the current value so you edit what is there; 'add' starts
+      // empty, because a blank cell means "nothing arrived for this one".
+      if (mode === 'set') draft[k] = String(byKey.get(k)?.qty ?? 0)
+      else if (mode === 'reorder') draft[k] = String(byKey.get(k)?.reorder_level ?? 0)
+      else draft[k] = ''
     }
     setBulk({ mode, draft })
   }
@@ -125,28 +142,54 @@ export default function Inventory() {
       const [blank_type, color, size] = k.split('|')
       if (bulk.mode === 'set' && n === (byKey.get(k)?.qty ?? 0)) return []
       if (bulk.mode === 'add' && n === 0) return []
+      if (bulk.mode === 'reorder') {
+        if (n < 0 || n === (byKey.get(k)?.reorder_level ?? 0)) return []
+        return [{ blank_type, color, size, reorder_level: n }]
+      }
       return [{ blank_type, color, size, qty: n }]
     })
+  }
+
+  const BULK_COPY = {
+    set: { title: 'Set the count on', body: 'Each of these is set to the number you typed, whatever it reads now. The difference is recorded as a correction, so the ledger still explains it.', label: 'Save counts' },
+    add: { title: 'Add stock to', body: 'The number you typed is added to what each blank already holds.', label: 'Save counts' },
+    reorder: { title: 'Set the reorder level on', body: 'A blank at or below its level is flagged as running low. It does not change any stock figure.', label: 'Save levels' },
   }
 
   const saveBulk = async () => {
     const entries = bulkChanges()
     if (!entries.length) { toast.info('Nothing changed'); return }
+    const copy = BULK_COPY[bulk.mode]
+    const shown = (e) => (bulk.mode === 'reorder' ? String(e.reorder_level) : bulk.mode === 'add' ? `+${e.qty}` : String(e.qty))
     if (!await toast.confirm({
-      title: bulk.mode === 'set' ? `Set the count on ${entries.length} blank${entries.length > 1 ? 's' : ''}?` : `Add stock to ${entries.length} blank${entries.length > 1 ? 's' : ''}?`,
-      message: bulk.mode === 'set'
-        ? 'Each of these is set to the number you typed, whatever it reads now. The difference is recorded as a correction, so the ledger still explains it.'
-        : 'The number you typed is added to what each blank already holds.',
-      details: entries.slice(0, 6).map(e => ({ label: `${e.blank_type} ${e.color} ${e.size}`, value: bulk.mode === 'set' ? String(e.qty) : `+${e.qty}` }))
+      title: `${copy.title} ${entries.length} blank${entries.length > 1 ? 's' : ''}?`,
+      message: copy.body,
+      details: entries.slice(0, 6).map(e => ({ label: `${e.blank_type} ${e.color} ${e.size}`, value: shown(e) }))
         .concat(entries.length > 6 ? [{ label: '…and more', value: `${entries.length - 6} others` }] : []),
-      confirmLabel: 'Save counts',
+      confirmLabel: copy.label,
     })) return
     setBusy('bulk')
-    const res = await apiFetch('/api/inventory/stock/bulk', { method: 'POST', body: JSON.stringify({ mode: bulk.mode, entries }) })
+    const res = bulk.mode === 'reorder'
+      ? await apiFetch('/api/inventory/reorder-levels', { method: 'POST', body: JSON.stringify({ entries }) })
+      : await apiFetch('/api/inventory/stock/bulk', { method: 'POST', body: JSON.stringify({ mode: bulk.mode, entries }) })
     setBusy(null)
     if (!res || res.error) { toast.error(res?.error || 'Failed to save'); return }
     toast.success(`${res.changed} blank${res.changed === 1 ? '' : 's'} updated`)
     setBulk(null); load()
+  }
+
+  const dismissUnmapped = async (u) => {
+    const body = u ? { product_title: u.product_title, variant: u.variant } : { all: true }
+    if (!await toast.confirm({
+      title: u ? `Dismiss "${u.product_title}"?` : 'Dismiss all unlinked sales?',
+      message: 'This only clears the warning. The sale itself is untouched, and no stock is deducted for it — if the same line turns up again it will reappear.',
+      details: u ? [{ label: 'Variant', value: u.variant }, { label: 'Units', value: String(u.qty) }] : [],
+      confirmLabel: 'Dismiss', danger: true,
+    })) return
+    const res = await apiFetch('/api/inventory/unmapped/dismiss', { method: 'POST', body: JSON.stringify(body) })
+    if (!res || res.error) { toast.error(res?.error || 'Failed to dismiss'); return }
+    toast.success(`${res.dismissed} line${res.dismissed === 1 ? '' : 's'} dismissed`)
+    load()
   }
 
   const openLedger = async (item) => {
@@ -185,16 +228,28 @@ export default function Inventory() {
         {[
           { icon: 'box', label: 'Blanks in stock', value: num(s.units) },
           { icon: 'shirt', label: 'Tracked SKUs', value: num(s.skus) },
-          { icon: 'alert', label: 'At or below reorder level', value: num(s.low) },
-          { icon: 'trending', label: 'Negative counts', value: num(s.negative) },
+          { icon: 'alert', label: 'At or below reorder level', value: num(s.low), key: 'low' },
+          { icon: 'trending', label: 'Negative counts', value: num(s.negative), key: 'negative' },
         ].map(k => (
-          <div className="kpi-card" key={k.label}>
+          <div className={`kpi-card ${k.key ? 'kpi-clickable' : ''} ${focus === k.key ? 'kpi-active' : ''}`} key={k.label}
+            onClick={() => k.key && setFocus(focus === k.key ? null : k.key)}
+            title={k.key ? 'Show only these blanks' : undefined}>
             <div className="kpi-head"><div className="kpi-icon"><Icon name={k.icon} size={20} /></div></div>
             <div className="kpi-value">{k.value}</div>
             <div className="kpi-label">{k.label}</div>
           </div>
         ))}
       </div>
+
+      {focus && (
+        <div className="focus-bar">
+          <span>
+            Showing only blanks {focus === 'low' ? 'at or below their reorder level' : 'with a negative count'}.
+            {focus === 'low' && !s.low ? ' None yet — set reorder levels first, in Bulk edit → Reorder level.' : ''}
+          </span>
+          <button className="mini-btn" onClick={() => setFocus(null)}>Show everything</button>
+        </div>
+      )}
 
       {/* A negative count means more was sold than the recorded stock — almost always an opening
           count that has not been entered yet, and worth saying so rather than showing a bare
@@ -214,7 +269,13 @@ export default function Inventory() {
       )}
 
       {types.map(type => {
-        const sizes = sizesFor(type), colors = colorsFor(type)
+        const inFocus = (item) => !focus || (focus === 'low'
+          ? !!item && item.reorder_level > 0 && item.qty <= item.reorder_level
+          : !!item && item.qty < 0)
+        const sizes = sizesFor(type)
+        // While focused, drop colours with nothing to show so the page is only what needs acting on.
+        const colors = colorsFor(type).filter(color => !focus
+          || sizes.some(sz => inFocus(byKey.get(`${type}|${color}|${sz}`))))
         if (!colors.length) return null
         return (
           <div className="card" style={{ marginBottom: 18 }} key={type}>
@@ -253,7 +314,7 @@ export default function Inventory() {
                           }
                           return (
                             <td key={sz} style={{ textAlign: 'center' }}>
-                              <button type="button" className={`inv-cell inv-${cellTone(item)}`}
+                              <button type="button" className={`inv-cell inv-${cellTone(item)} ${focus && !inFocus(item) ? 'inv-dimmed' : ''}`}
                                 onClick={() => (canEdit ? openCell(type, color, sz) : item && openLedger(item))}
                                 title={item ? `${item.qty} in stock · ${item.sold_30d} sold in 30 days` : 'Not counted yet'}>
                                 {item ? item.qty : '–'}
@@ -298,14 +359,23 @@ export default function Inventory() {
         <div className="card">
           <h2 style={{ fontSize: 15, marginBottom: 6 }}>Sold but not linked to a blank</h2>
           <p style={{ color: 'var(--text-muted)', fontSize: 12.5, marginBottom: 10 }}>
-            These sold without drawing stock. Usually a product with no type set in Shopify — fix it there and hit Refresh catalog.
+            These sold without drawing stock. Usually a product with no type set in Shopify — fix it there and
+            hit Refresh catalog. A product since deleted from Shopify can never be linked, so dismiss those.
           </p>
           {data.unmapped.map((u, i) => (
             <div className="review-row" key={i}>
               <span><b>{u.product_title}</b> · {u.variant || '—'} · {u.qty} sold</span>
-              <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>{u.reason}</span>
+              <span style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>{u.reason}</span>
+                {canEdit && <button className="mini-btn" onClick={() => dismissUnmapped(u)}>Dismiss</button>}
+              </span>
             </div>
           ))}
+          {canEdit && data.unmapped.length > 1 && (
+            <button className="btn btn-secondary" style={{ marginTop: 12 }} onClick={() => dismissUnmapped(null)}>
+              Dismiss all {data.unmapped.length}
+            </button>
+          )}
         </div>
       )}
 
@@ -314,17 +384,18 @@ export default function Inventory() {
           <div className="bulk-modes">
             <button className={`mini-btn ${bulk.mode === 'set' ? 'mini-btn-active' : ''}`} onClick={() => startBulk('set')}>Counted stock</button>
             <button className={`mini-btn ${bulk.mode === 'add' ? 'mini-btn-active' : ''}`} onClick={() => startBulk('add')}>Received more</button>
+            <button className={`mini-btn ${bulk.mode === 'reorder' ? 'mini-btn-active' : ''}`} onClick={() => startBulk('reorder')}>Reorder level</button>
             <span className="bulk-hint">
-              {bulk.mode === 'set'
-                ? 'Type what you counted. Each cell is set to that number, whatever it reads now.'
-                : 'Type how many arrived. Leave a cell blank to leave it alone.'}
+              {bulk.mode === 'set' ? 'Type what you counted. Each cell is set to that number, whatever it reads now.'
+                : bulk.mode === 'add' ? 'Type how many arrived. Leave a cell blank to leave it alone.'
+                  : 'Type the level each blank should not fall below. 0 means never flag it.'}
             </span>
           </div>
           <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
             <b>{bulkChanges().length} changed</b>
             <button className="btn btn-secondary" onClick={() => setBulk(null)} disabled={busy === 'bulk'}>Cancel</button>
             <button className="btn btn-primary" onClick={saveBulk} disabled={busy === 'bulk'}>
-              {busy === 'bulk' ? 'Saving…' : 'Save counts'}
+              {busy === 'bulk' ? 'Saving…' : BULK_COPY[bulk.mode].label}
             </button>
           </div>
         </div>
@@ -346,6 +417,11 @@ export default function Inventory() {
             <div className="input-group" style={{ marginTop: 10 }}>
               <label>{mode === 'set' ? 'Set the count to' : 'Add this many'}</label>
               <input type="number" value={qty} autoFocus onChange={e => setQty(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') saveCount() }} />
+            </div>
+            <div className="input-group">
+              <label>Reorder level — flag this blank at or below</label>
+              <input type="number" min="0" value={reorder} onChange={e => setReorder(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter') saveCount() }} />
             </div>
             <div className="confirm-actions">
