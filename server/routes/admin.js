@@ -4,6 +4,27 @@ const db = require('../db/connection');
 
 const router = express.Router();
 
+// The one place a client permission key is paired with its database column. Reading a user,
+// creating one and updating one all build their SQL from this, because when those lists were
+// written out by hand they drifted: a column added to the select but not the insert broke user
+// creation outright, twice.
+const PERM_MAP = {
+  dashboard: 'can_view_dashboard', customers: 'can_view_customers', orders: 'can_view_orders',
+  scanner: 'can_scan_orders', sync: 'can_sync_data',
+  normless: 'can_access_normless', crewfit: 'can_access_crewfit',
+  crewfit_followups: 'can_view_crewfit_followups', crewfit_orders: 'can_view_crewfit_orders',
+  crewfit_catalog: 'can_view_crewfit_catalog', crewfit_analytics: 'can_view_crewfit_analytics',
+  crewfit_calculator: 'can_view_crewfit_calculator', crewfit_payments: 'can_view_crewfit_payments',
+  crewfit_customers: 'can_view_crewfit_customers', revenue: 'can_view_revenue',
+  invoices: 'can_view_invoices', crewfit_vendors: 'can_view_crewfit_vendors',
+  crewfit_invoices: 'can_view_crewfit_invoices', crewfit_orders_edit: 'can_edit_crewfit_orders',
+  inventory: 'can_view_inventory', inventory_edit: 'can_edit_inventory',
+  marketing: 'can_view_marketing', marketing_dispatch: 'can_dispatch_marketing',
+};
+const PERM_KEYS = Object.keys(PERM_MAP);
+const PERM_COLUMNS = Object.values(PERM_MAP);
+
+
 const ROLES = ['operator', 'admin', 'owner'];
 
 /**
@@ -39,9 +60,7 @@ router.get('/users', async (req, res) => {
 
     const result = await db.query(`
       SELECT id, username, role, is_active, last_login, login_count, created_at,
-             can_view_dashboard, can_view_customers, can_view_orders, can_scan_orders, can_sync_data,
-             can_access_normless, can_access_crewfit,
-             can_view_crewfit_followups, can_view_crewfit_orders, can_view_crewfit_catalog, can_view_crewfit_analytics, can_view_crewfit_calculator, can_view_crewfit_payments, can_view_crewfit_customers, can_view_revenue, can_view_invoices, can_view_crewfit_vendors, can_view_crewfit_invoices, can_edit_crewfit_orders, can_view_marketing, can_dispatch_marketing, can_view_inventory, can_edit_inventory
+             ${PERM_COLUMNS.join(', ')}
       FROM admin_users
       ORDER BY created_at DESC
     `);
@@ -76,21 +95,11 @@ router.post('/users', async (req, res) => {
     const hash = bcrypt.hashSync(password, salt);
     const p = permissions || {};
 
-    await db.query(`
-      INSERT INTO admin_users (
-        username, password_hash, role, is_active,
-        can_view_dashboard, can_view_customers, can_view_orders, can_scan_orders, can_sync_data,
-        can_access_normless, can_access_crewfit,
-        can_view_crewfit_followups, can_view_crewfit_orders, can_view_crewfit_catalog, can_view_crewfit_analytics, can_view_crewfit_calculator, can_view_crewfit_payments, can_view_crewfit_customers, can_view_revenue, can_view_invoices, can_view_crewfit_vendors, can_view_crewfit_invoices, can_edit_crewfit_orders, can_view_marketing, can_dispatch_marketing
-      ) VALUES ($1, $2, $3, true, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
-    `, [
-      username, hash, role || 'operator',
-      !!p.dashboard, !!p.customers, !!p.orders, !!p.scanner, !!p.sync,
-      !!p.normless, !!p.crewfit, !!p.crewfit_followups, !!p.crewfit_orders, !!p.crewfit_catalog, !!p.crewfit_analytics, !!p.crewfit_calculator, !!p.crewfit_payments, !!p.crewfit_customers, !!p.revenue, !!p.invoices, !!p.crewfit_vendors,
-      !!p.crewfit_invoices, !!p.crewfit_orders_edit,
-      !!p.marketing, !!p.marketing_dispatch,
-      !!p.inventory, !!p.inventory_edit
-    ]);
+    const cols = ['username', 'password_hash', 'role', 'is_active', ...PERM_COLUMNS];
+    const vals = [username, hash, role || 'operator', true, ...PERM_KEYS.map(k => !!p[k])];
+    await db.query(
+      `INSERT INTO admin_users (${cols.join(', ')})
+       VALUES (${cols.map((_, i) => `$${i + 1}`).join(', ')})`, vals);
 
     res.json({ success: true, message: 'User created' });
   } catch (err) {
@@ -117,18 +126,6 @@ router.put('/users/:id', async (req, res) => {
       const bad = await guardRoleChange(req, req.params.id, 'operator');
       if (bad) return res.status(403).json({ error: bad });
     }
-    const PERM_MAP = {
-      dashboard: 'can_view_dashboard', customers: 'can_view_customers', orders: 'can_view_orders',
-      scanner: 'can_scan_orders', sync: 'can_sync_data',
-      normless: 'can_access_normless', crewfit: 'can_access_crewfit',
-      crewfit_followups: 'can_view_crewfit_followups', crewfit_orders: 'can_view_crewfit_orders', crewfit_catalog: 'can_view_crewfit_catalog',
-      crewfit_analytics: 'can_view_crewfit_analytics', crewfit_calculator: 'can_view_crewfit_calculator',
-      crewfit_payments: 'can_view_crewfit_payments', crewfit_customers: 'can_view_crewfit_customers', revenue: 'can_view_revenue',
-      invoices: 'can_view_invoices', crewfit_vendors: 'can_view_crewfit_vendors',
-      crewfit_invoices: 'can_view_crewfit_invoices', crewfit_orders_edit: 'can_edit_crewfit_orders',
-      inventory: 'can_view_inventory', inventory_edit: 'can_edit_inventory',
-      marketing: 'can_view_marketing', marketing_dispatch: 'can_dispatch_marketing',
-    };
 
     const sets = [], vals = [];
     if (role !== undefined) { vals.push(role); sets.push(`role = $${vals.length}`); }
