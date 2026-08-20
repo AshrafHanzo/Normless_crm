@@ -58,7 +58,6 @@ export default function CrewfitDashboard() {
     { icon: '📦', label: 'Total Orders', value: stats.total, sub: `${(stats.totalUnits ?? 0).toLocaleString('en-IN')} units`, tone: 'primary' },
     { icon: '🔄', label: 'Active (in pipeline)', value: stats.active, sub: `${(stats.activeUnits ?? 0).toLocaleString('en-IN')} units`, tone: 'info' },
     { icon: '✅', label: 'Dispatched', value: stats.dispatched, tone: 'success' },
-    { icon: '💰', label: 'Pending Payments', value: fmt(stats.pendingPayments), tone: 'warning' },
   ] : []
 
   return (

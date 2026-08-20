@@ -502,6 +502,7 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
   const [labelBusy, setLabelBusy] = useState(false)
   const [payments, setPayments] = useState([])
   const [documents, setDocuments] = useState([]) // issued proformas + tax invoices
+  const [history, setHistory] = useState(null)   // { history, statusRuns } once opened
   const [payBusy, setPayBusy] = useState(null) // 'advance' | 'balance' while a link call is in flight
   const [deleting, setDeleting] = useState(false)
   const [custHistory, setCustHistory] = useState(null) // prior orders on this phone, or null while unknown
@@ -563,7 +564,8 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
     else if (target) openEdit(target)
     else setForm(null)
     setPayments([]); setDocuments([])
-    if (target && target !== 'new' && target.id) { loadPayments(target.id); loadDocuments(target.id) }
+    setHistory(null)
+    if (target && target !== 'new' && target.id) { loadPayments(target.id); loadDocuments(target.id); loadHistory(target.id) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [target])
 
@@ -574,6 +576,10 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
   }
   // Tax documents live in their own table now, not on the order — an issued number outlives the
   // order it was raised for.
+  const loadHistory = async (orderId) => {
+    const res = await apiFetch(`/api/crewfit/orders/${orderId}/history`)
+    if (res && !res.error) setHistory(res)
+  }
   const loadDocuments = async (orderId) => {
     const res = await apiFetch(`/api/crewfit/orders/${orderId}/documents`)
     if (res && !res.error) setDocuments(res.documents || [])
@@ -1415,6 +1421,40 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
                 Send the production photos first, then share this — it recaps the order, shows what’s already paid and carries the balance link.
               </div>
               <div className="order-block">{balanceMessage}</div>
+            </>
+          )}
+
+          {!!history?.history?.length && (
+            <>
+              <div className="form-section">History</div>
+              {/* How long each status was held, because the useful question is usually not what
+                  happened but where the order sat. */}
+              {!!history.statusRuns.length && (
+                <div className="status-runs">
+                  {history.statusRuns.map((r, i) => (
+                    <span className={`run-chip ${r.open ? 'run-open' : ''}`} key={i}
+                      title={`${r.status} since ${new Date(r.from).toLocaleString('en-IN')}${r.by ? ` · set by ${r.by}` : ''}`}>
+                      {r.status} <b>{r.hours < 48 ? `${r.hours}h` : `${Math.round(r.hours / 24)}d`}</b>
+                      {r.open ? ' so far' : ''}
+                    </span>
+                  ))}
+                </div>
+              )}
+              <div className="history-list">
+                {history.history.map(h => (
+                  <div className="review-row" key={h.id}>
+                    <span>
+                      {h.action === 'create'
+                        ? <b>Order created</b>
+                        : <><b>{history.labels?.[h.field] || h.field}</b>{' '}
+                          <span style={{ color: 'var(--text-muted)' }}>{h.old_value || '—'} → </span>{h.new_value || '—'}</>}
+                    </span>
+                    <span style={{ color: 'var(--text-muted)', fontSize: 11.5, whiteSpace: 'nowrap' }}>
+                      {h.changed_by || 'system'} · {new Date(h.changed_at).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                    </span>
+                  </div>
+                ))}
+              </div>
             </>
           )}
 

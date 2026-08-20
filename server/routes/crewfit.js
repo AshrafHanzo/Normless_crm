@@ -144,6 +144,55 @@ function photoStatus(items, field) {
   return n === items.length ? 'Complete' : 'Partial';
 }
 
+
+/**
+ * Fields worth a history entry. Deliberately not everything: the point of the log is to answer
+ * "who moved this order on, and when", so it tracks the pipeline fields and the money, and leaves
+ * out the noisy ones (line items, notes, image lists) that would bury them.
+ */
+const AUDITED = {
+  status: 'Status', payment_status: 'Payment', layout_status: 'Layout',
+  deadline_at: 'Deadline', dispatch_date: 'Dispatch date', tracking_link: 'Tracking ID',
+  mot: 'Courier', vendor: 'Vendor', so: 'Sales officer', grand_total: 'Order value',
+  advance: 'Advance', balance: 'Balance', customer_name: 'Customer', place_of_supply: 'Place of supply',
+};
+
+/** Record the fields that actually changed. Never allowed to fail the write it is describing. */
+async function recordAudit(order, before, after, user, action = 'update') {
+  try {
+    // A creation is one event, not one per field it happened to be given. Record it as a single
+    // entry carrying the status the order started in — the rest of its opening values are the
+    // order itself, which is already stored.
+    if (action === 'create') {
+      await db.query(
+        `INSERT INTO crewfit_order_audit (order_id, sl_no, customer_name, field, old_value, new_value, action, changed_by)
+         VALUES ($1,$2,$3,'status',NULL,$4,'create',$5)`,
+        [order.id, order.sl_no, order.customer_name, normaliseAudit(after.status), user || null]);
+      return;
+    }
+    const rows = [];
+    for (const field of Object.keys(AUDITED)) {
+      if (!(field in after)) continue;
+      const from = before ? normaliseAudit(before[field]) : null;
+      const to = normaliseAudit(after[field]);
+      if (from === to) continue;
+      rows.push([order.id, order.sl_no, order.customer_name, field, from, to, action, user || null]);
+    }
+    for (const r of rows) {
+      await db.query(
+        `INSERT INTO crewfit_order_audit (order_id, sl_no, customer_name, field, old_value, new_value, action, changed_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, r);
+    }
+  } catch (err) {
+    console.error('could not record order history:', err.message);
+  }
+}
+const normaliseAudit = (v) => {
+  if (v === null || v === undefined || v === '') return null;
+  if (v instanceof Date) return toDateStr(v);
+  return String(v);
+};
+
 // GET /api/crewfit/meta — dropdown options (merges defaults with values seen in data)
 router.get('/meta', async (req, res) => {
   try {
@@ -200,15 +249,19 @@ router.get('/analytics', async (req, res) => {
     const orderValue = (o) => Number(o.grand_total) || Number(o.total_cost) || 0;
 
     // --- Revenue ---
-    const totalRevenue = nonCancelled.reduce((s, o) => s + orderValue(o), 0);
-    const collectedRevenue = nonCancelled.reduce((s, o) => {
+    // An order counts towards revenue only once its advance is in. Anyone can raise an order;
+    // until the customer has actually paid something it is an intention, not a sale, and letting
+    // it into the figures inflates them by however many quotes are sitting unpaid.
+    const earning = nonCancelled.filter(o => o.payment_status && o.payment_status !== 'Pending');
+    const totalRevenue = earning.reduce((s, o) => s + orderValue(o), 0);
+    const collectedRevenue = earning.reduce((s, o) => {
       const val = orderValue(o);
       if (o.payment_status === 'Fully Paid') return s + val;
       if (o.payment_status === '50% Paid') return s + (Number(o.advance) || Math.round(val / 2));
       return s;
     }, 0);
     const pendingRevenue = Math.max(0, totalRevenue - collectedRevenue);
-    const avgOrderValue = nonCancelled.length ? totalRevenue / nonCancelled.length : 0;
+    const avgOrderValue = earning.length ? totalRevenue / earning.length : 0;
 
     // --- Customers & retention (keyed by phone, falling back to name) ---
     const custKey = (o) => (o.contact_number || o.customer_name || '').trim().toLowerCase();
@@ -523,8 +576,12 @@ router.put('/orders/:id', canEditOrders, async (req, res) => {
     const set = fields.map((f, i) => `${f} = $${i + 1}`).join(', ');
     const vals = fields.map(f => f === 'line_items' ? JSON.stringify(body[f] || []) : (body[f] === '' ? null : body[f]));
     vals.push(req.params.id);
+    // Read the whole row first: `current` above only carries the handful of columns the pipeline
+    // rules need, and the history has to diff against what the field actually held.
+    const before = (await db.query('SELECT * FROM crewfit_orders WHERE id = $1', [req.params.id])).rows[0];
     await db.query(`UPDATE crewfit_orders SET ${set}, updated_at = CURRENT_TIMESTAMP WHERE id = $${fields.length + 1}`, vals);
     const r = await db.query('SELECT * FROM crewfit_orders WHERE id = $1', [req.params.id]);
+    await recordAudit(r.rows[0], before, r.rows[0], req.user?.username);
     res.json(parseOrder(r.rows[0]));
   } catch (err) {
     console.error('crewfit update error:', err); res.status(500).json({ error: 'Failed to update order' });
@@ -550,6 +607,11 @@ router.post('/orders', canEditOrders, async (req, res) => {
     if (body.status === 'Ready for Dispatch' && body.payment_status === 'Fully Paid') {
       body.status = 'Dispatch Pending';
     }
+    // Until the advance lands there is nothing to produce, so an order starts life waiting for it.
+    // Recording a payment moves it to Pending on its own (see the update route).
+    if (!body.status) body.status = 'Awaiting Payment';
+    if (!body.payment_status) body.payment_status = 'Pending';
+
     // Every order is dated the day it was raised unless one was typed in. Defaulted here rather
     // than only in the drawer because orders also arrive prefilled from a quote, which skips the
     // blank-order defaults entirely and was leaving order_date NULL.
@@ -578,6 +640,7 @@ router.post('/orders', canEditOrders, async (req, res) => {
     const vals = [sl_no, ...provided.map(c => c === 'line_items' ? JSON.stringify(body[c] || []) : body[c])];
     const ph = allCols.map((_, i) => `$${i + 1}`).join(',');
     const r = await db.query(`INSERT INTO crewfit_orders (${allCols.join(',')}) VALUES (${ph}) RETURNING *`, vals);
+    await recordAudit(r.rows[0], null, r.rows[0], req.user?.username, 'create');
     res.status(201).json(parseOrder(r.rows[0]));
   } catch (err) {
     console.error('crewfit create error:', err); res.status(500).json({ error: 'Failed to create order' });
@@ -723,6 +786,75 @@ router.get('/orders/:id/invoice/:type', canEditOrders, async (req, res) => {
   } catch (err) {
     console.error('crewfit invoice error:', err);
     if (!res.headersSent) res.status(500).json({ error: 'Failed to generate invoice' });
+  }
+});
+
+/**
+ * GET /api/crewfit/orders/:id/history — this order's timeline.
+ *
+ * Also returns how long the order held each status, which is the question behind "where did the
+ * time go": a list of changes tells you what happened, the gaps between them tell you where it
+ * stalled. The final status runs to now, since it is still being held.
+ */
+router.get('/orders/:id/history', async (req, res) => {
+  try {
+    const r = await db.query(
+      `SELECT id, field, old_value, new_value, action, changed_by, changed_at
+         FROM crewfit_order_audit WHERE order_id = $1 ORDER BY changed_at ASC, id ASC`, [req.params.id]);
+
+    const statusRuns = [];
+    const statuses = r.rows.filter(x => x.field === 'status');
+    statuses.forEach((row, i) => {
+      const until = statuses[i + 1] ? new Date(statuses[i + 1].changed_at) : new Date();
+      const hours = (until - new Date(row.changed_at)) / 3600000;
+      statusRuns.push({
+        status: row.new_value, from: row.changed_at, hours: Math.round(hours * 10) / 10,
+        open: !statuses[i + 1], by: row.changed_by,
+      });
+    });
+
+    res.json({ history: r.rows.reverse(), statusRuns, labels: AUDITED });
+  } catch (err) {
+    console.error('crewfit order history error:', err);
+    res.status(500).json({ error: 'Failed to load history' });
+  }
+});
+
+/**
+ * GET /api/crewfit/activity — every order change, newest first. Owner/admin only: it names who
+ * did what, which is not something a team should be able to browse about each other.
+ */
+const AUDIT_SORTS = { changed_at: 'changed_at', sl_no: 'sl_no', field: 'field', changed_by: 'changed_by' };
+router.get('/activity', async (req, res) => {
+  if (!['owner', 'admin'].includes(req.user?.role)) return res.status(403).json({ error: 'Access denied' });
+  try {
+    const { user = '', field = '', search = '', from = '', to = '' } = req.query;
+    const t = tableParams(req.query, { sortable: AUDIT_SORTS, defaultSort: 'changed_at' });
+    const where = [], vals = [];
+    if (user) { vals.push(user); where.push(`changed_by = $${vals.length}`); }
+    if (field) { vals.push(field); where.push(`field = $${vals.length}`); }
+    if (from) { vals.push(from); where.push(`changed_at >= $${vals.length}::date`); }
+    // `to` is a day, and a timestamp inside it is later than midnight — compare against the
+    // following midnight or the last day of a range silently drops its own changes.
+    if (to) { vals.push(to); where.push(`changed_at < ($${vals.length}::date + INTERVAL '1 day')`); }
+    if (search.trim()) {
+      vals.push(`%${search.trim()}%`);
+      where.push(`(customer_name ILIKE $${vals.length} OR new_value ILIKE $${vals.length} OR CAST(sl_no AS TEXT) ILIKE $${vals.length})`);
+    }
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+
+    const total = (await db.query(`SELECT COUNT(*)::int AS n FROM crewfit_order_audit ${whereSql}`, vals)).rows[0]?.n || 0;
+    const rows = (await db.query(
+      `SELECT id, order_id, sl_no, customer_name, field, old_value, new_value, action, changed_by, changed_at
+         FROM crewfit_order_audit ${whereSql} ${t.orderBy} LIMIT ${t.limit} OFFSET ${t.offset}`, vals)).rows;
+
+    const users = (await db.query(
+      'SELECT changed_by, COUNT(*)::int AS n FROM crewfit_order_audit WHERE changed_by IS NOT NULL GROUP BY 1 ORDER BY 2 DESC')).rows;
+
+    res.json({ activity: rows, pagination: pagination(total, t), users, fields: AUDITED });
+  } catch (err) {
+    console.error('crewfit activity error:', err);
+    res.status(500).json({ error: 'Failed to load activity' });
   }
 });
 

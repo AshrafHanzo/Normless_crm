@@ -562,6 +562,33 @@ async function ensureCrewfitSchema() {
     }
 }
 
+// Who changed what on a Crewfit order, and when.
+//
+// One row per field per change, rather than a snapshot of the order: the questions this has to
+// answer are "who moved this to Dispatched" and "how long did it sit in production", and both are
+// about a single field's history, not the whole record's.
+async function ensureOrderAuditSchema() {
+    try {
+        await db.exec(`
+            CREATE TABLE IF NOT EXISTS crewfit_order_audit (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                order_id INTEGER NOT NULL,
+                sl_no INTEGER,
+                customer_name TEXT,
+                field TEXT NOT NULL,
+                old_value TEXT,
+                new_value TEXT,
+                action TEXT NOT NULL DEFAULT 'update',  -- 'create' | 'update' | 'delete'
+                changed_by TEXT,
+                changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS crewfit_audit_order_idx ON crewfit_order_audit (order_id, changed_at);
+            CREATE INDEX IF NOT EXISTS crewfit_audit_when_idx ON crewfit_order_audit (changed_at DESC);
+            CREATE INDEX IF NOT EXISTS crewfit_audit_who_idx ON crewfit_order_audit (changed_by);
+        `);
+    } catch (e) { console.error('crewfit audit schema ensure:', e.message); }
+}
+
 // Blank-garment inventory (Normless → Inventory menu).
 //
 // Stock is held per BLANK — a plain garment in one colour and size — not per design. Seventy-odd
@@ -835,6 +862,7 @@ app.listen(PORT, async () => {
     // Ensure GST sales invoicing schema
     await ensureGstSchema();
     await ensureInventorySchema();
+    await ensureOrderAuditSchema();
     // Ensure influencer marketing schema
     await ensureMarketingSchema();
 

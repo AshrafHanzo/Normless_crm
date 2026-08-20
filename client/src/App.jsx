@@ -27,6 +27,7 @@ import CrewfitPayments from './pages/crewfit/CrewfitPayments'
 import CrewfitCustomers from './pages/crewfit/CrewfitCustomers'
 import CrewfitVendorOrders from './pages/crewfit/CrewfitVendorOrders'
 import CrewfitInvoices from './pages/crewfit/CrewfitInvoices'
+import CrewfitActivity from './pages/crewfit/CrewfitActivity'
 import Inventory from './pages/Inventory'
 
 // API base. In dev, VITE_API_URL (from .env.development.local) points at the
@@ -78,6 +79,21 @@ function ProtectedRoute({ children, permission }) {
     const isOwnerOrAdmin = user.role === 'owner' || user.role === 'admin'
     if (!isOwnerOrAdmin && !user[permission]) return <Navigate to="/scan" replace />
   }
+  return children
+}
+
+/**
+ * A page only owners and admins may open.
+ *
+ * The role check has to wait for the user to load: on a direct page load `user` is null until
+ * /verify comes back, and deciding then would bounce an admin off their own page before the
+ * answer arrived.
+ */
+function AdminRoute({ children }) {
+  const { token, user } = useAuth()
+  if (!token) return <Navigate to="/login" replace />
+  if (!user) return <div className="loader"><div className="spinner" /></div>
+  if (user.role !== 'owner' && user.role !== 'admin') return <Navigate to="/" replace />
   return children
 }
 
@@ -144,7 +160,7 @@ function App() {
             <Route path="/invoices" element={<ProtectedRoute permission="can_view_invoices"><AppLayout><Invoices /></AppLayout></ProtectedRoute>} />
             <Route path="/inventory" element={<ProtectedRoute permission="can_view_inventory"><AppLayout><Inventory /></AppLayout></ProtectedRoute>} />
             <Route path="/settings" element={<ProtectedRoute permission="can_sync_data"><AppLayout><Settings /></AppLayout></ProtectedRoute>} />
-            <Route path="/admin" element={<ProtectedRoute><AppLayout>{(user?.role === 'owner' || user?.role === 'admin') ? <Admin /> : <Navigate to="/" replace />}</AppLayout></ProtectedRoute>} />
+            <Route path="/admin" element={<AdminRoute><AppLayout><Admin /></AppLayout></AdminRoute>} />
             <Route path="/profile" element={<ProtectedRoute><AppLayout><Profile /></AppLayout></ProtectedRoute>} />
 
             {/* Crewfit CRM */}
@@ -157,6 +173,8 @@ function App() {
             <Route path="/crewfit/customers" element={<ProtectedRoute permission="can_view_crewfit_customers"><AppLayout><CrewfitCustomers /></AppLayout></ProtectedRoute>} />
             <Route path="/crewfit/vendor-orders" element={<ProtectedRoute permission="can_view_crewfit_vendors"><AppLayout><CrewfitVendorOrders /></AppLayout></ProtectedRoute>} />
             <Route path="/crewfit/invoices" element={<ProtectedRoute permission="can_view_crewfit_invoices"><AppLayout><CrewfitInvoices /></AppLayout></ProtectedRoute>} />
+            {/* Names who changed what, so it is owner/admin only rather than a team-wide view. */}
+            <Route path="/crewfit/activity" element={<AdminRoute><AppLayout><CrewfitActivity /></AppLayout></AdminRoute>} />
           </Routes>
         </BrowserRouter>
         </AuthContext.Provider>

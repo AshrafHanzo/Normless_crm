@@ -29,6 +29,7 @@ const NAV = {
     { to: '/crewfit/payments', icon: 'card', label: 'Payments', perm: 'can_view_crewfit_payments' },
     { to: '/crewfit/vendor-orders', icon: 'truck', label: 'Vendor Orders', perm: 'can_view_crewfit_vendors' },
     { to: '/crewfit/invoices', icon: 'invoice', label: 'Invoices', perm: 'can_view_crewfit_invoices' },
+    { to: '/crewfit/activity', icon: 'bell', label: 'Activity', adminOnly: true },
   ],
 }
 
@@ -39,7 +40,10 @@ export default function Sidebar() {
   const [open, setOpen] = useState(false)
 
   const b = BRANDS[brand] || BRANDS.normless
-  const canSee = (item) => !item.perm || user?.role === 'owner' || user?.role === 'admin' || user?.[item.perm]
+  const isAdminRole = user?.role === 'owner' || user?.role === 'admin'
+  // adminOnly wins over perm: a page that names who did what is not team-wide, and no permission
+  // column should be able to open it.
+  const canSee = (item) => (item.adminOnly ? isAdminRole : (!item.perm || isAdminRole || user?.[item.perm]))
   const items = (NAV[brand] || NAV.normless).filter(canSee)
   const close = () => setOpen(false)
   const switchBrand = (key) => { setBrand(key); navigate(key === 'crewfit' ? '/crewfit' : '/'); close() }
