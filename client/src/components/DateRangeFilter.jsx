@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useLayoutEffect } from 'react'
+import { useState, useRef, useEffect, useLayoutEffect, useCallback, useSyncExternalStore } from 'react'
 import Icon from './Icon'
 
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
@@ -49,6 +49,22 @@ function buildPresets() {
   ]
 }
 
+// One month at a time on a phone: two stacked months do not fit the panel, and the month arrows
+// would scroll out of reach along with them. matchMedia rather than a resize listener, so a
+// rotation into landscape switches back to the two-month view.
+const MOBILE_Q = '(max-width: 720px)'
+// Sizes where CSS turns the panel into a dialog fixed to the viewport rather than a dropdown
+// hanging off the trigger. Kept in step with the media queries in index.css.
+const DIALOG_Q = '(max-width: 720px), (max-height: 560px)'
+function useMediaQuery(query) {
+  const subscribe = useCallback((onChange) => {
+    const mq = window.matchMedia(query)
+    mq.addEventListener('change', onChange)
+    return () => mq.removeEventListener('change', onChange)
+  }, [query])
+  return useSyncExternalStore(subscribe, () => window.matchMedia(query).matches)
+}
+
 function MonthCalendar({ month, lo, hi, onPick, onHover }) {
   const first = startOfMonth(month)
   const startWeekday = first.getDay()
@@ -90,38 +106,72 @@ export default function DateRangeFilter({ startDate, endDate, onApply, onClear }
   const [pendingEnd, setPendingEnd] = useState(null)
   const [hoverDate, setHoverDate] = useState(null)
   const [viewMonth, setViewMonth] = useState(startOfMonth(addMonths(new Date(), -1)))
+  const isMobile = useMediaQuery(MOBILE_Q)
+  const isDialog = useMediaQuery(DIALOG_Q)
+  // Which month to scroll to so that `d` is on screen: the left of the two calendars on desktop,
+  // and the only calendar on mobile.
+  const firstMonth = (d) => startOfMonth(isMobile ? d : addMonths(d, -1))
   const ref = useRef(null)
   const panelRef = useRef(null)
   // The panel hangs off the right of its trigger, which is right for a control in the top-right
-  // corner and wrong for one that has wrapped to the left of a narrow page — there it reaches back
-  // past the viewport edge and disappears under the sidebar. Measured after layout and flipped.
-  const [align, setAlign] = useState('right')
+  // corner and wrong for one on a narrow page, where it reaches back past the left edge and under
+  // the sidebar. Measure after layout and slide it back inside — a clamp rather than a flip to the
+  // other edge, which at tablet widths only threw the panel off the opposite side instead.
+  const [shift, setShift] = useState(null)
   useLayoutEffect(() => {
-    if (!open || !panelRef.current) return
+    if (!open || isDialog || !panelRef.current) return
     const box = panelRef.current.getBoundingClientRect()
     const main = document.querySelector('.main-content')
-    const leftLimit = main ? main.getBoundingClientRect().left : 0
-    if (box.left < leftLimit) setAlign('left')
-    else if (align === 'left' && box.right > window.innerWidth) setAlign('right')
+    const gap = 8
+    const leftLimit = Math.max(gap, main ? main.getBoundingClientRect().left : gap)
+    const rightLimit = window.innerWidth - gap
+    let dx = 0
+    if (box.right > rightLimit) dx = rightLimit - box.right
+    if (box.left + dx < leftLimit) dx = leftLimit - box.left
+    // Same idea downwards: a trigger low on a short window would drop the footer below the fold.
+    // Rise no further than the top of the window, so the panel never leaves by the other edge.
+    let dy = 0
+    if (box.bottom > window.innerHeight - gap) dy = Math.max(gap - box.top, window.innerHeight - gap - box.bottom)
+    setShift(dx || dy ? { dx: Math.round(dx), dy: Math.round(dy) } : null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
   // Re-measure from scratch each time it opens: the page may have resized while it was closed.
-  useEffect(() => { if (!open) setAlign('right') }, [open])
+  useEffect(() => { if (!open) setShift(null) }, [open])
 
   useEffect(() => {
     if (!open) return
     const s = fromKey(startDate), e = fromKey(endDate)
     setPendingStart(s); setPendingEnd(e); setHoverDate(null)
-    setViewMonth(startOfMonth(addMonths(e || new Date(), -1)))
+    setViewMonth(firstMonth(e || new Date()))
   }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!open) return
     const onDown = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
+    const onKey = (e) => { if (e.key === 'Escape') setOpen(false) }
+    // touchstart as well as mousedown: iOS Safari only synthesises mouse events for elements it
+    // considers clickable, so a tap on plain page background would never close the panel.
     document.addEventListener('mousedown', onDown)
-    return () => document.removeEventListener('mousedown', onDown)
+    document.addEventListener('touchstart', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('touchstart', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
   }, [open])
 
+  // The mobile panel covers the page, so the page behind it must not scroll under the finger.
+  useEffect(() => {
+    if (!open || !isMobile) return
+    const previous = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => { document.body.style.overflow = previous }
+  }, [open, isMobile])
+
+  // A tap fires mouseenter on the way in, which would leave a phantom range hanging off the day
+  // just tapped. There is no hover on a touch screen, so there is nothing to preview.
+  const hover = isMobile ? () => {} : setHoverDate
   const presets = buildPresets()
   let lo = pendingStart, hi = pendingEnd
   if (lo && !hi && hoverDate) hi = hoverDate
@@ -132,7 +182,7 @@ export default function DateRangeFilter({ startDate, endDate, onApply, onClear }
     else if (day < pendingStart) { setPendingEnd(pendingStart); setPendingStart(day) }
     else setPendingEnd(day)
   }
-  const pickPreset = (p) => { setPendingStart(p.start); setPendingEnd(p.end); setHoverDate(null); setViewMonth(startOfMonth(addMonths(p.end, -1))) }
+  const pickPreset = (p) => { setPendingStart(p.start); setPendingEnd(p.end); setHoverDate(null); setViewMonth(firstMonth(p.end)) }
   const pickCustom = () => { setPendingStart(null); setPendingEnd(null); setHoverDate(null) }
 
   const apply = () => {
@@ -149,10 +199,14 @@ export default function DateRangeFilter({ startDate, endDate, onApply, onClear }
     <div className="drf" ref={ref}>
       <button type="button" className="drf-trigger" onClick={() => setOpen(o => !o)}>
         <Icon name="calendar" size={15} />
-        <span>{triggerLabel}</span>
+        <span className="drf-trigger-label">{triggerLabel}</span>
       </button>
+      {/* Mobile only (hidden by CSS on desktop): dims the page and gives the sheet a tap-to-close
+          target, since a tap inside the component's own tree never reaches the outside handler. */}
+      {open && <div className="drf-scrim" onClick={() => setOpen(false)} />}
       {open && (
-        <div className={`drf-panel ${align === 'left' ? 'drf-panel-left' : ''}`} ref={panelRef}>
+        <div className="drf-panel" ref={panelRef}
+          style={shift ? { transform: `translate(${shift.dx}px, ${shift.dy}px)` } : undefined}>
           <div className="drf-sidebar">
             {presets.map(p => (
               <div key={p.label}>
@@ -171,8 +225,8 @@ export default function DateRangeFilter({ startDate, endDate, onApply, onClear }
             </div>
             <div className="drf-calendars" onMouseLeave={() => setHoverDate(null)}>
               <button type="button" className="drf-nav drf-nav-prev" onClick={() => setViewMonth(m => addMonths(m, -1))}>‹</button>
-              <MonthCalendar month={viewMonth} lo={lo} hi={hi} onPick={pick} onHover={setHoverDate} />
-              <MonthCalendar month={addMonths(viewMonth, 1)} lo={lo} hi={hi} onPick={pick} onHover={setHoverDate} />
+              <MonthCalendar month={viewMonth} lo={lo} hi={hi} onPick={pick} onHover={hover} />
+              {!isMobile && <MonthCalendar month={addMonths(viewMonth, 1)} lo={lo} hi={hi} onPick={pick} onHover={hover} />}
               <button type="button" className="drf-nav drf-nav-next" onClick={() => setViewMonth(m => addMonths(m, 1))}>›</button>
             </div>
             <div className="drf-footer">

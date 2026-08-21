@@ -487,8 +487,6 @@ select { cursor: pointer; appearance: none;
   background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg); overflow: hidden; animation: fadeIn 0.15s ease;
 }
-/* Flipped when the panel would otherwise reach back past the left edge of the page. */
-.drf-panel-left { right: auto; left: 0; }
 .drf-sidebar { width: 180px; flex-shrink: 0; padding: 10px 0; border-right: 1px solid var(--border); overflow-y: auto; max-height: 480px; }
 .drf-preset {
   display: block; width: 100%; text-align: left; padding: 9px 18px; font-size: 13px; border: none;
@@ -528,11 +526,73 @@ select { cursor: pointer; appearance: none;
 .cal-cell-edge { background: var(--primary); color: #fff; font-weight: 700; }
 .drf-footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border); }
 .drf-summary { font-size: 12.5px; color: var(--text-muted); }
+.drf-scrim { display: none; }
+@keyframes drfSheetUp { from { transform: translateY(100%); } to { transform: none; } }
+
+/* ---- Too little room to hang below the trigger: a dialog, not a dropdown -----
+   A dropdown taller than the screen loses its own footer — the range can be picked but never
+   applied, because nothing scrolls and Apply sits below the fold. Both a phone held upright and
+   a short window (a phone on its side, a half-height browser) hit that. In those sizes the panel
+   is bounded by the viewport, the calendar is the only part that scrolls, and the footer is
+   pinned where it cannot be pushed off. */
+@media (max-width: 720px), (max-height: 560px) {
+  .drf-scrim { display: block; position: fixed; inset: 0; z-index: 205; background: rgba(0,0,0,0.55); animation: fadeIn 0.15s ease; }
+  /* Above the floating menu button (z-index 200), which otherwise lands on top of the panel. */
+  .drf-panel { position: fixed; z-index: 206; }
+  .drf-main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .drf-calendars { flex: 1; min-height: 0; overflow-y: auto; }
+  .drf-footer { flex-shrink: 0; }
+}
+
+/* ---- Phone: a bottom sheet, sized to the picker ----
+   One month at a time (the component drops the second) and the presets as a wrapping chip row,
+   because two stacked months plus a 16-item list is far more than a phone screen holds. */
 @media (max-width: 720px) {
-  .drf-panel { position: fixed; inset: 12px; flex-direction: column; }
-  .drf-sidebar { width: 100%; max-height: 140px; border-right: none; border-bottom: 1px solid var(--border); display: flex; flex-wrap: wrap; }
+  .drf-panel {
+    top: auto; left: 0; right: 0; bottom: 0;
+    max-width: none; max-height: min(92vh, 720px); flex-direction: column;
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0; border-bottom: none;
+    animation: drfSheetUp 0.22s cubic-bezier(0.22,1,0.36,1);
+  }
+  .drf-sidebar {
+    /* Four rows of chips, with the next row half-showing so it is obvious the list scrolls. */
+    width: 100%; max-height: 168px; flex-shrink: 0; border-right: none;
+    border-bottom: 1px solid var(--border); display: flex; flex-wrap: wrap; gap: 6px; padding: 12px;
+  }
+  /* Chips, so the presets read as a set of choices rather than as broken rows of a list —
+     and so the whole set is reachable instead of the last five being cut off. */
+  .drf-preset {
+    width: auto; padding: 7px 13px; font-size: 12.5px; border: 1px solid var(--border);
+    border-radius: 999px; line-height: 1.2;
+  }
+  .drf-divider { display: none; }
+  .drf-main { padding: 14px 14px 0; }
+  .drf-fields { gap: 8px; margin-bottom: 12px; }
+  .drf-field { flex: 1; min-width: 0; text-align: center; padding: 9px 6px; font-size: 12.5px; }
   .drf-calendars { flex-direction: column; gap: 20px; }
-  .drf-nav-next { right: 6px; }
+  .cal-month { width: 100%; max-width: 340px; margin: 0 auto; }
+  .drf-nav { top: 0; }
+  .drf-nav-prev { left: 0; }
+  .drf-nav-next { right: 0; }
+  .cal-cell { font-size: 13.5px; }
+  .drf-footer {
+    flex-wrap: wrap; gap: 10px; margin-top: 0;
+    padding: 12px 0 max(14px, env(safe-area-inset-bottom));
+  }
+  .drf-summary { flex: 1 0 100%; }
+  .drf-footer .btn-sm { flex: 1; min-height: 40px; }
+  .drf-footer > span:last-child { flex: 1; }
+}
+
+/* ---- Short window, full width (a phone in landscape): keep the two-pane layout, centre it
+   in the viewport and let the preset list and the calendars scroll inside their own panes. */
+@media (min-width: 721px) and (max-height: 560px) {
+  .drf-panel {
+    top: 12px; bottom: 12px; left: 50%; right: auto; transform: translateX(-50%);
+  }
+  .drf-sidebar { max-height: none; }
+  .drf-main { padding: 14px 18px; }
+  .drf-footer { margin-top: 12px; padding-top: 12px; }
 }
 
 .kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; margin-bottom: 22px; }
@@ -1210,9 +1270,14 @@ html, body { max-width: 100%; overflow-x: hidden; }
   .dash-toolbar > div { width: 100%; }
   /* :not(:first-child) — when the toolbar is title-only, its single div holds the
      h1 + subtitle and must stay stacked, not become a side-by-side action row. */
-  .dash-toolbar > div:last-child:not(:first-child) { display: flex; gap: 10px; }
-  .dash-toolbar > div:last-child:not(:first-child) > * { flex: 1; }
+  .dash-toolbar > div:last-child:not(:first-child) { display: flex; gap: 10px; flex-wrap: wrap; }
+  .dash-toolbar > div:last-child:not(:first-child) > * { flex: 1 1 auto; }
   .drf, .drf-trigger { width: 100%; justify-content: center; }
+  /* A full date range never shares a row with buttons without one of them being squeezed to
+     nothing — give the filter its own line and let the buttons split the next one. */
+  .dash-toolbar .drf { flex: 1 0 100%; }
+  /* Belt and braces for the longest ranges: ellipsis rather than a wider-than-screen toolbar. */
+  .drf-trigger-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .page-header { margin-bottom: 20px; }
   .section-header { flex-wrap: wrap; gap: 10px; }
 
