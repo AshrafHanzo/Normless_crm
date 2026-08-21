@@ -214,6 +214,11 @@ function fabricSpec(it) {
   return [it.gsm ? `${it.gsm} GSM` : null, it.material].filter(Boolean).join(' · ');
 }
 
+/** What is being printed and where, when the quote says. Both are optional free text. */
+function printingSpec(it) {
+  return [it.printing_placement, it.printing_type].filter(Boolean).join(' · ');
+}
+
 // Quotations aren't tax documents — no sequence number, no GSTIN requirement — just a clean,
 // shareable price breakdown for a Crewfit quote.
 function renderQuote(doc, quote) {
@@ -260,7 +265,7 @@ function renderQuote(doc, quote) {
     // a second line, so the old fixed 16pt row would have overlapped the next one.
     if (y > 690) { doc.addPage(); y = 50; }
     const name = it.product_name || '-';
-    const spec = fabricSpec(it);
+    const spec = [fabricSpec(it), printingSpec(it)].filter(Boolean).join('\n');
 
     doc.font('Helvetica').fontSize(9).fillColor('#1a1a1a');
     const nameH = doc.heightOfString(name, { width: 260 });

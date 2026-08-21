@@ -10,7 +10,7 @@ import CrewfitOrderDrawer from './CrewfitOrderDrawer'
 import { cleanMobile, mobileError, isValidMobile, mobileInputProps } from '../../utils/phone'
 
 const fmt = (v) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(v || 0)
-const blankItem = () => ({ product_id: '', qty: '', price_per_piece: '' })
+const blankItem = () => ({ product_id: '', qty: '', price_per_piece: '', printing_placement: '', printing_type: '' })
 
 function toWaNumber(phone) {
   let digits = (phone || '').replace(/\D/g, '')
@@ -58,6 +58,8 @@ export default function CrewfitQuotes() {
   const [meta, setMeta] = useState(null)
   const [items, setItems] = useState([blankItem()])
   const [zoneId, setZoneId] = useState('')
+  // Blank means "use the zone table". A typed figure overrides it for this quote only.
+  const [shippingOverride, setShippingOverride] = useState('')
   const [customerName, setCustomerName] = useState('')
   const [contactNumber, setContactNumber] = useState('')
   const [notes, setNotes] = useState('')
@@ -98,13 +100,19 @@ export default function CrewfitQuotes() {
       setCalculating(true)
       const r = await apiFetch('/api/crewfit/quotes/calculate', {
         method: 'POST',
-        body: JSON.stringify({ items: valid.map(it => ({ product_id: it.product_id, qty: it.qty, price_per_piece: it.price_per_piece || undefined })), zoneId }),
+        body: JSON.stringify({
+          items: valid.map(it => ({
+            product_id: it.product_id, qty: it.qty, price_per_piece: it.price_per_piece || undefined,
+            printing_placement: it.printing_placement, printing_type: it.printing_type,
+          })),
+          zoneId, shippingCharge: shippingOverride,
+        }),
       })
       setCalc(r && !r.error ? r : null)
       setCalculating(false)
     }, 300)
     return () => clearTimeout(debounceRef.current)
-  }, [items, zoneId])
+  }, [items, zoneId, shippingOverride])
 
   const setItem = (i, patch) => setItems(list => list.map((it, idx) => idx === i ? { ...it, ...patch } : it))
   const addItem = () => setItems(list => [...list, blankItem()])
@@ -121,7 +129,10 @@ export default function CrewfitQuotes() {
       method: 'POST',
       body: JSON.stringify({
         customer_name: customerName.trim(), contact_number: contactNumber.trim(), notes: notes.trim(),
-        items: valid.map(it => ({ product_id: it.product_id, qty: it.qty, price_per_piece: it.price_per_piece || undefined })), zoneId,
+        items: valid.map(it => ({
+          product_id: it.product_id, qty: it.qty, price_per_piece: it.price_per_piece || undefined,
+          printing_placement: it.printing_placement, printing_type: it.printing_type,
+        })), zoneId, shippingCharge: shippingOverride,
       }),
     })
     setSaving(false)
@@ -222,17 +233,37 @@ export default function CrewfitQuotes() {
                         className={suggestion?.is_estimated && !it.price_per_piece ? 'calc-price-estimated' : ''}
                         value={it.price_per_piece} onChange={e => setItem(i, { price_per_piece: e.target.value })} style={{ width: 90 }} />
                       <button type="button" className="btn-icon" onClick={() => removeItem(i)} disabled={items.length === 1} title="Remove"><Icon name="close" size={14} /></button>
+                      {/* Optional, and free text: placements and print methods vary per job, and a
+                          picklist would only get worked around in the notes. */}
+                      <input className="calc-print" value={it.printing_placement}
+                        onChange={e => setItem(i, { printing_placement: e.target.value })}
+                        placeholder="Placement (optional) — e.g. Front chest, Back" />
+                      <input className="calc-print" value={it.printing_type}
+                        onChange={e => setItem(i, { printing_type: e.target.value })}
+                        placeholder="Print type (optional) — e.g. DTF, Screen print" />
                     </div>
                   )
                 })}
                 <button type="button" className="btn btn-secondary btn-sm" onClick={addItem} style={{ marginTop: 8 }}><Icon name="plus" size={14} /> Add product</button>
 
-                <div className="input-group" style={{ marginTop: 18 }}>
-                  <label>Shipping zone</label>
-                  <select value={zoneId} onChange={e => setZoneId(e.target.value)}>
-                    <option value="">Select destination…</option>
-                    {meta.zones.map(z => <option key={z} value={z}>{z}</option>)}
-                  </select>
+                <div className="form-row" style={{ marginTop: 18 }}>
+                  <div className="input-group" style={{ marginBottom: 0 }}>
+                    <label>Shipping zone</label>
+                    <select value={zoneId} onChange={e => setZoneId(e.target.value)}>
+                      <option value="">Select destination…</option>
+                      {meta.zones.map(z => <option key={z} value={z}>{z}</option>)}
+                    </select>
+                  </div>
+                  <div className="input-group" style={{ marginBottom: 0 }}>
+                    <label>
+                      Shipping charge
+                      {calc && zoneId && !calc.shippingIsManual && <span className="label-hint"> · {fmt(calc.suggestedShipping)} from the zone table</span>}
+                      {calc?.shippingIsManual && <span className="label-hint"> · overriding {fmt(calc.suggestedShipping)}</span>}
+                    </label>
+                    <input type="number" min="0" step="0.01" value={shippingOverride}
+                      onChange={e => setShippingOverride(e.target.value)}
+                      placeholder={zoneId ? `${calc?.suggestedShipping ?? 0} — leave blank to use this` : 'Type a charge, or pick a zone'} />
+                  </div>
                 </div>
 
                 <div className="form-row">
@@ -259,11 +290,14 @@ export default function CrewfitQuotes() {
                       <span>{li.needs_quote ? <em style={{ color: 'var(--warning)' }}>enter a price</em> : fmt(li.line_total)}</span>
                     </div>
                   ))}
-                  <div className="calc-line"><span>Shipping{calc.zoneLabel ? ` (${calc.zoneLabel})` : ''}</span><span>{zoneId ? fmt(calc.shippingCharge) : <em style={{ color: 'var(--text-muted)' }}>pick a zone</em>}</span></div>
+                  <div className="calc-line">
+                    <span>Shipping{calc.zoneLabel ? ` (${calc.zoneLabel})` : ''}{calc.shippingIsManual ? ' · edited' : ''}</span>
+                    <span>{(zoneId || calc.shippingIsManual) ? fmt(calc.shippingCharge) : <em style={{ color: 'var(--text-muted)' }}>pick a zone or type a charge</em>}</span>
+                  </div>
                   <div className="calc-line"><span>GST ({calc.gstPct}%)</span><span>{fmt(calc.gstAmount)}</span></div>
                   <div className="calc-line calc-total"><span>Grand total</span><span>{fmt(calc.grandTotal)}</span></div>
                 </div>
-                {calc.needsManualQuote && <div className="calc-warning">Enter a price per piece for each highlighted item{!zoneId ? ', and pick a shipping zone' : ''} before saving.</div>}
+                {calc.needsManualQuote && <div className="calc-warning">Enter a price per piece for each highlighted item{(!zoneId && !calc.shippingIsManual) ? ', and either pick a shipping zone or type a shipping charge' : ''} before saving.</div>}
 
                 {error && <div className="login-error" style={{ marginTop: 12 }}>{error}</div>}
 

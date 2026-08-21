@@ -15,6 +15,8 @@ const QUOTE_SORTS = {
   zone_label: 'zone_label', created_at: 'created_at',
 };
 
+const trimText = (v) => { const t = String(v ?? '').trim(); return t || null; };
+
 function safeJson(v, fallback) { try { return typeof v === 'string' ? JSON.parse(v) : (v || fallback); } catch { return fallback; } }
 const parseQuote = (q) => ({ ...q, line_items: safeJson(q.line_items, []) });
 
@@ -58,7 +60,7 @@ async function withFabric(lineItems) {
   });
 }
 
-async function computeQuote({ items, zoneId }) {
+async function computeQuote({ items, zoneId, shippingCharge: shippingOverride }) {
   const ids = [...new Set((items || []).map(it => parseInt(it.product_id, 10)).filter(Number.isFinite))];
   let products = [];
   if (ids.length) {
@@ -77,6 +79,10 @@ async function computeQuote({ items, zoneId }) {
     const lineTotal = pricePerPiece != null ? pricePerPiece * qty : 0;
     return {
       product_id: product?.id ?? null, product_name: product?.name || 'Unknown product',
+      // Free text on purpose: placements and print methods vary per job and per customer, and a
+      // fixed picklist would just get worked around in the notes.
+      printing_placement: trimText(it.printing_placement),
+      printing_type: trimText(it.printing_type),
       // Snapshotted, not looked up when the PDF is built: a quote must keep saying what was
       // actually quoted even after the catalog entry is edited.
       gsm: product?.gsm || null, material: product?.material || null,
@@ -91,13 +97,24 @@ async function computeQuote({ items, zoneId }) {
   const totalQty = lineItems.reduce((s, li) => s + li.qty, 0);
   const productTotal = lineItems.reduce((s, li) => s + li.line_total, 0);
   const zoneLabel = SHIP_ZONES[zoneId] ? zoneId : null;
-  const shippingCharge = zoneLabel ? (shippingFor(zoneLabel, totalQty) || 0) : 0;
-  const needsManualQuote = lineItems.length === 0 || lineItems.some(li => li.needs_quote) || !zoneLabel;
+  // The zone table gives the usual rate; a typed figure wins, because a bulky consignment or a
+  // negotiated courier price is a fact about this job that no table knows.
+  const suggestedShipping = zoneLabel ? (shippingFor(zoneLabel, totalQty) || 0) : 0;
+  const manualShipping = shippingOverride !== undefined && shippingOverride !== null && shippingOverride !== ''
+    && Number.isFinite(Number(shippingOverride)) && Number(shippingOverride) >= 0
+    ? Math.round(Number(shippingOverride) * 100) / 100 : null;
+  const shippingCharge = manualShipping != null ? manualShipping : suggestedShipping;
+  const needsManualQuote = lineItems.length === 0 || lineItems.some(li => li.needs_quote)
+    || (!zoneLabel && manualShipping == null);
   // Same 5% GST-on-(product+shipping) rule used for real orders (CrewfitOrderDrawer's default _gstPct).
   const GST_PCT = 5;
   const gstAmount = Math.round((productTotal + shippingCharge) * GST_PCT / 100);
   const grandTotal = productTotal + shippingCharge + gstAmount;
-  return { lineItems, totalQty, productTotal, shippingCharge, gstPct: GST_PCT, gstAmount, grandTotal, needsManualQuote, zoneLabel };
+  return {
+    lineItems, totalQty, productTotal, shippingCharge, suggestedShipping,
+    shippingIsManual: manualShipping != null && manualShipping !== suggestedShipping,
+    gstPct: GST_PCT, gstAmount, grandTotal, needsManualQuote, zoneLabel,
+  };
 }
 
 // Used by the Razorpay webhook (the optional payment-link path) — turns a paid quote row
@@ -108,7 +125,8 @@ async function convertQuoteToOrder(quote) {
   const lineItems = safeJson(quote.line_items, []);
   const totalQty = lineItems.reduce((s, li) => s + (Number(li.qty) || 0), 0);
   const orderLineItems = lineItems.map(li => ({
-    product: li.product_name, color: '', printing: 'Front & Back',
+    product: li.product_name, color: '',
+    printing: [li.printing_placement, li.printing_type].filter(Boolean).join(' · ') || 'Front & Back',
     qty: li.qty, unit_price: li.price_per_piece, product_total: li.line_total, size_breakdown: '',
   }));
   const productNames = [...new Set(lineItems.map(li => li.product_name))].join(', ');
@@ -182,11 +200,11 @@ router.get('/', async (req, res) => {
 // No payment link involved — this is just a priced, saveable quote to send the customer.
 router.post('/', async (req, res) => {
   try {
-    const { customer_name, contact_number, items, zoneId, notes } = req.body || {};
+    const { customer_name, contact_number, items, zoneId, notes, shippingCharge } = req.body || {};
     if (!customer_name || !contact_number) return res.status(400).json({ error: 'Customer name and phone are required' });
     if (!isValidMobile(contact_number)) return res.status(400).json({ error: 'Phone must be exactly 10 digits' });
 
-    const result = await computeQuote({ items, zoneId });
+    const result = await computeQuote({ items, zoneId, shippingCharge });
     if (!result.lineItems.length) return res.status(400).json({ error: 'Add at least one product with a valid quantity' });
     if (result.needsManualQuote) {
       return res.status(400).json({ error: 'One or more items still need a price per piece (or no shipping zone was picked) — enter a price for each highlighted item.' });

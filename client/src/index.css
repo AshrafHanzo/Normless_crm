@@ -1051,7 +1051,13 @@ select { cursor: pointer; appearance: none;
 .search-bar input:focus { background: var(--bg-secondary); box-shadow: 0 0 0 3px var(--primary-glow); border-color: var(--primary); }
 
 /* Quick Calc */
-.calc-item-row { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
+/* Wraps so the optional printing fields fall onto a second line under the priced row, and a
+   divider keeps one product's two lines visibly together. */
+.calc-item-row {
+  display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+  margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--border);
+}
+.calc-item-row:last-of-type { border-bottom: 0; }
 .calc-item-row select { flex: 1; }
 .calc-breakdown { display: flex; flex-direction: column; gap: 10px; }
 .calc-line { display: flex; justify-content: space-between; font-size: 13.5px; padding-bottom: 10px; border-bottom: 1px dashed var(--border); }
@@ -1737,3 +1743,7 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .sidebar-collapsed .brand-switch,
 .sidebar-collapsed .sidebar-bottom { min-width: 0; }
 .sidebar-collapsed .brand-switch button { min-width: 0; overflow: hidden; }
+
+/* Optional printing detail on a quote line — the pair shares a line under the priced row. */
+.calc-print { flex: 1 1 220px; min-width: 0; font-size: 12.5px; padding: 7px 10px; }
+.label-hint { font-weight: 400; color: var(--text-muted); font-size: 11px; }
