@@ -181,13 +181,12 @@ async function itemIdFor(tx, { blank_type, color, size }) {
  * of times: each (order, variant) owns exactly one movement row, and re-processing moves stock
  * only by the difference between what that row says now and what it should say.
  */
-async function applyOrder(tx, order, index) {
+async function applyOrder(tx, order, index, state = holdState(order)) {
     const { wanted, unmapped } = deductionsFor(order, index);
-    const state = holdState(order);
     let changed = 0;
 
     const existing = new Map((await tx.query(
-        'SELECT id, item_id, delta, source_ref FROM inventory_movements WHERE source_ref LIKE $1',
+        'SELECT id, item_id, delta, source_ref, needs_review FROM inventory_movements WHERE source_ref LIKE $1',
         [`${order.shopify_id}:%`])).rows.map(m => [m.source_ref, m]));
 
     for (const [ref, want] of wanted) {
@@ -195,7 +194,11 @@ async function applyOrder(tx, order, index) {
         const itemId = await itemIdFor(tx, want);
         const prev = existing.get(ref);
         const prevDelta = prev ? prev.delta : 0;
-        if (prev && prevDelta === targetDelta && prev.item_id === itemId) { existing.delete(ref); continue; }
+        // The review flag has to be part of "nothing changed". An order refunded after it shipped
+        // keeps the same deduction — the garment is printed and gone — and the only thing that
+        // moves is the flag asking a human about it. Comparing deltas alone would drop it.
+        const sameReview = !!prev?.needs_review === !!state.needs_review;
+        if (prev && prevDelta === targetDelta && prev.item_id === itemId && sameReview) { existing.delete(ref); continue; }
 
         if (prev && prev.item_id !== itemId) {
             // The variant was remapped (a product retyped in Shopify) — undo it where it landed.
@@ -287,6 +290,103 @@ async function applySince(since) {
         `SELECT shopify_id, order_number, financial_status, fulfillment_status, line_items_json, created_at
            FROM orders WHERE created_at >= $1 ORDER BY created_at ASC`, [since]);
     return applyOrders(r.rows);
+}
+
+/* ------------------------------------------------------------------------------------------
+ * Marketing seeding orders
+ *
+ * A shop order is deducted when it is placed; a seeding order is deducted when it is dispatched.
+ * They are not the same moment on purpose — a seeding order is raised, waits for approval, and may
+ * never be sent, so holding stock against it from the day it was typed would misreport the shelf
+ * for weeks.
+ *
+ * Everything after that is the shop path exactly: one movement per (order, item), corrected rather
+ * than repeated, so this can run on every save without deducting twice.
+ * ---------------------------------------------------------------------------------------- */
+
+// The pseudo shopify_id these movements are filed under. The trailing colon in the lookups means
+// marketing:2 can never match marketing:20.
+const marketingRef = (id) => `marketing:${id}`;
+
+/** Marketing's item shape → the line-item shape the blank resolver reads. */
+function marketingLines(order) {
+    const items = typeof order.items === 'string' ? (() => { try { return JSON.parse(order.items || '[]'); } catch { return []; } })() : (order.items || []);
+    return items.map(it => ({
+        title: it.product, quantity: it.qty, variant: it.variant,
+        shopify_product_id: it.shopify_product_id, shopify_variant_id: it.shopify_variant_id,
+    }));
+}
+
+/**
+ * Whether a seeding order's blanks should currently be held out.
+ *
+ * Held once it has left the building, released while it has not. Cancelling one that already
+ * shipped is the exception: the garment carries a print and is gone, so the stock stays deducted
+ * and a human is asked about it rather than the count quietly going back up.
+ */
+function marketingHoldState(order) {
+    const status = order.status || '';
+    if (status === 'Dispatched' || status === 'Delivered') return { hold: true };
+    if (status === 'Cancelled' && (order.awb || order.fulfilled_date)) {
+        return { hold: true, needs_review: true,
+            review_reason: 'Seeding order cancelled after it had shipped — the printed garment cannot return to blank stock. Adjust by hand if it did come back.' };
+    }
+    return { hold: false };
+}
+
+/**
+ * Apply one seeding order to blank stock. Safe to call on every save: an order that has never been
+ * dispatched and has no movements does nothing at all, rather than writing a row of zeroes.
+ */
+async function applyMarketingOrder(order) {
+    const state = marketingHoldState(order);
+    const ref = marketingRef(order.id);
+    const already = await db.query('SELECT 1 FROM inventory_movements WHERE source_ref LIKE $1 LIMIT 1', [`${ref}:%`]);
+    if (!state.hold && !already.rows.length) return { changed: 0, deducted: [], unmapped: [] };
+
+    const index = await productIndex();
+    const pseudo = {
+        shopify_id: ref,
+        order_number: order.ref_no ? `MK-${order.ref_no}` : `MK#${order.id}`,
+        line_items_json: JSON.stringify(marketingLines(order)),
+    };
+    const { wanted, unmapped } = deductionsFor(pseudo, index);
+    let changed = 0;
+    await db.transaction(async (tx) => { changed = await applyOrder(tx, pseudo, index, state); });
+    return {
+        changed,
+        deducted: state.hold ? [...wanted.values()].map(w => ({ blank_type: w.blank_type, color: w.color, size: w.size, qty: w.qty })) : [],
+        released: !state.hold,
+        needs_review: !!state.needs_review,
+        unmapped: [...unmapped.values()].map(u => ({ product: u.title, variant: u.variant, reason: u.reason })),
+    };
+}
+
+/** Forget a seeding order's movements entirely, giving back anything still held. Used on delete. */
+async function releaseMarketingOrder(orderId) {
+    const ref = marketingRef(orderId);
+    return db.transaction(async (tx) => {
+        const rows = (await tx.query(
+            'SELECT id, item_id, delta FROM inventory_movements WHERE source_ref LIKE $1', [`${ref}:%`])).rows;
+        for (const m of rows) {
+            if (m.delta !== 0) {
+                await tx.query('UPDATE inventory_items SET qty = qty - $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2', [m.delta, m.item_id]);
+            }
+            await tx.query('DELETE FROM inventory_movements WHERE id = $1', [m.id]);
+        }
+        await tx.query('DELETE FROM inventory_unmapped WHERE source_ref LIKE $1', [`${ref}:%`]);
+        return rows.length;
+    });
+}
+
+/** Every seeding order dispatched on or after `since`. The catch-up for orders that predate this. */
+async function applyMarketingSince(since) {
+    const r = await db.query(
+        `SELECT id, ref_no, status, items, awb, fulfilled_date FROM marketing_orders
+          WHERE COALESCE(fulfilled_date, order_date) >= $1 ORDER BY id ASC`, [since]);
+    let changed = 0;
+    for (const o of r.rows) changed += (await applyMarketingOrder(o)).changed;
+    return { orders: r.rows.length, changed };
 }
 
 /* ------------------------------------------------------------------------------------------
@@ -417,6 +517,7 @@ module.exports = {
     BLANK_TYPES, SIZE_ORDER, TYPE_TO_BLANK, SKU_TO_BLANK,
     refreshProductCache, productIndex, blankTypeFor, splitVariant, safeItems,
     deductionsFor, holdState, applyOrder, applyOrders, applySince, setStock,
+    marketingHoldState, applyMarketingOrder, releaseMarketingOrder, applyMarketingSince,
     normVariant, moveBlank, rtoAvailable, rtoMatches, rtoAlertCount, rtoForOrderNumber,
     availabilityIndex, matchesForOrder, OPEN_ORDER_SQL,
 };

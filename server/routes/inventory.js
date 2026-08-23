@@ -256,7 +256,10 @@ router.post('/process', canEdit, async (req, res) => {
         const since = req.body?.since;
         if (!/^\d{4}-\d{2}-\d{2}$/.test(since || '')) return res.status(400).json({ error: 'since must be a YYYY-MM-DD date' });
         const out = await inv.applySince(since);
-        res.json({ success: true, ...out });
+        // Seeding orders come off the same shelf, so the catch-up covers them too — otherwise a
+        // shop starting today would have to remember two separate actions.
+        const marketing = await inv.applyMarketingSince(since);
+        res.json({ success: true, ...out, marketing });
     } catch (err) {
         console.error('inventory process error:', err);
         res.status(500).json({ error: err.message || 'Failed to process orders' });

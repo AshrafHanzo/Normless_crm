@@ -10,6 +10,7 @@
 const express = require('express');
 const db = require('../db/connection');
 const { hasPermission } = require('../utils/permissions');
+const inv = require('../services/inventory');
 const { fetchProducts } = require('../services/shopify');
 const { validatePhoneFields } = require('../utils/phone');
 const { tableParams, pagination } = require('../utils/table');
@@ -264,6 +265,21 @@ function cleanItems(items) {
 const totalQty = (items) => items.reduce((sum, it) => sum + it.qty, 0);
 
 /**
+ * Push an order's current state at blank stock.
+ *
+ * Never allowed to fail the request that triggered it: the order really did just change, and
+ * refusing the save because a stock write went wrong would leave the two further apart, not closer.
+ */
+async function applyStock(row) {
+  try {
+    return await inv.applyMarketingOrder(row);
+  } catch (err) {
+    console.error('marketing inventory apply failed:', err.message);
+    return { error: 'Stock could not be updated for this order' };
+  }
+}
+
+/**
  * Delhivery's public tracker is a predictable URL, and it is the partner on nearly every row of
  * the sheet — so a typed AWB produces its own tracking link rather than being pasted twice.
  */
@@ -391,7 +407,10 @@ router.put('/orders/:id', async (req, res) => {
        nullable(body.address), nullable(body.collab_type), JSON.stringify(items), totalQty(items),
        body.order_date, nullable(body.notes), req.params.id]
     );
-    res.json({ success: true, order: hydrateOrder(r.rows[0]) });
+    // Editing the items of an order that has already gone out moves stock by the difference.
+    // A no-op for anything not dispatched, so it costs nothing to always ask.
+    const stock = await applyStock(r.rows[0]);
+    res.json({ success: true, order: hydrateOrder(r.rows[0]), inventory: stock });
   } catch (err) {
     console.error('Error updating influencer order:', err);
     res.status(500).json({ error: 'Failed to update influencer order' });
@@ -497,7 +516,11 @@ router.post('/orders/:id/dispatch', async (req, res) => {
       [status, fulfilled, nullable(body.shopify_order_number), partner, awb,
        trackingFor(partner, awb, body.tracking_link), req.params.id]
     );
-    res.json({ success: true, order: hydrateOrder(r.rows[0]) });
+
+    // A seeded garment comes off the same shelf as a sold one, so dispatching takes its blank out
+    // of stock — and moving the order back out of Dispatched puts it back.
+    const stock = await applyStock(r.rows[0]);
+    res.json({ success: true, order: hydrateOrder(r.rows[0]), inventory: stock });
   } catch (err) {
     console.error('Error updating dispatch details:', err);
     res.status(500).json({ error: 'Failed to update dispatch details' });
@@ -508,9 +531,12 @@ router.post('/orders/:id/dispatch', async (req, res) => {
 router.delete('/orders/:id', async (req, res) => {
   if (!isAdmin(req)) return res.status(403).json({ error: 'Only the account owner can do this' });
   try {
+    // Before the row goes: a deleted order cannot keep holding stock, and its movements would be
+    // orphaned pointing at an order number nobody can look up.
+    const released = await inv.releaseMarketingOrder(req.params.id);
     const r = await db.query('DELETE FROM marketing_orders WHERE id = $1 RETURNING id', [req.params.id]);
     if (!r.rows.length) return res.status(404).json({ error: 'Order not found' });
-    res.json({ success: true });
+    res.json({ success: true, stock_released: released });
   } catch (err) {
     console.error('Error deleting influencer order:', err);
     res.status(500).json({ error: 'Failed to delete influencer order' });

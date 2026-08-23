@@ -292,7 +292,17 @@ function OrderDrawer({ target, meta, influencers, products, productsError, onClo
     setDispatching(false)
     if (!res || res.error) { setError(res?.error || 'Failed to update dispatch'); return }
     setDispatch(d => ({ ...d, status: res.order.status, fulfilled_date: res.order.fulfilled_date || '', tracking_link: res.order.tracking_link || '' }))
-    toast.success(`${res.order.ref} · ${res.order.status}`, { title: 'Dispatch updated' })
+
+    // Say what it did to blank stock. A silent deduction is the kind of thing people only notice
+    // when the count is already wrong, and an item that resolved to no blank is worth naming.
+    const stock = res.inventory || {}
+    const moved = (stock.deducted || []).map(d => `${d.blank_type} ${d.color} ${d.size} −${d.qty}`).join(' · ')
+    toast.success(
+      `${res.order.ref} · ${res.order.status}${moved ? ` — ${moved} from blanks` : stock.released ? ' — blanks put back' : ''}`,
+      { title: 'Dispatch updated' })
+    if (stock.unmapped?.length) {
+      toast.error(`${stock.unmapped.map(u => u.product).join(', ')} — no blank is linked, so nothing was deducted for it`)
+    }
     onSaved(res.order, false, true)
   }
 

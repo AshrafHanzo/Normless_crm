@@ -108,12 +108,16 @@ export default function StockTab({ onCounts }) {
   const processOrders = async () => {
     if (!await toast.confirm({
       title: 'Deduct stock from orders?',
-      message: 'Every order placed since the date below is applied to stock. Safe to run more than once — an order already counted is corrected, never deducted twice.',
+      message: 'Every shop order placed since the date below is applied to stock, along with every seeding order dispatched since then. Safe to run more than once — an order already counted is corrected, never deducted twice.',
       details: [{ label: 'From', value: since }],
       confirmLabel: 'Process orders',
     })) return
     const r = await run('process', '/api/inventory/process', { since })
-    if (r) { toast.success(`${num(r.orders)} orders processed, ${num(r.changed)} movements`); load() }
+    if (r) {
+      const mk = r.marketing?.changed ? `, ${num(r.marketing.changed)} from seeding` : ''
+      toast.success(`${num(r.orders)} orders processed, ${num(r.changed)} movements${mk}`)
+      load()
+    }
   }
 
   const startBulk = (mode) => {
