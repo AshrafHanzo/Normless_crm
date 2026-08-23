@@ -13,6 +13,13 @@ const PORT = process.env.PORT || 5000;
 
 // Middleware
 app.use(cors());
+
+// Meta ads daily ingest — mounted ahead of the global JSON parser so it can accept a larger
+// body: a full day's report carries every campaign and ad on the account, which outgrows the
+// 100kb default. Whichever json() middleware runs first wins, hence the position. It also sits
+// ahead of the request logger below, so a once-a-day machine POST doesn't pad debug.log.
+app.use('/api/meta-ads-reports', express.json({ limit: '2mb' }), require('./routes/meta-ads-ingest'));
+
 // Stash the raw bytes alongside the parsed body — the Razorpay webhook needs to HMAC-verify
 // the exact raw payload against its signature header, which is lost once JSON.parse runs.
 app.use(express.json({ verify: (req, res, buf) => { req.rawBody = buf; } }));
@@ -259,6 +266,7 @@ app.use('/api/crewfit/invoices', authMiddleware, require('./routes/crewfit-invoi
 app.use('/api/inventory', authMiddleware, require('./routes/inventory'));
 app.use('/api/crewfit', authMiddleware, crewfitRoutes);
 app.use('/api/marketing', authMiddleware, marketingRoutes);
+app.use('/api/meta-ads', authMiddleware, require('./routes/meta-ads'));
 
 // Health check
 app.get('/api/health', (req, res) => {
@@ -954,6 +962,97 @@ async function ensureMarketingSchema() {
     }
 }
 
+// Meta ads daily report (Normless → Ads menu). One row per account per day, posted in by a
+// scheduled Claude task rather than pulled — see routes/meta-ads-ingest.js.
+//
+// The scorecard is flattened into columns instead of kept as JSON because the whole point of
+// storing history is to chart it: "ROAS over the last 30 days" is a column scan this way and a
+// JSON parse per row otherwise. The full payload is still kept in raw_payload so a sender that
+// starts emitting a new field doesn't lose it before the schema catches up.
+async function ensureMetaAdsSchema() {
+    try {
+        await db.exec(`
+            CREATE TABLE IF NOT EXISTS meta_ads_reports (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                account_id TEXT NOT NULL,
+                report_date DATE NOT NULL,
+                window_today DATE,
+                window_7d_start DATE,
+                window_7d_end DATE,
+                roas_today NUMERIC, roas_avg_7d NUMERIC, roas_status TEXT,
+                spend_today NUMERIC, spend_avg_7d_daily NUMERIC,
+                revenue_today NUMERIC, revenue_avg_7d_daily NUMERIC,
+                purchases_today NUMERIC, purchases_avg_7d_daily NUMERIC,
+                cpa_today NUMERIC, cpa_avg_7d NUMERIC, cpa_status TEXT,
+                frequency_today NUMERIC, frequency_avg_7d NUMERIC, frequency_status TEXT,
+                raw_payload TEXT,
+                received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            -- The upsert key. A retry or a manual re-run of the same day must land on this row.
+            CREATE UNIQUE INDEX IF NOT EXISTS meta_ads_reports_day_idx
+                ON meta_ads_reports (account_id, report_date);
+            CREATE INDEX IF NOT EXISTS meta_ads_reports_date_idx ON meta_ads_reports (report_date DESC);
+
+            -- Children cascade: a report is a snapshot, and the ingest replaces them wholesale
+            -- on every post, so they have no meaning without their parent.
+            CREATE TABLE IF NOT EXISTS meta_ads_campaigns (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                report_id INTEGER NOT NULL REFERENCES meta_ads_reports(id) ON DELETE CASCADE,
+                campaign_id TEXT,
+                name TEXT,
+                daily_budget NUMERIC,
+                roas_7d NUMERIC, roas_status TEXT,
+                cpa_7d NUMERIC, cpa_status TEXT,
+                ctr_7d NUMERIC, ctr_status TEXT,
+                cpm_7d NUMERIC, cpm_status TEXT,
+                frequency_7d NUMERIC, frequency_status TEXT,
+                purchases_7d INTEGER,
+                spend_7d NUMERIC,
+                net_profit_7d NUMERIC,
+                roas_prev_7d NUMERIC,
+                roas_delta NUMERIC
+            );
+            CREATE INDEX IF NOT EXISTS meta_ads_campaigns_report_idx ON meta_ads_campaigns (report_id);
+            -- Charting one campaign across days walks by campaign_id, not report_id.
+            CREATE INDEX IF NOT EXISTS meta_ads_campaigns_campaign_idx ON meta_ads_campaigns (campaign_id);
+
+            CREATE TABLE IF NOT EXISTS meta_ads_ads (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                report_id INTEGER NOT NULL REFERENCES meta_ads_reports(id) ON DELETE CASCADE,
+                ad_id TEXT,
+                name TEXT,
+                campaign_id TEXT,
+                campaign_name TEXT,
+                roas_7d NUMERIC,
+                cpa_7d NUMERIC,
+                ctr_7d NUMERIC, ctr_status TEXT,
+                cpm_7d NUMERIC, cpm_status TEXT,
+                frequency_7d NUMERIC,
+                purchases_7d INTEGER,
+                spend_7d NUMERIC
+            );
+            CREATE INDEX IF NOT EXISTS meta_ads_ads_report_idx ON meta_ads_ads (report_id);
+            CREATE INDEX IF NOT EXISTS meta_ads_ads_ad_idx ON meta_ads_ads (ad_id);
+
+            CREATE TABLE IF NOT EXISTS meta_ads_action_items (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                report_id INTEGER NOT NULL REFERENCES meta_ads_reports(id) ON DELETE CASCADE,
+                entity_type TEXT,
+                entity_name TEXT,
+                metric TEXT,
+                value NUMERIC,
+                threshold NUMERIC,
+                message TEXT
+            );
+            CREATE INDEX IF NOT EXISTS meta_ads_action_items_report_idx ON meta_ads_action_items (report_id);
+
+            ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_meta_ads BOOLEAN DEFAULT false;
+        `);
+    } catch (err) {
+        console.error('ensureMetaAdsSchema error:', err.message);
+    }
+}
+
 // Start Server
 app.listen(PORT, async () => {
     console.log(`🚀 Normless CRM Backend running on http://localhost:${PORT}`);
@@ -968,6 +1067,8 @@ app.listen(PORT, async () => {
     await ensureOrderAuditSchema();
     // Ensure influencer marketing schema
     await ensureMarketingSchema();
+    // Ensure Meta ads daily-report schema
+    await ensureMetaAdsSchema();
 
     // START AUTO-SYNC IMMEDIATELY (no user action needed!)
     startAutoSync();

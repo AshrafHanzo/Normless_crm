@@ -10,6 +10,7 @@ const COLUMNS = new Set([
   'can_view_crewfit_payments', 'can_view_crewfit_customers', 'can_view_revenue', 'can_view_invoices',
   'can_view_crewfit_vendors', 'can_view_crewfit_invoices', 'can_edit_crewfit_orders',
   'can_view_marketing', 'can_dispatch_marketing', 'can_view_inventory', 'can_edit_inventory', 'can_approve_marketing',
+  'can_view_meta_ads',
 ]);
 
 // Whether this request holds a given permission.

@@ -20,7 +20,7 @@ const PERM_MAP = {
   crewfit_invoices: 'can_view_crewfit_invoices', crewfit_orders_edit: 'can_edit_crewfit_orders',
   inventory: 'can_view_inventory', inventory_edit: 'can_edit_inventory',
   marketing: 'can_view_marketing', marketing_dispatch: 'can_dispatch_marketing',
-  marketing_approve: 'can_approve_marketing',
+  marketing_approve: 'can_approve_marketing', meta_ads: 'can_view_meta_ads',
 };
 const PERM_KEYS = Object.keys(PERM_MAP);
 const PERM_COLUMNS = Object.values(PERM_MAP);
