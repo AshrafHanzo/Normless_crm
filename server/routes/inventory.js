@@ -259,7 +259,8 @@ router.post('/process', canEdit, async (req, res) => {
         // Seeding orders come off the same shelf, so the catch-up covers them too — otherwise a
         // shop starting today would have to remember two separate actions.
         const marketing = await inv.applyMarketingSince(since);
-        res.json({ success: true, ...out, marketing });
+        const crewfit = await inv.applyCrewfitSince(since);
+        res.json({ success: true, ...out, marketing, crewfit });
     } catch (err) {
         console.error('inventory process error:', err);
         res.status(500).json({ error: err.message || 'Failed to process orders' });

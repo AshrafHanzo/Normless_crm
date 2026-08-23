@@ -1050,7 +1050,17 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
         if (failures.length) toast.error(`These photo uploads failed: ${failures.join(', ')}. You can retry from the order's edit screen.`, { title: 'Order saved, photos did not upload', duration: 0 })
       }
       setSaving(false)
-      toast.success(isNew ? `Order CF-${res.sl_no} created` : `Order CF-${res.sl_no} saved`)
+      // Oversized tees print on the Normless blank, so a production run moves that count. Say so —
+      // a silent deduction is the kind of thing people only notice once the shelf is wrong.
+      const stock = res.inventory || {}
+      const moved = (stock.deducted || []).map(d => `${d.color} ${d.size} −${d.qty}`).join(', ')
+      toast.success(
+        `${isNew ? `Order CF-${res.sl_no} created` : `Order CF-${res.sl_no} saved`}` +
+        (moved ? ` — blanks: ${moved}` : stock.released ? ' — blanks put back' : ''))
+      if (stock.unmapped?.length) {
+        toast.error(stock.unmapped.map(u => `${u.variant} ×${u.qty} — ${u.reason}`).join(' · '),
+          { title: 'Not deducted from blank stock', duration: 0 })
+      }
       guard.reset()
       setForm(null); onSaved?.(res)
     } else {

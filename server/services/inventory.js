@@ -181,8 +181,10 @@ async function itemIdFor(tx, { blank_type, color, size }) {
  * of times: each (order, variant) owns exactly one movement row, and re-processing moves stock
  * only by the difference between what that row says now and what it should say.
  */
-async function applyOrder(tx, order, index, state = holdState(order)) {
-    const { wanted, unmapped } = deductionsFor(order, index);
+async function applyOrder(tx, order, index, state = holdState(order), resolved = null) {
+    // Crewfit resolves its own lines — it has no Shopify product behind them — so the resolution
+    // can be handed in. Everything below is the part that must not be written twice.
+    const { wanted, unmapped } = resolved || deductionsFor(order, index);
     let changed = 0;
 
     const existing = new Map((await tx.query(
@@ -290,6 +292,176 @@ async function applySince(since) {
         `SELECT shopify_id, order_number, financial_status, fulfillment_status, line_items_json, created_at
            FROM orders WHERE created_at >= $1 ORDER BY created_at ASC`, [since]);
     return applyOrders(r.rows);
+}
+
+/* ------------------------------------------------------------------------------------------
+ * Crewfit bulk orders
+ *
+ * Crewfit prints its oversized tees on the Normless blank — same shelf, same pool — so a bulk run
+ * has to come off the count like any other. Nothing else it sells does: polos, kids' wear and the
+ * rest are bought in per order and never touch this stock.
+ *
+ * Deducted when production starts, not when the order is raised. A bulk order sits for weeks
+ * between the two, and the count is meant to say what is on the shelf — deducting at creation
+ * would report blanks as gone while they are still sitting there, for an order that may never be
+ * paid for.
+ * ---------------------------------------------------------------------------------------- */
+
+// Only this one. Matched loosely because the sheet has written it several ways over time.
+const CREWFIT_BLANKS = [{ match: /oversize/i, blank: 'Oversized Tee' }];
+
+// The pipeline in order. Blanks are held from the point the garments are actually pulled.
+const CREWFIT_PIPELINE = ['Awaiting Payment', 'Pending', 'Consignment Ordered', 'Consignment Received',
+    'Ongoing Production', 'Ready for Dispatch', 'Dispatch Pending', 'Dispatched'];
+const CREWFIT_PRODUCTION_FROM = CREWFIT_PIPELINE.indexOf('Ongoing Production');
+
+/** Crewfit writes XXL where the blank grid says 2XL. Same garment, two spellings. */
+const SIZE_ALIASES = { XXL: '2XL', XXXL: '3XL', XXXXL: '4XL', '2XL': '2XL', '3XL': '3XL' };
+const normSize = (raw) => {
+    const s = String(raw || '').trim().toUpperCase().replace(/\s+/g, '');
+    return SIZE_ALIASES[s] || s;
+};
+
+/** "Oversized T-Shirts: S-5, M-4, XXL-2" or "S-5, M-4" → [{ size, qty }]. */
+function parseSizeBreakdown(text) {
+    const raw = String(text || '');
+    // A leading "Product name:" is dropped — the line already knows its own product.
+    const body = raw.includes(':') ? raw.slice(raw.indexOf(':') + 1) : raw;
+    const out = [];
+    for (const part of body.split(',')) {
+        const m = part.trim().match(/^([A-Za-z0-9]+)\s*[-:x]\s*(\d+)$/i);
+        if (!m) continue;
+        const qty = parseInt(m[2], 10);
+        if (qty > 0) out.push({ size: normSize(m[1]), qty });
+    }
+    return out;
+}
+
+/** The blank a Crewfit product line is printed on, or null when Crewfit buys it in. */
+function crewfitBlankFor(product) {
+    const name = String(product || '');
+    return CREWFIT_BLANKS.find(b => b.match.test(name))?.blank || null;
+}
+
+/** Blank stock is held from the moment the garments are pulled for printing. */
+function crewfitHoldState(order) {
+    const status = order.status || '';
+    if (status === 'Cancelled') {
+        // Cancelled after it shipped: the blanks were printed on and are gone, so the count stays
+        // down and someone is asked about it rather than stock reappearing that does not exist.
+        if (order.dispatch_date) {
+            return { hold: true, needs_review: true,
+                review_reason: 'Crewfit order cancelled after it was dispatched — the printed garments cannot return to blank stock. Adjust by hand if they did come back.' };
+        }
+        return { hold: false };
+    }
+    const i = CREWFIT_PIPELINE.indexOf(status);
+    return { hold: i >= 0 && i >= CREWFIT_PRODUCTION_FROM };
+}
+
+/**
+ * What a Crewfit order should draw from blank stock, pooled by colour and size.
+ *
+ * Pooled rather than kept per line because that is how the shelf works: two lines of Black / L on
+ * one order are four garments off one pile, and must not become two movements fighting over it.
+ *
+ * A colour Normless does not stock is reported rather than deducted. Crewfit runs colours the
+ * shop never carries, and inventing a "Oversized Tee / Royal Blue" row to push negative would
+ * describe a shelf that does not exist.
+ */
+async function crewfitDeductions(order) {
+    // line_items is the per-line truth on newer orders; the flat columns are all the sheet-era
+    // ones have, and they describe a single line.
+    const parsed = (() => {
+        if (Array.isArray(order.line_items)) return order.line_items;
+        try { const v = JSON.parse(order.line_items || 'null'); return Array.isArray(v) && v.length ? v : null; } catch { return null; }
+    })();
+    const lines = parsed || [{ product: order.product, color: order.color, size_breakdown: order.size_breakdown }];
+
+    const known = new Set((await db.query(
+        `SELECT color, size FROM inventory_catalog WHERE blank_type = 'Oversized Tee'
+         UNION SELECT color, size FROM inventory_items WHERE blank_type = 'Oversized Tee'`))
+        .rows.map(r => `${r.color.toLowerCase()}|${r.size.toUpperCase()}`));
+
+    const wanted = new Map();
+    const unmapped = new Map();
+    for (const li of (Array.isArray(lines) ? lines : [])) {
+        const blank = crewfitBlankFor(li.product);
+        if (!blank) continue;                       // bought in — not this shelf, and not a problem
+        const color = String(li.color || '').trim();
+        const sizes = parseSizeBreakdown(li.size_breakdown);
+        if (!sizes.length) continue;
+
+        for (const { size, qty } of sizes) {
+            const ref = `${order.id}:${color}/${size}`;
+            if (!color || !known.has(`${color.toLowerCase()}|${size}`)) {
+                const prev = unmapped.get(ref);
+                unmapped.set(ref, {
+                    ref, order_number: `CF-${order.sl_no}`, title: li.product, variant: `${color || '—'} / ${size}`,
+                    product_type: 'Crewfit', qty: (prev?.qty || 0) + qty,
+                    reason: color ? `Normless does not stock Oversized Tee in ${color} / ${size}, so nothing was deducted`
+                        : 'This line has no colour, so it cannot be matched to a blank',
+                });
+                continue;
+            }
+            const prev = wanted.get(ref);
+            wanted.set(ref, { blank_type: blank, color, size, qty: (prev?.qty || 0) + qty, title: li.product });
+        }
+    }
+    return { wanted, unmapped };
+}
+
+/** Apply one Crewfit order to blank stock. A no-op for orders that never reach production. */
+async function applyCrewfitOrder(order) {
+    const state = crewfitHoldState(order);
+    const ref = `crewfit:${order.id}`;
+    const already = await db.query('SELECT 1 FROM inventory_movements WHERE source_ref LIKE $1 LIMIT 1', [`${ref}:%`]);
+    const { wanted, unmapped } = await crewfitDeductions(order);
+    if (!state.hold && !already.rows.length) return { changed: 0, deducted: [], unmapped: [] };
+
+    // deductionsFor keys its refs on the order id; prefix them so they live in this order's space.
+    const prefixed = new Map([...wanted].map(([k, v]) => [`crewfit:${k}`, v]));
+    const prefixedUnmapped = new Map([...unmapped].map(([k, v]) => [`crewfit:${k}`, { ...v, ref: `crewfit:${k}` }]));
+    const pseudo = { shopify_id: ref, order_number: `CF-${order.sl_no}` };
+
+    let changed = 0;
+    await db.transaction(async (tx) => {
+        changed = await applyOrder(tx, pseudo, null, state, { wanted: prefixed, unmapped: prefixedUnmapped });
+    });
+    return {
+        changed,
+        deducted: state.hold ? [...wanted.values()].map(w => ({ blank_type: w.blank_type, color: w.color, size: w.size, qty: w.qty })) : [],
+        released: !state.hold,
+        needs_review: !!state.needs_review,
+        unmapped: [...unmapped.values()].map(u => ({ product: u.title, variant: u.variant, qty: u.qty, reason: u.reason })),
+    };
+}
+
+/** Forget a Crewfit order's movements, giving back anything still held. Used on delete. */
+async function releaseCrewfitOrder(orderId) {
+    const ref = `crewfit:${orderId}`;
+    return db.transaction(async (tx) => {
+        const rows = (await tx.query(
+            'SELECT id, item_id, delta FROM inventory_movements WHERE source_ref LIKE $1', [`${ref}:%`])).rows;
+        for (const m of rows) {
+            if (m.delta !== 0) {
+                await tx.query('UPDATE inventory_items SET qty = qty - $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2', [m.delta, m.item_id]);
+            }
+            await tx.query('DELETE FROM inventory_movements WHERE id = $1', [m.id]);
+        }
+        await tx.query('DELETE FROM inventory_unmapped WHERE source_ref LIKE $1', [`${ref}:%`]);
+        return rows.length;
+    });
+}
+
+/** Every Crewfit order dated on or after `since`. The catch-up for orders that predate this. */
+async function applyCrewfitSince(since) {
+    const r = await db.query(
+        `SELECT id, sl_no, status, product, color, size_breakdown, line_items, dispatch_date
+           FROM crewfit_orders WHERE COALESCE(dispatch_date, order_date) >= $1 ORDER BY id ASC`, [since]);
+    let changed = 0;
+    for (const o of r.rows) changed += (await applyCrewfitOrder(o)).changed;
+    return { orders: r.rows.length, changed };
 }
 
 /* ------------------------------------------------------------------------------------------
@@ -518,6 +690,8 @@ module.exports = {
     refreshProductCache, productIndex, blankTypeFor, splitVariant, safeItems,
     deductionsFor, holdState, applyOrder, applyOrders, applySince, setStock,
     marketingHoldState, applyMarketingOrder, releaseMarketingOrder, applyMarketingSince,
+    crewfitHoldState, crewfitBlankFor, parseSizeBreakdown, normSize, crewfitDeductions,
+    applyCrewfitOrder, releaseCrewfitOrder, applyCrewfitSince,
     normVariant, moveBlank, rtoAvailable, rtoMatches, rtoAlertCount, rtoForOrderNumber,
     availabilityIndex, matchesForOrder, OPEN_ORDER_SQL,
 };

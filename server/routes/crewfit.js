@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const multer = require('multer');
 const PDFDocument = require('pdfkit');
 const db = require('../db/connection');
+const inv = require('../services/inventory');
 const { renderInvoice, renderProforma, renderShippingLabel, LABEL_SIZE, nextInvoiceNumber, nextProformaNumber } = require('../services/invoice');
 const { historyForPhone } = require('./crewfit-customers');
 const { validatePhoneFields } = require('../utils/phone');
@@ -128,6 +129,22 @@ const ORDER_ACCESSORS = {
   qty: orderUnits,
   total_cost: (o) => Number(o.grand_total ?? o.total_cost) || 0,
 };
+
+/**
+ * Push an order's current state at Normless blank stock.
+ *
+ * Crewfit prints its oversized tees on the same blanks the shop sells, so a production run has to
+ * come off that count. Never allowed to fail the save that triggered it — the order really did
+ * change, and refusing it because a stock write went wrong leaves the two further apart.
+ */
+async function applyStock(row) {
+  try {
+    return await inv.applyCrewfitOrder(row);
+  } catch (err) {
+    console.error('crewfit inventory apply failed:', err.message);
+    return { error: 'Blank stock could not be updated for this order' };
+  }
+}
 
 const parseOrder = (o) => ({ ...o, deadline_at: toDateStr(o.deadline_at), order_date: toDateStr(o.order_date), dispatch_date: toDateStr(o.dispatch_date), line_items: safeJson(o.line_items, []), invoices: safeJson(o.invoices, []) });
 
@@ -582,7 +599,8 @@ router.put('/orders/:id', canEditOrders, async (req, res) => {
     await db.query(`UPDATE crewfit_orders SET ${set}, updated_at = CURRENT_TIMESTAMP WHERE id = $${fields.length + 1}`, vals);
     const r = await db.query('SELECT * FROM crewfit_orders WHERE id = $1', [req.params.id]);
     await recordAudit(r.rows[0], before, r.rows[0], req.user?.username);
-    res.json(parseOrder(r.rows[0]));
+    const stock = await applyStock(r.rows[0]);
+    res.json({ ...parseOrder(r.rows[0]), inventory: stock });
   } catch (err) {
     console.error('crewfit update error:', err); res.status(500).json({ error: 'Failed to update order' });
   }
@@ -641,7 +659,10 @@ router.post('/orders', canEditOrders, async (req, res) => {
     const ph = allCols.map((_, i) => `$${i + 1}`).join(',');
     const r = await db.query(`INSERT INTO crewfit_orders (${allCols.join(',')}) VALUES (${ph}) RETURNING *`, vals);
     await recordAudit(r.rows[0], null, r.rows[0], req.user?.username, 'create');
-    res.status(201).json(parseOrder(r.rows[0]));
+    // Usually a no-op — a new order starts at Awaiting Payment, well before production — but an
+    // order can be entered after the fact, already in production or dispatched.
+    const stock = await applyStock(r.rows[0]);
+    res.status(201).json({ ...parseOrder(r.rows[0]), inventory: stock });
   } catch (err) {
     console.error('crewfit create error:', err); res.status(500).json({ error: 'Failed to create order' });
   }
@@ -666,6 +687,10 @@ router.delete('/orders/:id', ownerOnly, async (req, res) => {
         error: `This order has ${docs.rows.length} issued document${docs.rows.length > 1 ? 's' : ''} (${list}) and cannot be deleted. Cancel the document first if it was raised in error.`,
       });
     }
+
+    // A deleted order cannot keep holding blanks, and its movements would be left pointing at an
+    // order number nobody can look up.
+    await inv.releaseCrewfitOrder(req.params.id);
 
     const r = await db.query('DELETE FROM crewfit_orders WHERE id = $1 RETURNING sl_no', [req.params.id]);
     if (!r.rows[0]) return res.status(404).json({ error: 'Order not found' });
