@@ -151,6 +151,24 @@ const ScanHub = () => {
 
         {error && <div className="scan-error-msg">{error}</div>}
 
+        {/* Said before the garments, because this is the last moment before someone pulls a blank
+            off the shelf and prints a second copy of something already in the building. */}
+        {order && !!(order.rto_matches || []).length && (
+          <div className="rto-scan-alert">
+            <span className="rto-scan-icon">↩</span>
+            <div>
+              <b>This order can be filled from the RTO shelf — don't print a new one.</b>
+              {order.rto_matches.map((m, i) => (
+                <div key={i} className="rto-scan-line">
+                  {m.product_title} · {m.variant} — <b>{m.available}</b> waiting
+                  {m.blank_type ? ` · ${m.blank_type} ${m.color} ${m.size}` : ''}
+                </div>
+              ))}
+              <div className="rto-scan-hint">Mark it used in Inventory → RTO so the blank goes back into stock.</div>
+            </div>
+          </div>
+        )}
+
         {order ? (
           <OrderDetailsCard order={order} />
         ) : !loading && !error && (

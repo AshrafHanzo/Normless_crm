@@ -145,6 +145,17 @@ app.get('/api/scanner/lookup/:id', authMiddleware, async (req, res) => {
                     order.line_items = [];
                 }
             }
+            // Does the RTO shelf already hold one of these? Asked here rather than from the page,
+            // because the packer scanning to dispatch may not have inventory access at all — and
+            // this is the last moment before a fresh garment is printed for nothing.
+            try {
+                const inv = require('./services/inventory');
+                order.rto_matches = await inv.rtoForOrderNumber(order.order_number);
+            } catch (rtoErr) {
+                console.error('RTO check failed:', rtoErr.message);
+                order.rto_matches = [];
+            }
+
             console.log(`✅ [FOUND] Order ${order.order_number} with ${order.line_items.length} items`);
             return res.json(order);
         } else {
@@ -669,6 +680,88 @@ async function ensureInventorySchema() {
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             ALTER TABLE inventory_unmapped ADD COLUMN IF NOT EXISTS dismissed BOOLEAN DEFAULT false;
+
+            -- Every colour/size a product is sold in. The blank grid only needs the garment, but
+            -- an RTO piece is a printed one — it belongs to a design, so putting one on the shelf
+            -- by hand means picking a product and one of its variants.
+            CREATE TABLE IF NOT EXISTS shopify_variants (
+                variant_id BIGINT PRIMARY KEY,
+                shopify_product_id BIGINT NOT NULL,
+                variant TEXT,
+                color TEXT,
+                size TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS shopify_variants_product_idx ON shopify_variants (shopify_product_id);
+
+            -- Printed garments that came back — RTO, refused, undelivered. Not blank stock: the
+            -- piece carries a design and can only go out again to an order for that same design
+            -- and variant, which is what makes matching it to open orders worth doing.
+            --
+            -- Counts rather than a row per garment: a parcel of three comes back as one line, and
+            -- pieces leave it one at a time. available = qty - qty_used - qty_written_off.
+            CREATE TABLE IF NOT EXISTS inventory_rto (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                shopify_product_id BIGINT,
+                variant_id BIGINT,             -- what an order line is matched on; exact, unlike text
+                product_title TEXT NOT NULL,
+                variant TEXT,
+                color TEXT,
+                size TEXT,
+                blank_type TEXT,               -- where the blank credit goes when the piece is reused
+                qty INTEGER NOT NULL DEFAULT 1,
+                qty_used INTEGER NOT NULL DEFAULT 0,
+                qty_written_off INTEGER NOT NULL DEFAULT 0,
+                source_order_number TEXT,
+                -- '<shopify_order_id>:<variant_id>', so scanning the same returned parcel twice
+                -- cannot put the same garments on the shelf twice.
+                source_ref TEXT,
+                reason TEXT,
+                note TEXT,
+                location TEXT,
+                created_by TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS inventory_rto_source_idx
+                ON inventory_rto (source_ref) WHERE source_ref IS NOT NULL;
+
+            -- What happened to each returned piece, so "where did that one go" has an answer.
+            CREATE TABLE IF NOT EXISTS inventory_rto_events (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                rto_id INTEGER NOT NULL,
+                kind TEXT NOT NULL,            -- 'in' | 'used' | 'damaged' | 'removed'
+                qty INTEGER NOT NULL,
+                order_number TEXT,             -- the order it went out to, for 'used'
+                note TEXT,
+                created_by TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS inventory_rto_events_rto_idx ON inventory_rto_events (rto_id);
+
+            -- Write-offs. A ruined blank and a ruined printed piece cost different things and come
+            -- off different shelves, so which one it was is recorded rather than assumed.
+            CREATE TABLE IF NOT EXISTS inventory_damaged (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                kind TEXT NOT NULL,            -- 'blank' | 'finished'
+                blank_type TEXT, color TEXT, size TEXT,
+                shopify_product_id BIGINT, variant_id BIGINT, product_title TEXT, variant TEXT,
+                rto_id INTEGER,                -- set when the piece came off the RTO shelf
+                qty INTEGER NOT NULL,
+                stage TEXT,                    -- printing | stitching | packing | courier | other
+                reason TEXT,
+                note TEXT,
+                movement_id INTEGER,           -- the blank deduction this caused, so it can be undone
+                created_by TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS inventory_damaged_created_idx ON inventory_damaged (created_at DESC);
+
+            -- CREATE TABLE IF NOT EXISTS leaves an existing table alone, so anything added to the
+            -- definitions above after they first ran has to arrive as its own ALTER.
+            ALTER TABLE inventory_rto ADD COLUMN IF NOT EXISTS variant_id BIGINT;
+            ALTER TABLE inventory_damaged ADD COLUMN IF NOT EXISTS variant_id BIGINT;
+            CREATE INDEX IF NOT EXISTS inventory_rto_variant_idx ON inventory_rto (variant_id);
         `);
         await db.exec(`
             ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_inventory BOOLEAN DEFAULT false;

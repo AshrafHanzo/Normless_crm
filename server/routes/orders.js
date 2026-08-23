@@ -1,6 +1,7 @@
 const express = require('express');
 const db = require('../db/connection');
 const { tableParams, pagination } = require('../utils/table');
+const inv = require('../services/inventory');
 
 const router = express.Router();
 
@@ -63,8 +64,27 @@ router.get('/', async (req, res) => {
             LIMIT $${paramCount} OFFSET $${paramCount + 1}
         `, [...params, t.limit, t.offset]);
 
+        // Which of these could be filled from the RTO shelf. Computed over the page's rows only —
+        // one extra query, and it stops a packer printing a garment that is already in the building.
+        let rto = {};
+        try {
+            const shelf = await inv.rtoAvailable();
+            if (shelf.length) {
+                const index = inv.availabilityIndex(shelf);
+                for (const o of ordersResult.rows) {
+                    const open = !['FULFILLED', 'RESTOCKED'].includes(String(o.fulfillment_status || '').toUpperCase());
+                    if (!open) continue;
+                    const lines = inv.matchesForOrder(o, index);
+                    if (lines.length) rto[o.order_number] = lines;
+                }
+            }
+        } catch (rtoErr) {
+            console.error('orders RTO check failed:', rtoErr.message);
+        }
+
         res.json({
             orders: ordersResult.rows,
+            rto,
             pagination: pagination(total, t),
         });
     } catch (err) {

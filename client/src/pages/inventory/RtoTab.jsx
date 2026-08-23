@@ -1,0 +1,534 @@
+import { useState, useEffect, useRef } from 'react'
+import { useApi, useAuth } from '../../App'
+import { useToast } from '../../components/Toast'
+import Icon from '../../components/Icon'
+
+const num = (v) => new Intl.NumberFormat('en-IN').format(Number(v) || 0)
+const day = (v) => (v ? new Date(v).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit' }) : '—')
+
+const REASONS = ['Undelivered — RTO', 'Refused by customer', 'Address issue', 'Customer return', 'Other']
+
+/**
+ * The RTO shelf: printed garments that came back.
+ *
+ * These are not blanks and never become blanks — a returned "Natty Forever / Black / L" carries a
+ * print and can only go out again to another order for that same design and variant. Which is
+ * exactly why the shelf is matched against open orders: the whole value of keeping it is catching
+ * the moment someone is about to print a second one.
+ */
+export default function RtoTab({ onCounts }) {
+  const apiFetch = useApi()
+  const toast = useToast()
+  const { user } = useAuth()
+  const canEdit = ['owner', 'admin'].includes(user?.role) || !!user?.can_edit_inventory
+
+  const [data, setData] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [busy, setBusy] = useState(null)
+  const [intake, setIntake] = useState(null)   // { mode, scan, order, items, reason, note, location }
+  const [use, setUse] = useState(null)         // { row, order_number, qty }
+  const [damage, setDamage] = useState(null)   // { row, qty, stage, reason, note }
+  const [products, setProducts] = useState(null)
+  const [history, setHistory] = useState(false)
+  const scanRef = useRef(null)
+
+  const load = async () => {
+    const r = await apiFetch('/api/inventory/rto')
+    if (r && !r.error) { setData(r); onCounts?.(r.summary || {}) }
+    else if (r?.error) toast.error(r.error)
+    setLoading(false)
+  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { load() }, [])
+
+  // The scan box takes focus the moment the sheet opens — a scanner types into whatever is
+  // focused, and a barcode fired at the page body is simply lost.
+  useEffect(() => { if (intake?.mode === 'scan') scanRef.current?.focus() }, [intake?.mode])
+
+  const openIntake = (mode) => setIntake({ mode, scan: '', order: null, items: [], reason: REASONS[0], note: '', location: '' })
+
+  const lookup = async (raw) => {
+    const code = String(raw || '').trim()
+    if (!code) return
+    setBusy('lookup')
+    const r = await apiFetch(`/api/inventory/rto/order/${encodeURIComponent(code)}`)
+    setBusy(null)
+    if (!r || r.error) { toast.error(r?.error || 'Order not found'); return }
+    // Everything in the parcel came back unless told otherwise — an RTO is normally the whole
+    // box, so the work is unticking the odd line rather than ticking every one.
+    setIntake(v => ({
+      ...v, order: r.order,
+      items: r.items.map(it => ({ ...it, take: !it.on_shelf, qty_take: it.qty })),
+    }))
+  }
+
+  const loadProducts = async () => {
+    if (products) return
+    const r = await apiFetch('/api/inventory/products')
+    if (r && !r.error) setProducts(r.products.filter(p => p.variants.length))
+  }
+  useEffect(() => { if (intake?.mode === 'manual') loadProducts() }, [intake?.mode]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const saveIntake = async () => {
+    const chosen = (intake.items || []).filter(i => i.take && i.qty_take > 0)
+    if (!chosen.length) { toast.error('Nothing selected'); return }
+    setBusy('save')
+    const res = await apiFetch('/api/inventory/rto', {
+      method: 'POST',
+      body: JSON.stringify({
+        items: chosen.map(i => ({
+          shopify_product_id: i.shopify_product_id, variant_id: i.variant_id,
+          product_title: i.product_title, variant: i.variant, qty: i.qty_take,
+          blank_type: i.blank_type, color: i.color, size: i.size,
+          source_ref: i.source_ref || null, source_order_number: intake.order?.order_number || null,
+          reason: intake.reason, note: intake.note || null, location: intake.location || null,
+        })),
+      }),
+    })
+    setBusy(null)
+    if (!res || res.error) { toast.error(res?.error || 'Failed to add'); return }
+    toast.success(`${res.added} piece${res.added === 1 ? '' : 's'} on the shelf${res.skipped ? ` · ${res.skipped} already there` : ''}`)
+    setIntake(null); load()
+  }
+
+  const saveUse = async () => {
+    const qty = Number(use.qty)
+    if (!use.order_number.trim()) { toast.error('Which order is it going to?'); return }
+    if (!Number.isFinite(qty) || qty < 1) { toast.error('Quantity must be 1 or more'); return }
+    setBusy('use')
+    const res = await apiFetch(`/api/inventory/rto/${use.row.id}/use`, {
+      method: 'POST', body: JSON.stringify({ order_number: use.order_number.trim(), qty }),
+    })
+    setBusy(null)
+    if (!res || res.error) { toast.error(res?.error || 'Failed'); return }
+    toast.success(res.credited
+      ? `Sent to ${use.order_number.trim()} · ${res.credited.blank_type} ${res.credited.color} ${res.credited.size} +${res.credited.qty} back in blanks`
+      : `Sent to ${use.order_number.trim()}`)
+    setUse(null); load()
+  }
+
+  const saveDamage = async () => {
+    const qty = Number(damage.qty)
+    if (!Number.isFinite(qty) || qty < 1) { toast.error('Quantity must be 1 or more'); return }
+    if (!damage.reason.trim()) { toast.error('Say what went wrong'); return }
+    setBusy('damage')
+    const res = await apiFetch('/api/inventory/damaged', {
+      method: 'POST',
+      body: JSON.stringify({ kind: 'finished', rto_id: damage.row.id, qty, stage: damage.stage, reason: damage.reason.trim(), note: damage.note || null }),
+    })
+    setBusy(null)
+    if (!res || res.error) { toast.error(res?.error || 'Failed'); return }
+    toast.success('Written off, and taken off the shelf')
+    setDamage(null); load()
+  }
+
+  const removeEntry = async (row) => {
+    if (!await toast.confirm({
+      title: `Remove ${row.product_title}?`,
+      message: 'Only entries nothing has left yet can be removed — this one was added by mistake.',
+      details: [{ label: 'Variant', value: row.variant || '—' }, { label: 'Pieces', value: String(row.qty) }],
+      confirmLabel: 'Remove', danger: true,
+    })) return
+    const res = await apiFetch(`/api/inventory/rto/${row.id}`, { method: 'DELETE' })
+    if (!res || res.error) { toast.error(res?.error || 'Failed'); return }
+    toast.success('Entry removed'); load()
+  }
+
+  if (loading) return <div className="loader"><div className="spinner" /><span>Loading the RTO shelf…</span></div>
+  if (!data) return <div className="empty-state"><p>RTO stock could not be loaded.</p></div>
+
+  const s = data.summary || {}
+  const shelf = data.shelf || []
+  const matches = data.matches || []
+  // One shelf entry per design+variant is what gets acted on; the raw rows carry the provenance.
+  const entriesFor = (row) => (data.entries || []).filter(e =>
+    e.available > 0 && (row.variant_id ? String(e.variant_id) === String(row.variant_id)
+      : e.product_title === row.product_title && e.variant === row.variant))
+
+  return (
+    <>
+      <div className="dash-toolbar">
+        <div>
+          <p style={{ color: 'var(--text-muted)' }}>
+            Printed garments that came back. A piece here can go out again to any order for the same
+            design and size — and doing so puts its blank back in stock.
+          </p>
+        </div>
+        {canEdit && (
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            <button className="btn btn-secondary" onClick={() => openIntake('manual')}>Add by product</button>
+            <button className="btn btn-primary" onClick={() => openIntake('scan')}>
+              <Icon name="scan" size={15} style={{ marginRight: 6, verticalAlign: '-2px' }} />
+              Scan a return
+            </button>
+          </div>
+        )}
+      </div>
+
+      <div className="kpi-grid" style={{ marginBottom: 18 }}>
+        {[
+          { icon: 'box', label: 'Pieces on the shelf', value: num(s.pieces) },
+          { icon: 'shirt', label: 'Designs held', value: num(s.designs) },
+          { icon: 'alert', label: 'Orders that could use one', value: num(s.matched_orders) },
+          { icon: 'trending', label: 'Sent out again', value: num(s.used) },
+        ].map(k => (
+          <div className="kpi-card" key={k.label}>
+            <div className="kpi-head"><div className="kpi-icon"><Icon name={k.icon} size={20} /></div></div>
+            <div className="kpi-value">{k.value}</div>
+            <div className="kpi-label">{k.label}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* The point of the whole tab. Naming the orders is what makes it actionable — "you have
+          stock" is useless without saying which order to send it to. */}
+      {!!matches.length && (
+        <div className="card rto-alert" style={{ marginBottom: 18 }}>
+          <h2 style={{ fontSize: 15, marginBottom: 6 }}>
+            <Icon name="alert" size={16} style={{ marginRight: 6, verticalAlign: '-3px' }} />
+            {matches.length} open order{matches.length > 1 ? 's' : ''} can be served from this shelf
+          </h2>
+          <p style={{ color: 'var(--text-muted)', fontSize: 12.5, marginBottom: 12 }}>
+            Send the returned piece instead of printing a new one. Mark it used below and the blank goes back into stock.
+          </p>
+          {matches.map(m => (
+            <div className="review-row" key={m.order_number}>
+              <span>
+                <b>{m.order_number}</b> · {day(m.created_at)}
+                {m.lines.map((l, i) => (
+                  <span key={i} style={{ color: 'var(--text-muted)' }}>
+                    {' · '}{l.product_title} {l.variant} <b style={{ color: 'var(--success)' }}>({l.available} on shelf)</b>
+                  </span>
+                ))}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {!shelf.length ? (
+        <div className="empty-state">
+          <div className="empty-icon">📥</div>
+          <p>Nothing on the RTO shelf.{canEdit ? ' Scan a returned parcel to put its garments here.' : ''}</p>
+        </div>
+      ) : (
+        <div className="data-table-wrapper">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Design</th><th>Variant</th><th>Blank behind it</th>
+                <th style={{ textAlign: 'right' }}>Available</th><th>Oldest</th><th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {shelf.map((row, i) => {
+                const sources = entriesFor(row)
+                const first = sources[0]
+                return (
+                  <tr key={i}>
+                    <td className="cell-primary">{row.product_title}</td>
+                    <td data-label="Variant">{row.variant || '—'}</td>
+                    <td data-label="Blank behind it" style={{ color: 'var(--text-muted)' }}>
+                      {row.blank_type ? `${row.blank_type} ${row.color} ${row.size}` : 'Not linked to a blank'}
+                    </td>
+                    <td data-label="Available" style={{ textAlign: 'right', fontWeight: 700 }}>{row.available}</td>
+                    <td data-label="Oldest">
+                      {day(row.oldest)}
+                      {first?.source_order_number && <div style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>from {first.source_order_number}</div>}
+                    </td>
+                    <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                      {canEdit && first && (
+                        <>
+                          <button className="mini-btn" onClick={() => setUse({ row: first, order_number: '', qty: 1 })}>Send to an order</button>
+                          <button className="mini-btn" style={{ marginLeft: 6 }}
+                            onClick={() => setDamage({ row: first, qty: 1, stage: 'courier', reason: '', note: '' })}>Damaged</button>
+                        </>
+                      )}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <div className="dash-toolbar" style={{ marginTop: 22, marginBottom: 12 }}>
+        <div>
+          <h2 style={{ fontSize: 17 }}>Everything returned</h2>
+          <p style={{ color: 'var(--text-muted)', fontSize: 12.5 }}>
+            Every piece that came back, including those already sent out again or written off
+          </p>
+        </div>
+        <button className="mini-btn" onClick={() => setHistory(h => !h)}>{history ? 'Hide' : 'Show'}</button>
+      </div>
+
+      {history && (
+        <div className="data-table-wrapper">
+          {!(data.entries || []).length ? (
+            <div className="empty-state"><p>No returns recorded yet.</p></div>
+          ) : (
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Design</th><th>Variant</th><th>From</th><th>Reason</th>
+                  <th style={{ textAlign: 'right' }}>In</th>
+                  <th style={{ textAlign: 'right' }}>Out</th>
+                  <th style={{ textAlign: 'right' }}>Written off</th>
+                  <th style={{ textAlign: 'right' }}>Left</th>
+                  <th>Added</th><th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.entries.map(e => (
+                  <tr key={e.id}>
+                    <td className="cell-primary">{e.product_title}</td>
+                    <td data-label="Variant">{e.variant || '—'}</td>
+                    <td data-label="From">{e.source_order_number || <span style={{ color: 'var(--text-muted)' }}>by hand</span>}</td>
+                    <td data-label="Reason" style={{ color: 'var(--text-muted)' }}>{e.reason || '—'}</td>
+                    <td data-label="In" style={{ textAlign: 'right' }}>{e.qty}</td>
+                    <td data-label="Out" style={{ textAlign: 'right' }}>{e.qty_used || '—'}</td>
+                    <td data-label="Written off" style={{ textAlign: 'right' }}>{e.qty_written_off || '—'}</td>
+                    <td data-label="Left" style={{ textAlign: 'right', fontWeight: 700 }}>{e.available}</td>
+                    <td data-label="Added" style={{ fontSize: 12 }}>
+                      <div>{day(e.created_at)}</div>
+                      {e.created_by && <div style={{ color: 'var(--text-muted)' }}>{e.created_by}</div>}
+                    </td>
+                    <td style={{ textAlign: 'right' }}>
+                      {canEdit && !e.qty_used && !e.qty_written_off && (
+                        <button className="mini-btn" onClick={() => removeEntry(e)}>Remove</button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+
+      {/* ---- Intake ------------------------------------------------------------------ */}
+      {intake && (
+        <div className="confirm-overlay" onClick={() => setIntake(null)}>
+          <div className="confirm-card" style={{ maxWidth: 680 }} onClick={e => e.stopPropagation()} role="dialog" aria-modal="true">
+            <h3 className="confirm-title">Put returned garments on the shelf</h3>
+            <div className="scan-tabs" style={{ marginBottom: 14 }}>
+              <button className={intake.mode === 'scan' ? 'active' : ''} onClick={() => setIntake(v => ({ ...v, mode: 'scan' }))}>Scan an order</button>
+              <button className={intake.mode === 'manual' ? 'active' : ''} onClick={() => setIntake(v => ({ ...v, mode: 'manual' }))}>Pick a product</button>
+            </div>
+
+            {intake.mode === 'scan' && (
+              <>
+                <div className="input-group">
+                  <label>Scan or type the order number on the returned parcel</label>
+                  <input ref={scanRef} value={intake.scan} placeholder="#10805"
+                    onChange={e => setIntake(v => ({ ...v, scan: e.target.value }))}
+                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); lookup(intake.scan) } }} />
+                  <span className="label-hint">{busy === 'lookup' ? 'Looking it up…' : 'Enter to look it up'}</span>
+                </div>
+
+                {intake.order && (
+                  <>
+                    <dl className="confirm-details">
+                      <div className="confirm-detail"><dt>Order</dt><dd>{intake.order.order_number}</dd></div>
+                      <div className="confirm-detail"><dt>Placed</dt><dd>{day(intake.order.created_at)}</dd></div>
+                      <div className="confirm-detail"><dt>Customer</dt><dd>{[intake.order.first_name, intake.order.last_name].filter(Boolean).join(' ') || '—'}</dd></div>
+                    </dl>
+                    <div className="rto-lines">
+                      {intake.items.map((it, i) => (
+                        <label className={`rto-line ${it.on_shelf ? 'rto-line-done' : ''}`} key={i}>
+                          <input type="checkbox" checked={it.take} disabled={it.on_shelf}
+                            onChange={e => setIntake(v => ({ ...v, items: v.items.map((x, j) => j === i ? { ...x, take: e.target.checked } : x) }))} />
+                          <span style={{ flex: 1 }}>
+                            <b>{it.product_title}</b>
+                            <span style={{ color: 'var(--text-muted)' }}> · {it.variant || '—'}</span>
+                            {it.on_shelf && <span className="rto-pill">already on the shelf</span>}
+                            {!it.blank_type && <span className="rto-pill rto-pill-warn">no blank linked</span>}
+                          </span>
+                          <input type="number" min="1" max={it.qty} value={it.qty_take} style={{ width: 70 }}
+                            disabled={it.on_shelf || !it.take}
+                            onChange={e => setIntake(v => ({ ...v, items: v.items.map((x, j) => j === i ? { ...x, qty_take: Number(e.target.value) } : x) }))} />
+                          <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>of {it.qty}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </>
+            )}
+
+            {intake.mode === 'manual' && (
+              <ManualPicker products={products}
+                onAdd={(item) => setIntake(v => ({ ...v, items: [...v.items, item] }))} />
+            )}
+
+            {intake.mode === 'manual' && !!intake.items.length && (
+              <div className="rto-lines">
+                {intake.items.map((it, i) => (
+                  <div className="rto-line" key={i}>
+                    <span style={{ flex: 1 }}><b>{it.product_title}</b> <span style={{ color: 'var(--text-muted)' }}>· {it.variant}</span></span>
+                    <b>{it.qty_take}</b>
+                    <button className="mini-btn" onClick={() => setIntake(v => ({ ...v, items: v.items.filter((_, j) => j !== i) }))}>×</button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="form-row" style={{ marginTop: 12 }}>
+              <div className="input-group">
+                <label>Why did it come back</label>
+                <select value={intake.reason} onChange={e => setIntake(v => ({ ...v, reason: e.target.value }))}>
+                  {REASONS.map(r => <option key={r}>{r}</option>)}
+                </select>
+              </div>
+              <div className="input-group">
+                <label>Where is it kept <span style={{ color: 'var(--text-muted)' }}>optional</span></label>
+                <input value={intake.location} placeholder="Rack B, shelf 2"
+                  onChange={e => setIntake(v => ({ ...v, location: e.target.value }))} />
+              </div>
+            </div>
+            <div className="input-group">
+              <label>Note <span style={{ color: 'var(--text-muted)' }}>optional</span></label>
+              <input value={intake.note} onChange={e => setIntake(v => ({ ...v, note: e.target.value }))} />
+            </div>
+
+            <p className="confirm-message" style={{ fontSize: 12.5 }}>
+              Blank stock does not change here — the blank was spent when the garment was printed and
+              still is. It comes back only when this piece is sent out to another order.
+            </p>
+
+            <div className="confirm-actions">
+              <button className="btn btn-secondary" onClick={() => setIntake(null)}>Cancel</button>
+              <button className="btn btn-primary" disabled={busy === 'save' || !intake.items.some(i => i.take && i.qty_take > 0)} onClick={saveIntake}>
+                {busy === 'save' ? 'Saving…' : 'Add to the shelf'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ---- Send to an order --------------------------------------------------------- */}
+      {use && (
+        <div className="confirm-overlay" onClick={() => setUse(null)}>
+          <div className="confirm-card" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true">
+            <h3 className="confirm-title">Send this piece to an order</h3>
+            <p className="confirm-message">{use.row.product_title} · {use.row.variant}</p>
+            {!!matches.length && (
+              <div className="rto-suggest">
+                {matches.slice(0, 6).map(m => (
+                  <button key={m.order_number} className="mini-btn"
+                    onClick={() => setUse(v => ({ ...v, order_number: m.order_number }))}>{m.order_number}</button>
+                ))}
+              </div>
+            )}
+            <div className="input-group">
+              <label>Order number</label>
+              <input value={use.order_number} autoFocus placeholder="#10812"
+                onChange={e => setUse(v => ({ ...v, order_number: e.target.value }))}
+                onKeyDown={e => { if (e.key === 'Enter') saveUse() }} />
+            </div>
+            <div className="input-group">
+              <label>How many</label>
+              <input type="number" min="1" max={use.row.available} value={use.qty}
+                onChange={e => setUse(v => ({ ...v, qty: e.target.value }))} />
+              <span className="label-hint">{use.row.available} available on this entry</span>
+            </div>
+            {use.row.blank_type ? (
+              <p className="confirm-message" style={{ fontSize: 12.5 }}>
+                <b>{use.row.blank_type} {use.row.color} {use.row.size}</b> gets <b>+{use.qty || 1}</b> back in blank
+                stock — that order deducted a blank when it was placed, but nothing new was printed for it.
+              </p>
+            ) : (
+              <p className="confirm-message" style={{ fontSize: 12.5 }}>
+                This piece is not linked to a blank, so no blank stock is credited.
+              </p>
+            )}
+            <div className="confirm-actions">
+              <button className="btn btn-secondary" onClick={() => setUse(null)}>Cancel</button>
+              <button className="btn btn-primary" disabled={busy === 'use'} onClick={saveUse}>
+                {busy === 'use' ? 'Saving…' : 'Mark as sent'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ---- Write one off from the shelf --------------------------------------------- */}
+      {damage && (
+        <div className="confirm-overlay" onClick={() => setDamage(null)}>
+          <div className="confirm-card" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true">
+            <h3 className="confirm-title">Write this piece off</h3>
+            <p className="confirm-message">{damage.row.product_title} · {damage.row.variant}</p>
+            <div className="input-group">
+              <label>How many</label>
+              <input type="number" min="1" max={damage.row.available} value={damage.qty} autoFocus
+                onChange={e => setDamage(v => ({ ...v, qty: e.target.value }))} />
+            </div>
+            <div className="input-group">
+              <label>What went wrong</label>
+              <input value={damage.reason} placeholder="Came back stained"
+                onChange={e => setDamage(v => ({ ...v, reason: e.target.value }))}
+                onKeyDown={e => { if (e.key === 'Enter') saveDamage() }} />
+            </div>
+            <p className="confirm-message" style={{ fontSize: 12.5 }}>
+              It leaves the shelf and appears under Damaged. Blank stock is untouched — that blank was
+              spent on the print and is not coming back.
+            </p>
+            <div className="confirm-actions">
+              <button className="btn btn-secondary" onClick={() => setDamage(null)}>Cancel</button>
+              <button className="btn btn-primary" disabled={busy === 'damage'} onClick={saveDamage}>
+                {busy === 'damage' ? 'Saving…' : 'Write off'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
+
+/** Product + variant + quantity, for a piece that arrives without an order to scan. */
+function ManualPicker({ products, onAdd }) {
+  const [productId, setProductId] = useState('')
+  const [variantId, setVariantId] = useState('')
+  const [qty, setQty] = useState(1)
+  if (!products) return <div className="loader"><div className="spinner" /></div>
+
+  const product = products.find(p => String(p.shopify_id) === String(productId))
+  const variant = product?.variants.find(v => String(v.variant_id) === String(variantId))
+
+  const add = () => {
+    if (!product || !variant) return
+    onAdd({
+      shopify_product_id: product.shopify_id, variant_id: variant.variant_id,
+      product_title: product.title, variant: variant.variant,
+      color: variant.color, size: variant.size, blank_type: product.blank_type,
+      qty: Number(qty) || 1, qty_take: Number(qty) || 1, take: true, source_ref: null,
+    })
+    setVariantId(''); setQty(1)
+  }
+
+  return (
+    <div className="form-row" style={{ alignItems: 'end' }}>
+      <div className="input-group">
+        <label>Design</label>
+        <select value={productId} onChange={e => { setProductId(e.target.value); setVariantId('') }}>
+          <option value="">Choose a product…</option>
+          {products.map(p => <option key={p.shopify_id} value={p.shopify_id}>{p.title}</option>)}
+        </select>
+      </div>
+      <div className="input-group">
+        <label>Colour / size</label>
+        <select value={variantId} disabled={!product} onChange={e => setVariantId(e.target.value)}>
+          <option value="">Choose…</option>
+          {(product?.variants || []).map(v => <option key={v.variant_id} value={v.variant_id}>{v.variant}</option>)}
+        </select>
+      </div>
+      <div className="input-group" style={{ maxWidth: 110 }}>
+        <label>How many</label>
+        <input type="number" min="1" value={qty} onChange={e => setQty(e.target.value)} />
+      </div>
+      <button className="btn btn-secondary" disabled={!variant} onClick={add} style={{ marginBottom: 14 }}>Add</button>
+    </div>
+  )
+}

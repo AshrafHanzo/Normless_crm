@@ -7,6 +7,8 @@ import Pagination from '../components/Pagination'
 export default function Orders() {
   const apiFetch = useApi()
   const [orders, setOrders] = useState([])
+  // order_number → the RTO shelf lines that could fill it, from the list response.
+  const [rto, setRto] = useState({})
   const [search, setSearch] = useState('')
   const [financialFilter, setFinancialFilter] = useState('')
   const [fulfillmentFilter, setFulfillmentFilter] = useState('')
@@ -31,6 +33,7 @@ export default function Orders() {
     }))
     if (result && !result.error) {
       setOrders(result.orders)
+      setRto(result.rto || {})
       t.setPagination(result.pagination)
     }
     setLoading(false)
@@ -121,7 +124,15 @@ export default function Orders() {
                 {orders.map(o => (
                   <Fragment key={o.id}>
                     <tr onClick={() => toggleExpand(o.id)}>
-                      <td data-label="Order" style={{ fontWeight: 600, color: 'var(--primary-light)' }}>{o.order_number}</td>
+                      <td data-label="Order" style={{ fontWeight: 600, color: 'var(--primary-light)' }}>
+                        {o.order_number}
+                        {/* Already in the building — dispatch the returned piece rather than printing again. */}
+                        {!!rto[o.order_number] && (
+                          <span className="rto-tag" title={rto[o.order_number].map(l => `${l.product_title} ${l.variant} — ${l.available} on the RTO shelf`).join('\n')}>
+                            ↩ RTO
+                          </span>
+                        )}
+                      </td>
                       <td className="cell-primary">
                         <div style={{ fontWeight: 500 }}>{o.first_name || ''} {o.last_name || ''}</div>
                         <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{o.customer_email || ''}</div>

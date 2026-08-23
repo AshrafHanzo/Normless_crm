@@ -73,16 +73,25 @@ async function refreshProductCache() {
                updated_at = CURRENT_TIMESTAMP`,
             [p.id, p.title, p.product_type || null, prefix, blankTypeFor(row)]);
 
-        // Record every colour/size this blank is sold in, so the grid can show a cell to count
-        // into before any stock exists.
         const blank = blankTypeFor(row);
-        if (!blank) continue;
         for (const v of p.variants || []) {
             const parts = splitVariant(v.title);
-            if (!parts) continue;
+            // Every variant is cached, blank-backed or not: an RTO piece belongs to a design, and
+            // a design with no blank behind it (a cap, an accessory) can still come back.
             await db.query(
-                `INSERT INTO inventory_catalog (blank_type, color, size) VALUES ($1,$2,$3)
-                 ON CONFLICT DO NOTHING`, [blank, parts.color, parts.size]);
+                `INSERT INTO shopify_variants (variant_id, shopify_product_id, variant, color, size, updated_at)
+                 VALUES ($1,$2,$3,$4,$5,CURRENT_TIMESTAMP)
+                 ON CONFLICT (variant_id) DO UPDATE SET
+                   shopify_product_id = excluded.shopify_product_id, variant = excluded.variant,
+                   color = excluded.color, size = excluded.size, updated_at = CURRENT_TIMESTAMP`,
+                [v.id, p.id, v.title, parts?.color || null, parts?.size || null]);
+            // Record every colour/size this blank is sold in, so the grid can show a cell to count
+            // into before any stock exists.
+            if (blank && parts) {
+                await db.query(
+                    `INSERT INTO inventory_catalog (blank_type, color, size) VALUES ($1,$2,$3)
+                     ON CONFLICT DO NOTHING`, [blank, parts.color, parts.size]);
+            }
         }
     }
     return products.length;
@@ -280,8 +289,134 @@ async function applySince(since) {
     return applyOrders(r.rows);
 }
 
+/* ------------------------------------------------------------------------------------------
+ * RTO — printed garments that came back
+ *
+ * These are not blanks. A returned "Natty Forever / Black / L" can only go out again to another
+ * order for that same design and variant, which is the whole reason the shelf is worth keeping:
+ * matched against open orders, it says "don't print this one, it is already in the box".
+ *
+ * Reusing a piece credits the blank back. The order that reused it deducted a blank when it was
+ * placed, but no blank was consumed — the garment already existed — so the count would drift low
+ * once per reuse if nothing gave it back.
+ * ---------------------------------------------------------------------------------------- */
+
+/** "Red /XL" and "Red / XL" are the same variant; compare on a single spelling of it. */
+function normVariant(v) {
+    const parts = splitVariant(v);
+    return parts ? `${parts.color} / ${parts.size}`.toLowerCase() : String(v || '').trim().toLowerCase();
+}
+
+/** Move a blank's count and say why. Returns the movement id so the entry can be undone. */
+async function moveBlank(tx, { blank_type, color, size }, delta, reason, note, user) {
+    await tx.query(
+        `INSERT INTO inventory_items (blank_type, color, size, qty) VALUES ($1,$2,$3,0)
+         ON CONFLICT (blank_type, color, size) DO NOTHING`, [blank_type, color, size]);
+    const item = (await tx.query(
+        'SELECT id FROM inventory_items WHERE blank_type=$1 AND color=$2 AND size=$3',
+        [blank_type, color, size])).rows[0];
+    await tx.query('UPDATE inventory_items SET qty = qty + $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2', [delta, item.id]);
+    const m = await tx.query(
+        `INSERT INTO inventory_movements (item_id, delta, reason, note, created_by)
+         VALUES ($1,$2,$3,$4,$5) RETURNING id`, [item.id, delta, reason, note || null, user || null]);
+    return m.rows[0].id;
+}
+
+/** What is on the RTO shelf right now, one row per design + variant. */
+async function rtoAvailable() {
+    const r = await db.query(
+        `SELECT variant_id, shopify_product_id, product_title, variant, color, size, blank_type,
+                SUM(qty - qty_used - qty_written_off)::int AS available,
+                MIN(created_at) AS oldest
+           FROM inventory_rto
+          GROUP BY variant_id, shopify_product_id, product_title, variant, color, size, blank_type
+         HAVING SUM(qty - qty_used - qty_written_off) > 0
+          ORDER BY product_title, variant`);
+    return r.rows;
+}
+
+/** Index of what is available, keyed both ways so a line item matches however it is identified. */
+function availabilityIndex(rows) {
+    const byVariant = new Map();
+    const byText = new Map();
+    for (const r of rows) {
+        if (r.variant_id) byVariant.set(String(r.variant_id), r);
+        if (r.shopify_product_id) byText.set(`${r.shopify_product_id}|${normVariant(r.variant)}`, r);
+    }
+    return { byVariant, byText };
+}
+
+/** The shelf entry that could serve this order line, or null. */
+function matchLine(item, index) {
+    if (item.shopify_variant_id && index.byVariant.has(String(item.shopify_variant_id))) {
+        return index.byVariant.get(String(item.shopify_variant_id));
+    }
+    return index.byText.get(`${item.shopify_product_id}|${normVariant(item.variant)}`) || null;
+}
+
+/** Lines of one order that are sitting on the RTO shelf. Takes an order row. */
+function matchesForOrder(order, index) {
+    const out = [];
+    for (const it of safeItems(order)) {
+        const hit = matchLine(it, index);
+        if (!hit) continue;
+        out.push({
+            product_title: it.title, variant: it.variant, qty: parseInt(it.quantity, 10) || 0,
+            available: hit.available, variant_id: hit.variant_id,
+            color: hit.color, size: hit.size, blank_type: hit.blank_type,
+        });
+    }
+    return out;
+}
+
+/** Statuses that still expect a garment to go out. Shopify writes them upper case. */
+const OPEN_ORDER_SQL = `
+    UPPER(COALESCE(fulfillment_status,'')) NOT IN ('FULFILLED','RESTOCKED')
+    AND UPPER(COALESCE(financial_status,'')) NOT IN ('VOIDED','REFUNDED')`;
+
+/**
+ * Open orders that could be served from the shelf instead of a fresh print.
+ * `available` is what the shelf holds, not a reservation — two orders wanting the same design
+ * both see it, because deciding which one gets it is a human's call.
+ */
+async function rtoMatches() {
+    const rows = await rtoAvailable();
+    if (!rows.length) return [];
+    const index = availabilityIndex(rows);
+    const orders = await db.query(
+        `SELECT shopify_id, order_number, created_at, line_items_json
+           FROM orders WHERE ${OPEN_ORDER_SQL} ORDER BY created_at DESC LIMIT 500`);
+    const out = [];
+    for (const o of orders.rows) {
+        for (const m of matchesForOrder(o, index)) {
+            out.push({ order_number: o.order_number, shopify_id: o.shopify_id, created_at: o.created_at, ...m });
+        }
+    }
+    return out;
+}
+
+/** Just the number, for the badges. Distinct orders, because that is what a person acts on. */
+async function rtoAlertCount() {
+    const matches = await rtoMatches();
+    return new Set(matches.map(m => m.order_number)).size;
+}
+
+/** Shelf matches for a single order number — the scan-screen prompt. */
+async function rtoForOrderNumber(orderNumber) {
+    const rows = await rtoAvailable();
+    if (!rows.length) return [];
+    const alt = String(orderNumber).startsWith('#') ? String(orderNumber).slice(1) : `#${orderNumber}`;
+    const o = (await db.query(
+        'SELECT shopify_id, order_number, line_items_json FROM orders WHERE order_number IN ($1,$2) LIMIT 1',
+        [String(orderNumber), alt])).rows[0];
+    if (!o) return [];
+    return matchesForOrder(o, availabilityIndex(rows));
+}
+
 module.exports = {
     BLANK_TYPES, SIZE_ORDER, TYPE_TO_BLANK, SKU_TO_BLANK,
-    refreshProductCache, productIndex, blankTypeFor, splitVariant,
+    refreshProductCache, productIndex, blankTypeFor, splitVariant, safeItems,
     deductionsFor, holdState, applyOrder, applyOrders, applySince, setStock,
+    normVariant, moveBlank, rtoAvailable, rtoMatches, rtoAlertCount, rtoForOrderNumber,
+    availabilityIndex, matchesForOrder, OPEN_ORDER_SQL,
 };

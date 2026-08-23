@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
-import { useAuth } from '../App'
+import { useAuth, useApi } from '../App'
 import { useTheme } from './ThemeProvider'
 import Icon from './Icon'
 
@@ -17,7 +17,7 @@ const NAV = {
     { to: '/scan', icon: 'scan', label: 'Scan Order', perm: 'can_scan_orders' },
     { to: '/marketing', icon: 'spark', label: 'Marketing', perm: 'can_view_marketing' },
     { to: '/invoices', icon: 'invoice', label: 'Invoices', perm: 'can_view_invoices' },
-    { to: '/inventory', icon: 'box', label: 'Inventory', perm: 'can_view_inventory' },
+    { to: '/inventory', icon: 'box', label: 'Inventory', perm: 'can_view_inventory', badge: 'rto' },
   ],
   crewfit: [
     { to: '/crewfit/dashboard', icon: 'dashboard', label: 'Dashboard', perm: 'can_view_crewfit_analytics' },
@@ -36,8 +36,29 @@ const NAV = {
 export default function Sidebar({ collapsed = false, onToggleCollapse }) {
   const { user, logout, brand, setBrand } = useAuth()
   const { isDark, toggleTheme } = useTheme()
+  const apiFetch = useApi()
   const navigate = useNavigate()
   const [open, setOpen] = useState(false)
+  // Orders that could be served from the RTO shelf. It lives here rather than on the Inventory
+  // page because the whole value is being told before you open the page — the alternative is
+  // printing a second garment for something already sitting in the building.
+  const [rtoAlerts, setRtoAlerts] = useState(0)
+  // Normless-only: Inventory is not a Crewfit menu, so there is nothing to badge over there.
+  const canSeeInventory = brand === 'normless'
+    && (user?.role === 'owner' || user?.role === 'admin' || !!user?.can_view_inventory)
+  useEffect(() => {
+    if (!canSeeInventory) return
+    let live = true
+    const check = async () => {
+      const r = await apiFetch('/api/inventory/rto/alerts')
+      if (live && r && !r.error) setRtoAlerts(r.orders || 0)
+    }
+    check()
+    // Slow on purpose: returns arrive at courier pace, not page-refresh pace.
+    const t = setInterval(check, 120000)
+    return () => { live = false; clearInterval(t) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canSeeInventory])
 
   const b = BRANDS[brand] || BRANDS.normless
   const isAdminRole = user?.role === 'owner' || user?.role === 'admin'
@@ -86,11 +107,22 @@ export default function Sidebar({ collapsed = false, onToggleCollapse }) {
         <nav className="sidebar-nav">
           <div className="sidebar-section">
             <div className="sidebar-section-label">Main</div>
-            {mainItems.map(item => (
-              <NavLink key={item.to} to={item.to} end={item.end} onClick={close} title={item.label} className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>
-                <span className="link-icon"><Icon name={item.icon} size={19} /></span><span>{item.label}</span>
-              </NavLink>
-            ))}
+            {mainItems.map(item => {
+              const count = item.badge === 'rto' ? rtoAlerts : 0
+              return (
+                <NavLink key={item.to} to={item.to} end={item.end} onClick={close}
+                  title={count ? `${item.label} — ${count} order${count > 1 ? 's' : ''} can be served from the RTO shelf` : item.label}
+                  className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>
+                  <span className="link-icon">
+                    <Icon name={item.icon} size={19} />
+                    {/* Shown on the icon too, so the collapsed rail still carries the alert. */}
+                    {count > 0 && <span className="link-dot" />}
+                  </span>
+                  <span>{item.label}</span>
+                  {count > 0 && <span className="nav-badge">{count}</span>}
+                </NavLink>
+              )
+            })}
           </div>
 
           {(systemItems.length > 0 || isAdmin) && (
