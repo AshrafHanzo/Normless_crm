@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useApi, useAuth } from '../../App'
 import { useToast } from '../../components/Toast'
 import Icon from '../../components/Icon'
+import SearchSelect from '../../components/SearchSelect'
 
 const num = (v) => new Intl.NumberFormat('en-IN').format(Number(v) || 0)
 const day = (v) => (v ? new Date(v).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit' }) : '—')
@@ -27,6 +28,8 @@ export default function DamagedTab({ onCounts }) {
   const [form, setForm] = useState(null)
   const [blanks, setBlanks] = useState(null)   // catalogue for the blank picker
   const [products, setProducts] = useState(null)
+  const [focus, setFocus] = useState(null)    // null | 'blank' | 'finished' | 'last30'
+  const [query, setQuery] = useState('')
 
   const load = async () => {
     const r = await apiFetch('/api/inventory/damaged')
@@ -107,6 +110,18 @@ export default function DamagedTab({ onCounts }) {
   const types = [...new Set((blanks || []).map(b => b.blank_type))].sort()
   const product = (products || []).find(p => String(p.shopify_id) === String(form?.shopify_product_id))
 
+  const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
+  const monthAgo = Date.now() - 30 * 864e5
+  const visible = (data.rows || []).filter(r => {
+    if (focus === 'blank' && r.kind !== 'blank') return false
+    if (focus === 'finished' && r.kind !== 'finished') return false
+    if (focus === 'last30' && new Date(r.created_at).getTime() < monthAgo) return false
+    if (!words.length) return true
+    const hay = `${r.product_title || ''} ${r.variant || ''} ${r.blank_type || ''} ${r.color || ''} ${r.size || ''} ${r.reason || ''} ${r.stage || ''}`.toLowerCase()
+    return words.every(w => hay.includes(w))
+  })
+  const filtered = !!focus || !!words.length
+
   return (
     <>
       <div className="dash-toolbar">
@@ -121,12 +136,14 @@ export default function DamagedTab({ onCounts }) {
 
       <div className="kpi-grid" style={{ marginBottom: 18 }}>
         {[
-          { icon: 'alert', label: 'Written off, all time', value: num(s.total) },
-          { icon: 'box', label: 'Blanks ruined', value: num(s.blanks) },
-          { icon: 'shirt', label: 'Printed pieces ruined', value: num(s.finished) },
-          { icon: 'trending', label: 'Last 30 days', value: num(s.last30) },
+          { icon: 'alert', label: 'Written off, all time', value: num(s.total), key: 'all' },
+          { icon: 'box', label: 'Blanks ruined', value: num(s.blanks), key: 'blank' },
+          { icon: 'shirt', label: 'Printed pieces ruined', value: num(s.finished), key: 'finished' },
+          { icon: 'trending', label: 'Last 30 days', value: num(s.last30), key: 'last30' },
         ].map(k => (
-          <div className="kpi-card" key={k.label}>
+          <div className={`kpi-card kpi-clickable ${focus === k.key || (k.key === 'all' && !focus) ? 'kpi-active' : ''}`} key={k.label}
+            onClick={() => setFocus(k.key === 'all' ? null : (focus === k.key ? null : k.key))}
+            title="Show only these write-offs">
             <div className="kpi-head"><div className="kpi-icon"><Icon name={k.icon} size={20} /></div></div>
             <div className="kpi-value">{k.value}</div>
             <div className="kpi-label">{k.label}</div>
@@ -146,11 +163,31 @@ export default function DamagedTab({ onCounts }) {
         </div>
       )}
 
+      {(data.rows || []).length > 1 && (
+        <div className="filters-row" style={{ marginBottom: 12 }}>
+          <div className="search-bar" style={{ flex: 1 }}>
+            <input value={query} placeholder="Filter by product, blank, reason or stage…"
+              onChange={e => setQuery(e.target.value)} />
+          </div>
+          {filtered && (
+            <button className="mini-btn" onClick={() => { setFocus(null); setQuery('') }}>
+              Showing {visible.length} of {data.rows.length} · clear
+            </button>
+          )}
+        </div>
+      )}
+
       <div className="data-table-wrapper">
         {!(data.rows || []).length ? (
           <div className="empty-state">
             <div className="empty-icon">🧵</div>
             <p>Nothing written off yet.</p>
+          </div>
+        ) : !visible.length ? (
+          <div className="empty-state">
+            <div className="empty-icon">🔍</div>
+            <p>No write-offs match that.</p>
+            <button className="btn btn-secondary" style={{ marginTop: 12 }} onClick={() => { setFocus(null); setQuery('') }}>Show everything</button>
           </div>
         ) : (
           <table className="data-table">
@@ -161,7 +198,7 @@ export default function DamagedTab({ onCounts }) {
               </tr>
             </thead>
             <tbody>
-              {data.rows.map(r => (
+              {visible.map(r => (
                 <tr key={r.id}>
                   <td className="cell-primary">
                     {r.kind === 'blank'
@@ -227,17 +264,16 @@ export default function DamagedTab({ onCounts }) {
               <div className="form-row">
                 <div className="input-group">
                   <label>Design</label>
-                  <select value={form.shopify_product_id} onChange={e => set({ shopify_product_id: e.target.value, variant_id: '' })}>
-                    <option value="">Choose a product…</option>
-                    {(products || []).map(p => <option key={p.shopify_id} value={p.shopify_id}>{p.title}</option>)}
-                  </select>
+                  <SearchSelect value={form.shopify_product_id} placeholder="Type to search products…"
+                    options={(products || []).map(p => ({ value: p.shopify_id, label: p.title, hint: p.blank_type || p.product_type || '' }))}
+                    onChange={(v) => set({ shopify_product_id: v, variant_id: '' })} />
                 </div>
                 <div className="input-group">
                   <label>Colour / size</label>
-                  <select value={form.variant_id} disabled={!product} onChange={e => set({ variant_id: e.target.value })}>
-                    <option value="">Choose…</option>
-                    {(product?.variants || []).map(v => <option key={v.variant_id} value={v.variant_id}>{v.variant}</option>)}
-                  </select>
+                  <SearchSelect value={form.variant_id} disabled={!product}
+                    placeholder={product ? 'Type to search…' : 'Pick a design first'}
+                    options={(product?.variants || []).map(v => ({ value: v.variant_id, label: v.variant }))}
+                    onChange={(v) => set({ variant_id: v })} />
                 </div>
               </div>
             )}

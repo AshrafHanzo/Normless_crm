@@ -28,6 +28,9 @@ const canEdit = async (req, res, next) => {
     } catch (err) { next(err); }
 };
 
+/** Undoing something that already moved stock is an owner/admin act, not a general edit right. */
+const isAdmin = (req) => req.user?.role === 'owner' || req.user?.role === 'admin';
+
 /** Sizes sort by garment order, not alphabetically — 2XL after XL, never between 2 and L. */
 const sizeRank = (s) => {
     const i = inv.SIZE_ORDER.indexOf(String(s).toUpperCase());
@@ -477,19 +480,54 @@ router.post('/rto/:id/use', canEdit, async (req, res) => {
     }
 });
 
-// DELETE /api/inventory/rto/:id — a mistaken entry. Only while nothing has left it.
+// DELETE /api/inventory/rto/:id — a mistaken entry.
+//
+// Anyone who may edit inventory can remove an entry nothing has left yet, because that is simply
+// undoing a typo. Once pieces have gone out, deleting means unwinding stock that has already moved
+// — so it is an owner/admin act, and every effect is reversed rather than orphaned.
 router.delete('/rto/:id', canEdit, async (req, res) => {
     try {
-        const row = (await db.query('SELECT * FROM inventory_rto WHERE id = $1', [req.params.id])).rows[0];
-        if (!row) return res.status(404).json({ error: 'Not found' });
-        if (row.qty_used || row.qty_written_off) {
-            return res.status(400).json({ error: 'Pieces have already left this entry — it is part of the record now' });
-        }
-        await db.transaction(async (tx) => {
+        const out = await db.transaction(async (tx) => {
+            const row = (await tx.query('SELECT * FROM inventory_rto WHERE id = $1 FOR UPDATE', [req.params.id])).rows[0];
+            if (!row) return { error: 'Not found', status: 404 };
+            const touched = row.qty_used || row.qty_written_off;
+            if (touched && !isAdmin(req)) {
+                return { error: 'Pieces have already left this entry — only an admin can delete it now', status: 403 };
+            }
+
+            const reversed = [];
+            if (touched) {
+                // Every reuse credited a blank back. Deleting the entry says that never happened,
+                // so the credit is taken off again — as its own movement, because the ledger is a
+                // history and not a mutable record of the present.
+                const used = (await tx.query(
+                    "SELECT COALESCE(SUM(qty),0)::int AS qty FROM inventory_rto_events WHERE rto_id = $1 AND kind = 'used'",
+                    [row.id])).rows[0].qty;
+                if (used > 0 && row.blank_type && row.color && row.size) {
+                    await inv.moveBlank(tx, row, -used, 'adjustment',
+                        `RTO entry #${row.id} deleted — reversing ${used} blank${used > 1 ? 's' : ''} credited on reuse`,
+                        req.user?.username);
+                    reversed.push(`${used} blank credit${used > 1 ? 's' : ''} reversed`);
+                }
+                // Write-offs recorded against this entry go with it; a damaged row pointing at a
+                // deleted shelf entry would say a piece was ruined that officially never arrived.
+                const dmg = (await tx.query('SELECT id, qty, movement_id FROM inventory_damaged WHERE rto_id = $1', [row.id])).rows;
+                for (const d of dmg) {
+                    if (d.movement_id) {
+                        await inv.moveBlank(tx, row, d.qty, 'adjustment',
+                            `RTO entry #${row.id} deleted — reversing write-off #${d.id}`, req.user?.username);
+                    }
+                    await tx.query('DELETE FROM inventory_damaged WHERE id = $1', [d.id]);
+                }
+                if (dmg.length) reversed.push(`${dmg.length} write-off${dmg.length > 1 ? 's' : ''} removed`);
+            }
+
             await tx.query('DELETE FROM inventory_rto_events WHERE rto_id = $1', [row.id]);
             await tx.query('DELETE FROM inventory_rto WHERE id = $1', [row.id]);
+            return { reversed };
         });
-        res.json({ success: true });
+        if (out.error) return res.status(out.status).json({ error: out.error });
+        res.json({ success: true, reversed: out.reversed });
     } catch (err) {
         console.error('inventory rto delete error:', err);
         res.status(500).json({ error: 'Failed to remove the entry' });

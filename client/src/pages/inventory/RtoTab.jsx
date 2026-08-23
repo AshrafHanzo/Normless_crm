@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { useApi, useAuth } from '../../App'
 import { useToast } from '../../components/Toast'
 import Icon from '../../components/Icon'
+import SearchSelect from '../../components/SearchSelect'
 
 const num = (v) => new Intl.NumberFormat('en-IN').format(Number(v) || 0)
 const day = (v) => (v ? new Date(v).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit' }) : '—')
@@ -21,6 +22,7 @@ export default function RtoTab({ onCounts }) {
   const toast = useToast()
   const { user } = useAuth()
   const canEdit = ['owner', 'admin'].includes(user?.role) || !!user?.can_edit_inventory
+  const isAdmin = ['owner', 'admin'].includes(user?.role)
 
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -30,6 +32,10 @@ export default function RtoTab({ onCounts }) {
   const [damage, setDamage] = useState(null)   // { row, qty, stage, reason, note }
   const [products, setProducts] = useState(null)
   const [history, setHistory] = useState(false)
+  // Tapping a card narrows the shelf to what that number counts — a figure you cannot act on is
+  // just decoration, and with a full shelf "3 orders could use one" is unusable without saying which.
+  const [focus, setFocus] = useState(null)      // null | 'matched' | 'order:<number>'
+  const [query, setQuery] = useState('')
   const scanRef = useRef(null)
 
   const load = async () => {
@@ -123,15 +129,21 @@ export default function RtoTab({ onCounts }) {
   }
 
   const removeEntry = async (row) => {
+    const touched = row.qty_used || row.qty_written_off
+    const details = [{ label: 'Variant', value: row.variant || '—' }, { label: 'Pieces', value: String(row.qty) }]
+    if (row.qty_used) details.push({ label: 'Already sent out', value: `${row.qty_used} — the blank credited for it is taken back` })
+    if (row.qty_written_off) details.push({ label: 'Written off', value: `${row.qty_written_off} — those entries go too` })
     if (!await toast.confirm({
-      title: `Remove ${row.product_title}?`,
-      message: 'Only entries nothing has left yet can be removed — this one was added by mistake.',
-      details: [{ label: 'Variant', value: row.variant || '—' }, { label: 'Pieces', value: String(row.qty) }],
-      confirmLabel: 'Remove', danger: true,
+      title: `Delete ${row.product_title}?`,
+      message: touched
+        ? 'This entry has already moved stock. Deleting it unwinds every one of those movements, each recorded as its own correction.'
+        : 'Nothing has left this entry, so removing it just undoes the mistake.',
+      details, confirmLabel: 'Delete', danger: true,
     })) return
     const res = await apiFetch(`/api/inventory/rto/${row.id}`, { method: 'DELETE' })
     if (!res || res.error) { toast.error(res?.error || 'Failed'); return }
-    toast.success('Entry removed'); load()
+    toast.success(res.reversed?.length ? `Entry deleted · ${res.reversed.join(' · ')}` : 'Entry deleted')
+    load()
   }
 
   if (loading) return <div className="loader"><div className="spinner" /><span>Loading the RTO shelf…</span></div>
@@ -144,6 +156,24 @@ export default function RtoTab({ onCounts }) {
   const entriesFor = (row) => (data.entries || []).filter(e =>
     e.available > 0 && (row.variant_id ? String(e.variant_id) === String(row.variant_id)
       : e.product_title === row.product_title && e.variant === row.variant))
+
+  // Same identity rule as the server's matcher: the variant id when there is one, the text when
+  // the design predates the variant cache.
+  const keyOf = (x) => (x.variant_id ? `v${x.variant_id}` : `t${x.product_title}|${x.variant}`)
+  const wantedKeys = (() => {
+    const from = focus === 'matched' ? matches
+      : focus?.startsWith('order:') ? matches.filter(m => m.order_number === focus.slice(6))
+        : null
+    return from ? new Set(from.flatMap(m => m.lines.map(keyOf))) : null
+  })()
+  const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
+  const visible = shelf.filter(row => {
+    if (wantedKeys && !wantedKeys.has(keyOf(row))) return false
+    if (!words.length) return true
+    const hay = `${row.product_title} ${row.variant || ''} ${row.blank_type || ''}`.toLowerCase()
+    return words.every(w => hay.includes(w))
+  })
+  const filtered = !!wantedKeys || !!words.length
 
   return (
     <>
@@ -167,12 +197,15 @@ export default function RtoTab({ onCounts }) {
 
       <div className="kpi-grid" style={{ marginBottom: 18 }}>
         {[
-          { icon: 'box', label: 'Pieces on the shelf', value: num(s.pieces) },
+          { icon: 'box', label: 'Pieces on the shelf', value: num(s.pieces), key: 'all' },
           { icon: 'shirt', label: 'Designs held', value: num(s.designs) },
-          { icon: 'alert', label: 'Orders that could use one', value: num(s.matched_orders) },
+          { icon: 'alert', label: 'Orders that could use one', value: num(s.matched_orders), key: 'matched' },
           { icon: 'trending', label: 'Sent out again', value: num(s.used) },
         ].map(k => (
-          <div className="kpi-card" key={k.label}>
+          <div className={`kpi-card ${k.key ? 'kpi-clickable' : ''} ${focus === k.key || (k.key === 'all' && !focus) ? 'kpi-active' : ''}`} key={k.label}
+            onClick={() => k.key && setFocus(k.key === 'all' ? null : (focus === k.key ? null : k.key))}
+            title={k.key === 'matched' ? 'Show only pieces an open order is waiting on'
+              : k.key === 'all' ? 'Show everything on the shelf' : undefined}>
             <div className="kpi-head"><div className="kpi-icon"><Icon name={k.icon} size={20} /></div></div>
             <div className="kpi-value">{k.value}</div>
             <div className="kpi-label">{k.label}</div>
@@ -192,7 +225,9 @@ export default function RtoTab({ onCounts }) {
             Send the returned piece instead of printing a new one. Mark it used below and the blank goes back into stock.
           </p>
           {matches.map(m => (
-            <div className="review-row" key={m.order_number}>
+            <button type="button" className={`review-row review-row-btn ${focus === `order:${m.order_number}` ? 'review-row-on' : ''}`}
+              key={m.order_number} title={`Show only what ${m.order_number} needs`}
+              onClick={() => setFocus(f => f === `order:${m.order_number}` ? null : `order:${m.order_number}`)}>
               <span>
                 <b>{m.order_number}</b> · {day(m.created_at)}
                 {m.lines.map((l, i) => (
@@ -201,8 +236,22 @@ export default function RtoTab({ onCounts }) {
                   </span>
                 ))}
               </span>
-            </div>
+            </button>
           ))}
+        </div>
+      )}
+
+      {shelf.length > 1 && (
+        <div className="filters-row" style={{ marginBottom: 12 }}>
+          <div className="search-bar" style={{ flex: 1 }}>
+            <input value={query} placeholder="Filter the shelf by design, colour or size…"
+              onChange={e => setQuery(e.target.value)} />
+          </div>
+          {filtered && (
+            <button className="mini-btn" onClick={() => { setFocus(null); setQuery('') }}>
+              Showing {visible.length} of {shelf.length} · clear
+            </button>
+          )}
         </div>
       )}
 
@@ -210,6 +259,12 @@ export default function RtoTab({ onCounts }) {
         <div className="empty-state">
           <div className="empty-icon">📥</div>
           <p>Nothing on the RTO shelf.{canEdit ? ' Scan a returned parcel to put its garments here.' : ''}</p>
+        </div>
+      ) : !visible.length ? (
+        <div className="empty-state">
+          <div className="empty-icon">🔍</div>
+          <p>Nothing on the shelf matches that.</p>
+          <button className="btn btn-secondary" style={{ marginTop: 12 }} onClick={() => { setFocus(null); setQuery('') }}>Show everything</button>
         </div>
       ) : (
         <div className="data-table-wrapper">
@@ -221,7 +276,7 @@ export default function RtoTab({ onCounts }) {
               </tr>
             </thead>
             <tbody>
-              {shelf.map((row, i) => {
+              {visible.map((row, i) => {
                 const sources = entriesFor(row)
                 const first = sources[0]
                 return (
@@ -260,7 +315,9 @@ export default function RtoTab({ onCounts }) {
             Every piece that came back, including those already sent out again or written off
           </p>
         </div>
-        <button className="mini-btn" onClick={() => setHistory(h => !h)}>{history ? 'Hide' : 'Show'}</button>
+        <button className="mini-btn" onClick={() => setHistory(h => !h)}>
+          {history ? 'Hide' : `Show${isAdmin ? ' & manage' : ''}`}
+        </button>
       </div>
 
       {history && (
@@ -295,9 +352,11 @@ export default function RtoTab({ onCounts }) {
                       {e.created_by && <div style={{ color: 'var(--text-muted)' }}>{e.created_by}</div>}
                     </td>
                     <td style={{ textAlign: 'right' }}>
-                      {canEdit && !e.qty_used && !e.qty_written_off && (
-                        <button className="mini-btn" onClick={() => removeEntry(e)}>Remove</button>
-                      )}
+                      {/* Untouched entries are anyone's to tidy up; once stock has moved it takes
+                          an admin, because deleting means reversing what already happened. */}
+                      {canEdit && (!e.qty_used && !e.qty_written_off
+                        ? <button className="mini-btn" onClick={() => removeEntry(e)}>Remove</button>
+                        : isAdmin && <button className="mini-btn mini-btn-danger" onClick={() => removeEntry(e)}>Delete</button>)}
                     </td>
                   </tr>
                 ))}
@@ -496,6 +555,8 @@ function ManualPicker({ products, onAdd }) {
 
   const product = products.find(p => String(p.shopify_id) === String(productId))
   const variant = product?.variants.find(v => String(v.variant_id) === String(variantId))
+  const productOptions = products.map(p => ({ value: p.shopify_id, label: p.title, hint: p.blank_type || p.product_type || '' }))
+  const variantOptions = (product?.variants || []).map(v => ({ value: v.variant_id, label: v.variant }))
 
   const add = () => {
     if (!product || !variant) return
@@ -512,17 +573,14 @@ function ManualPicker({ products, onAdd }) {
     <div className="form-row" style={{ alignItems: 'end' }}>
       <div className="input-group">
         <label>Design</label>
-        <select value={productId} onChange={e => { setProductId(e.target.value); setVariantId('') }}>
-          <option value="">Choose a product…</option>
-          {products.map(p => <option key={p.shopify_id} value={p.shopify_id}>{p.title}</option>)}
-        </select>
+        <SearchSelect value={productId} options={productOptions} placeholder="Type to search products…"
+          onChange={(v) => { setProductId(v); setVariantId('') }} />
       </div>
       <div className="input-group">
         <label>Colour / size</label>
-        <select value={variantId} disabled={!product} onChange={e => setVariantId(e.target.value)}>
-          <option value="">Choose…</option>
-          {(product?.variants || []).map(v => <option key={v.variant_id} value={v.variant_id}>{v.variant}</option>)}
-        </select>
+        <SearchSelect value={variantId} options={variantOptions} disabled={!product}
+          placeholder={product ? 'Type to search…' : 'Pick a design first'}
+          onChange={(v) => setVariantId(v)} />
       </div>
       <div className="input-group" style={{ maxWidth: 110 }}>
         <label>How many</label>
