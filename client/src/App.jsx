@@ -13,7 +13,6 @@ import Orders from './pages/Orders'
 import ScanHub from './pages/ScanHub'
 import Invoices from './pages/Invoices'
 import Marketing from './pages/Marketing'
-import MetaAds from './pages/MetaAds'
 import Settings from './pages/Settings'
 import Admin from './pages/Admin'
 import Profile from './pages/Profile'
@@ -166,7 +165,6 @@ function App() {
             <Route path="/orders" element={<ProtectedRoute permission="can_view_orders"><AppLayout><Orders /></AppLayout></ProtectedRoute>} />
             <Route path="/scan" element={<ProtectedRoute permission="can_scan_orders"><AppLayout><ScanHub /></AppLayout></ProtectedRoute>} />
             <Route path="/marketing" element={<ProtectedRoute permission="can_view_marketing"><AppLayout><Marketing /></AppLayout></ProtectedRoute>} />
-            <Route path="/meta-ads" element={<ProtectedRoute permission="can_view_meta_ads"><AppLayout><MetaAds /></AppLayout></ProtectedRoute>} />
             <Route path="/invoices" element={<ProtectedRoute permission="can_view_invoices"><AppLayout><Invoices /></AppLayout></ProtectedRoute>} />
             <Route path="/inventory" element={<ProtectedRoute permission="can_view_inventory"><AppLayout><Inventory /></AppLayout></ProtectedRoute>} />
             <Route path="/settings" element={<ProtectedRoute permission="can_sync_data"><AppLayout><Settings /></AppLayout></ProtectedRoute>} />
