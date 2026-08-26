@@ -219,10 +219,11 @@ export default function RtoTab({ onCounts }) {
         <div className="card rto-alert" style={{ marginBottom: 18 }}>
           <h2 style={{ fontSize: 15, marginBottom: 6 }}>
             <Icon name="alert" size={16} style={{ marginRight: 6, verticalAlign: '-3px' }} />
-            {matches.length} open order{matches.length > 1 ? 's' : ''} can be served from this shelf
+            {matches.length} order{matches.length > 1 ? 's' : ''} can be served from this shelf
           </h2>
           <p style={{ color: 'var(--text-muted)', fontSize: 12.5, marginBottom: 12 }}>
             Send the returned piece instead of printing a new one. Mark it used below and the blank goes back into stock.
+            {matches.some(m => m.lines.some(l => l.fulfilled)) && ' Orders already marked fulfilled are included for three days, because fulfilment is marked at handover and the garment may not be printed yet.'}
           </p>
           {matches.map(m => (
             <button type="button" className={`review-row review-row-btn ${focus === `order:${m.order_number}` ? 'review-row-on' : ''}`}
@@ -230,6 +231,7 @@ export default function RtoTab({ onCounts }) {
               onClick={() => setFocus(f => f === `order:${m.order_number}` ? null : `order:${m.order_number}`)}>
               <span>
                 <b>{m.order_number}</b> · {day(m.created_at)}
+                {m.fulfilled && <span className="rto-pill rto-pill-warn">already fulfilled — check before printing</span>}
                 {m.lines.map((l, i) => (
                   <span key={i} style={{ color: 'var(--text-muted)' }}>
                     {' · '}{l.product_title} {l.variant} <b style={{ color: 'var(--success)' }}>({l.available} on shelf)</b>

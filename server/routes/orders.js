@@ -71,9 +71,12 @@ router.get('/', async (req, res) => {
             const shelf = await inv.rtoAvailable();
             if (shelf.length) {
                 const index = inv.availabilityIndex(shelf);
+                // Same window as the matcher: recently fulfilled orders stay flagged, because
+                // fulfilment is marked at handover and the garment may not be printed yet.
+                const recentFrom = Date.now() - inv.RTO_MATCH_DAYS * 864e5;
                 for (const o of ordersResult.rows) {
-                    const open = !['FULFILLED', 'RESTOCKED'].includes(String(o.fulfillment_status || '').toUpperCase());
-                    if (!open) continue;
+                    const shipped = ['FULFILLED', 'RESTOCKED'].includes(String(o.fulfillment_status || '').toUpperCase());
+                    if (shipped && new Date(o.created_at).getTime() < recentFrom) continue;
                     const lines = inv.matchesForOrder(o, index);
                     if (lines.length) rto[o.order_number] = lines;
                 }

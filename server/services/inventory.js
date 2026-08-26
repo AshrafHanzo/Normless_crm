@@ -641,10 +641,24 @@ function matchesForOrder(order, index) {
     return out;
 }
 
-/** Statuses that still expect a garment to go out. Shopify writes them upper case. */
+/**
+ * Orders still worth offering a shelf piece to.
+ *
+ * Not simply "unfulfilled". An order is marked fulfilled when it is handed over for delivery, and
+ * printing happens around that same moment — so an order that has just flipped to fulfilled may
+ * still be waiting to be printed. Dropping it from the match right then removes the prompt exactly
+ * when it can still save a garment. Recent orders therefore stay in scope either way.
+ *
+ * Refunded and voided orders are excluded regardless: nothing is going out for those.
+ */
+const RTO_MATCH_DAYS = 3;
 const OPEN_ORDER_SQL = `
-    UPPER(COALESCE(fulfillment_status,'')) NOT IN ('FULFILLED','RESTOCKED')
+    (UPPER(COALESCE(fulfillment_status,'')) NOT IN ('FULFILLED','RESTOCKED')
+     OR created_at > NOW() - INTERVAL '${RTO_MATCH_DAYS} days')
     AND UPPER(COALESCE(financial_status,'')) NOT IN ('VOIDED','REFUNDED')`;
+
+/** Whether an order has already been marked fulfilled — a match on one reads differently. */
+const isFulfilled = (o) => ['FULFILLED', 'RESTOCKED'].includes(String(o.fulfillment_status || '').toUpperCase());
 
 /**
  * Open orders that could be served from the shelf instead of a fresh print.
@@ -656,12 +670,17 @@ async function rtoMatches() {
     if (!rows.length) return [];
     const index = availabilityIndex(rows);
     const orders = await db.query(
-        `SELECT shopify_id, order_number, created_at, line_items_json
+        `SELECT shopify_id, order_number, created_at, fulfillment_status, line_items_json
            FROM orders WHERE ${OPEN_ORDER_SQL} ORDER BY created_at DESC LIMIT 500`);
     const out = [];
     for (const o of orders.rows) {
         for (const m of matchesForOrder(o, index)) {
-            out.push({ order_number: o.order_number, shopify_id: o.shopify_id, created_at: o.created_at, ...m });
+            out.push({
+                order_number: o.order_number, shopify_id: o.shopify_id, created_at: o.created_at,
+                // Flagged rather than filtered: a fulfilled order may still be waiting to print,
+                // and the two cases read differently to whoever acts on them.
+                fulfilled: isFulfilled(o), ...m,
+            });
         }
     }
     return out;
@@ -692,6 +711,6 @@ module.exports = {
     marketingHoldState, applyMarketingOrder, releaseMarketingOrder, applyMarketingSince,
     crewfitHoldState, crewfitBlankFor, parseSizeBreakdown, normSize, crewfitDeductions,
     applyCrewfitOrder, releaseCrewfitOrder, applyCrewfitSince,
-    normVariant, moveBlank, rtoAvailable, rtoMatches, rtoAlertCount, rtoForOrderNumber,
+    normVariant, moveBlank, rtoAvailable, rtoMatches, rtoAlertCount, rtoForOrderNumber, RTO_MATCH_DAYS,
     availabilityIndex, matchesForOrder, OPEN_ORDER_SQL,
 };
