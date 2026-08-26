@@ -1817,6 +1817,12 @@ html, body { max-width: 100%; overflow-x: hidden; }
 }
 .review-row-btn:hover { background: var(--surface-hover); }
 .review-row-on { background: var(--primary-glow); }
+/* A standing notice: the order reads as a filter, the answers sit at the end of the row. */
+.rto-notice { gap: 10px; padding: 9px 8px; border-radius: var(--radius-md); }
+.rto-notice-main {
+  flex: 1; min-width: 0; text-align: left; background: transparent; border: none;
+  color: inherit; font: inherit; cursor: pointer; padding: 0;
+}
 
 /* Bulk stock entry: the whole grid becomes typeable, with one save at the end. */
 .inv-input {

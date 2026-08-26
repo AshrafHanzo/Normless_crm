@@ -320,22 +320,36 @@ router.get('/products', async (req, res) => {
 // GET /api/inventory/rto — the shelf, its history, and what it could serve
 router.get('/rto', async (req, res) => {
     try {
-        const [shelf, matches] = await Promise.all([inv.rtoAvailable(), inv.rtoMatches()]);
+        // Raise a notice for anything newly matched before reading them back, so opening the tab
+        // never shows a stale picture of what the shelf could serve.
+        await inv.syncRtoAlerts();
+        const [shelf, alerts, history] = await Promise.all([
+            inv.rtoAvailable(), inv.openRtoAlerts(), inv.rtoAlertHistory(100),
+        ]);
         const entries = (await db.query(
             `SELECT r.*, (r.qty - r.qty_used - r.qty_written_off) AS available
                FROM inventory_rto r ORDER BY r.created_at DESC, r.id DESC LIMIT 200`)).rows;
+
+        // Grouped by order, because that is the unit a person acts on — one parcel, one decision.
         const byOrder = new Map();
-        for (const m of matches) {
-            if (!byOrder.has(m.order_number)) byOrder.set(m.order_number, { order_number: m.order_number, created_at: m.created_at, fulfilled: m.fulfilled, source: m.source, customer: m.customer, lines: [] });
-            byOrder.get(m.order_number).lines.push(m);
+        for (const a of alerts) {
+            if (!byOrder.has(a.order_ref)) {
+                byOrder.set(a.order_ref, {
+                    order_number: a.order_ref, created_at: a.order_date, source: a.source,
+                    customer: a.customer, raised_at: a.created_at, lines: [],
+                });
+            }
+            byOrder.get(a.order_ref).lines.push(a);
         }
         res.json({
-            shelf, entries, matches: [...byOrder.values()],
+            shelf, entries, matches: [...byOrder.values()], history,
             summary: {
                 pieces: shelf.reduce((n, r) => n + r.available, 0),
                 designs: shelf.length,
                 matched_orders: byOrder.size,
                 used: entries.reduce((n, r) => n + r.qty_used, 0),
+                saved: history.filter(h => h.status === 'used').length,
+                missed: history.filter(h => h.status === 'skipped').length,
             },
         });
     } catch (err) {
@@ -347,9 +361,10 @@ router.get('/rto', async (req, res) => {
 // GET /api/inventory/rto/alerts — the number behind the badges. Deliberately small and cheap.
 router.get('/rto/alerts', async (req, res) => {
     try {
-        const matches = await inv.rtoMatches();
-        const orders = [...new Set(matches.map(m => m.order_number))];
-        res.json({ orders: orders.length, order_numbers: orders.slice(0, 20), lines: matches.length });
+        await inv.syncRtoAlerts();
+        const alerts = await inv.openRtoAlerts();
+        const orders = [...new Set(alerts.map(a => a.order_ref))];
+        res.json({ orders: orders.length, order_numbers: orders.slice(0, 20), lines: alerts.length });
     } catch (err) {
         console.error('inventory rto alerts error:', err);
         res.status(500).json({ error: 'Failed to load RTO alerts' });
@@ -440,6 +455,8 @@ router.post('/rto', canEdit, async (req, res) => {
             }
             return added;
         });
+        // A newly shelved piece may answer an order that was already waiting, so look again.
+        await inv.syncRtoAlerts().catch(err => console.error('alert sync after intake failed:', err.message));
         res.json({ success: true, added: out.length, skipped: items.length - out.length });
     } catch (err) {
         console.error('inventory rto add error:', err);
@@ -474,13 +491,48 @@ router.post('/rto/:id/use', canEdit, async (req, res) => {
                     `Dispatched from RTO for ${orderNumber} — no blank was used`, req.user?.username);
                 credited = { blank_type: row.blank_type, color: row.color, size: row.size, qty };
             }
-            return { credited };
+            return { credited, rtoId: row.id };
         });
         if (out.error) return res.status(out.status).json({ error: out.error });
-        res.json({ success: true, ...out });
+
+        // Only once the stock move has committed: answering the notice for a send that then rolled
+        // back would leave the order looking dealt with when nothing had left the shelf.
+        const answered = await inv.resolveAlertsForOrder(orderNumber, out.rtoId, req.user?.username)
+            .catch(err => { console.error('alert resolve failed:', err.message); return 0; });
+        res.json({ success: true, ...out, alerts_cleared: answered });
     } catch (err) {
         console.error('inventory rto use error:', err);
         res.status(500).json({ error: 'Failed to record the reuse' });
+    }
+});
+
+// POST /api/inventory/rto/alerts/:id/skip { note } — answered the other way.
+// The notice goes, but the record of it stays: how often the shelf was passed over is the only
+// way to know whether keeping it is worth the trouble.
+router.post('/rto/alerts/:id/skip', canEdit, async (req, res) => {
+    try {
+        const row = await inv.resolveRtoAlert(req.params.id,
+            { status: 'skipped', note: req.body?.note || 'Printed a fresh one instead' }, req.user?.username);
+        if (!row) return res.status(404).json({ error: 'That notice has already been answered' });
+        res.json({ success: true, alert: row });
+    } catch (err) {
+        console.error('inventory rto alert skip error:', err);
+        res.status(500).json({ error: 'Failed to clear the notice' });
+    }
+});
+
+// POST /api/inventory/rto/alerts/:id/reopen — undo an answer given by mistake.
+router.post('/rto/alerts/:id/reopen', canEdit, async (req, res) => {
+    try {
+        const r = await db.query(
+            `UPDATE inventory_rto_alerts SET status = 'open', resolved_by = NULL, resolved_at = NULL,
+                    resolution_note = NULL WHERE id = $1 AND status = 'skipped' RETURNING id`,
+            [req.params.id]);
+        if (!r.rows[0]) return res.status(400).json({ error: 'Only a notice cleared by hand can be reopened' });
+        res.json({ success: true });
+    } catch (err) {
+        console.error('inventory rto alert reopen error:', err);
+        res.status(500).json({ error: 'Failed to reopen the notice' });
     }
 });
 

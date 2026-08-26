@@ -716,10 +716,99 @@ async function seedingRtoMatches(index) {
     return out;
 }
 
+/* ---- Standing notices ---------------------------------------------------------------------
+ * A match is turned into a row the first time it is seen, and that row stays until a person says
+ * what they did with it. The live match alone was not enough: it evaporated the moment an order
+ * was marked fulfilled, which here happens right before printing.
+ * ------------------------------------------------------------------------------------------ */
+
+/** One notice per order and garment. Falls back to text when the design predates the variant cache. */
+const alertKey = (m) => `${m.source}:${m.order_number}:${m.variant_id || `${m.product_title}|${normVariant(m.variant)}`}`;
+
+/**
+ * Raise a notice for anything newly matched. Idempotent: an order already noticed is left exactly
+ * as it is, including one a person has already answered — re-raising a resolved notice would ask
+ * the same question forever.
+ */
+async function syncRtoAlerts() {
+    const matches = await rtoMatches();
+    if (!matches.length) return { raised: 0 };
+    let raised = 0;
+    for (const m of matches) {
+        const r = await db.query(
+            `INSERT INTO inventory_rto_alerts
+               (source, order_ref, shopify_order_id, marketing_id, customer, order_date,
+                shopify_product_id, variant_id, product_title, variant, color, size, blank_type, qty, match_key)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+             ON CONFLICT (match_key) DO NOTHING RETURNING id`,
+            [m.source, m.order_number, m.shopify_id || null, m.marketing_id || null, m.customer || null,
+                m.created_at || null, m.shopify_product_id || null, m.variant_id || null, m.product_title,
+                m.variant || null, m.color || null, m.size || null, m.blank_type || null, m.qty || 1, alertKey(m)]);
+        if (r.rows[0]) raised++;
+    }
+    return { raised };
+}
+
+/**
+ * Notices still waiting on a decision, with what the shelf holds for each right now.
+ *
+ * The shelf count is looked up live rather than stored: a piece can be sent to a different order
+ * between the notice being raised and someone reading it, and "1 waiting" would then be a lie.
+ */
+async function openRtoAlerts() {
+    const rows = (await db.query(
+        `SELECT * FROM inventory_rto_alerts WHERE status = 'open' ORDER BY created_at DESC LIMIT 200`)).rows;
+    if (!rows.length) return [];
+    const index = availabilityIndex(await rtoAvailable());
+    return rows.map(a => {
+        const hit = (a.variant_id && index.byVariant.get(String(a.variant_id)))
+            || index.byText.get(`${a.shopify_product_id}|${normVariant(a.variant)}`);
+        return { ...a, available: hit ? hit.available : 0 };
+    });
+}
+
+/** Answered notices — how often the shelf actually saved a garment, and how often it did not. */
+async function rtoAlertHistory(limit = 100) {
+    return (await db.query(
+        `SELECT * FROM inventory_rto_alerts WHERE status <> 'open'
+          ORDER BY resolved_at DESC NULLS LAST, id DESC LIMIT $1`, [limit])).rows;
+}
+
+/** Record what was done about a notice. */
+async function resolveRtoAlert(id, { status, note, rtoId }, user) {
+    const r = await db.query(
+        `UPDATE inventory_rto_alerts
+            SET status = $1, resolution_note = $2, rto_id = COALESCE($3, rto_id),
+                resolved_by = $4, resolved_at = CURRENT_TIMESTAMP
+          WHERE id = $5 AND status = 'open' RETURNING *`,
+        [status, note || null, rtoId || null, user || null, id]);
+    return r.rows[0] || null;
+}
+
+/**
+ * Close whatever notices an order had when a piece is actually sent to it.
+ *
+ * Matched on the order reference alone: someone typing "#10634" into the send dialog has answered
+ * every notice that order raised, whichever garment each was about.
+ */
+async function resolveAlertsForOrder(orderRef, rtoId, user) {
+    const ref = String(orderRef || '').trim();
+    if (!ref) return 0;
+    const alt = ref.startsWith('#') ? ref.slice(1) : `#${ref}`;
+    const r = await db.query(
+        `UPDATE inventory_rto_alerts
+            SET status = 'used', rto_id = COALESCE($1, rto_id), resolved_by = $2,
+                resolved_at = CURRENT_TIMESTAMP, resolution_note = 'Sent from the RTO shelf'
+          WHERE status = 'open' AND (order_ref = $3 OR order_ref = $4) RETURNING id`,
+        [rtoId || null, user || null, ref, alt]);
+    return r.rowCount;
+}
+
 /** Just the number, for the badges. Distinct orders, because that is what a person acts on. */
 async function rtoAlertCount() {
-    const matches = await rtoMatches();
-    return new Set(matches.map(m => m.order_number)).size;
+    const r = await db.query(
+        "SELECT COUNT(DISTINCT order_ref)::int AS n FROM inventory_rto_alerts WHERE status = 'open'");
+    return r.rows[0]?.n || 0;
 }
 
 /** Shelf matches for a single order number — the scan-screen prompt. */
@@ -743,5 +832,6 @@ module.exports = {
     applyCrewfitOrder, releaseCrewfitOrder, applyCrewfitSince,
     normVariant, moveBlank, rtoAvailable, rtoMatches, rtoAlertCount, rtoForOrderNumber, RTO_MATCH_DAYS,
     seedingRtoMatches, SEEDING_OPEN,
+    syncRtoAlerts, openRtoAlerts, rtoAlertHistory, resolveRtoAlert, resolveAlertsForOrder,
     availabilityIndex, matchesForOrder, OPEN_ORDER_SQL,
 };

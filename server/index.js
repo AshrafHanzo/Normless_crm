@@ -303,8 +303,14 @@ function startAutoSync() {
         if (!isSyncing) {
             isSyncing = true;
             syncService.syncAll()
-                .then(() => {
+                .then(async () => {
                     isSyncing = false;
+                    // A new order that wants something already on the RTO shelf is flagged here,
+                    // so the notice exists whether or not anyone has the page open.
+                    try {
+                        const { raised } = await require('./services/inventory').syncRtoAlerts();
+                        if (raised) console.log(`↩  ${raised} RTO notice${raised > 1 ? 's' : ''} raised`);
+                    } catch (e) { console.error('RTO alert sync failed:', e.message); }
                     console.log(`✨ Auto-sync completed at ${new Date().toLocaleTimeString()}`);
                 })
                 .catch(err => {
@@ -756,6 +762,43 @@ async function ensureInventorySchema() {
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             CREATE INDEX IF NOT EXISTS inventory_damaged_created_idx ON inventory_damaged (created_at DESC);
+
+            -- A standing "you already have this one" notice, raised once when an order is first
+            -- seen to want something the RTO shelf holds.
+            --
+            -- Kept as a row rather than recomputed from the order's status, because the prompt has
+            -- to outlive the condition that raised it: an order is marked fulfilled at handover,
+            -- which is around when it gets printed, so a notice that vanished on fulfilment
+            -- disappeared at the moment it still mattered. It goes only when a person says what
+            -- they did — sent the returned piece, or printed a fresh one anyway — and that answer
+            -- is the history of how often the shelf actually saved a garment.
+            CREATE TABLE IF NOT EXISTS inventory_rto_alerts (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                source TEXT NOT NULL,               -- 'shop' | 'seeding'
+                order_ref TEXT NOT NULL,            -- '#10634' or 'M005'
+                shopify_order_id TEXT,
+                marketing_id INTEGER,
+                customer TEXT,
+                order_date TIMESTAMP,
+                shopify_product_id BIGINT,
+                variant_id BIGINT,
+                product_title TEXT NOT NULL,
+                variant TEXT,
+                color TEXT,
+                size TEXT,
+                blank_type TEXT,
+                qty INTEGER NOT NULL DEFAULT 1,
+                -- One notice per order and garment, whatever else changes about either.
+                match_key TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'open',  -- open | used | skipped
+                rto_id INTEGER,                       -- the shelf entry it was served from
+                resolution_note TEXT,
+                resolved_by TEXT,
+                resolved_at TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS inventory_rto_alerts_key_idx ON inventory_rto_alerts (match_key);
+            CREATE INDEX IF NOT EXISTS inventory_rto_alerts_status_idx ON inventory_rto_alerts (status);
 
             -- CREATE TABLE IF NOT EXISTS leaves an existing table alone, so anything added to the
             -- definitions above after they first ran has to arrive as its own ALTER.

@@ -32,6 +32,7 @@ export default function RtoTab({ onCounts }) {
   const [damage, setDamage] = useState(null)   // { row, qty, stage, reason, note }
   const [products, setProducts] = useState(null)
   const [history, setHistory] = useState(false)
+  const [notices, setNotices] = useState(false)
   // Tapping a card narrows the shelf to what that number counts — a figure you cannot act on is
   // just decoration, and with a full shelf "3 orders could use one" is unusable without saying which.
   const [focus, setFocus] = useState(null)      // null | 'matched' | 'order:<number>'
@@ -126,6 +127,26 @@ export default function RtoTab({ onCounts }) {
     if (!res || res.error) { toast.error(res?.error || 'Failed'); return }
     toast.success('Written off, and taken off the shelf')
     setDamage(null); load()
+  }
+
+  /** Answered the other way: a fresh one was printed. The notice goes, the record stays. */
+  const skipAlert = async (order, line) => {
+    if (!await toast.confirm({
+      title: `Printed a fresh one for ${order.order_number}?`,
+      message: 'The notice is cleared and the piece stays on the shelf. It is kept in the history, so how often the shelf gets passed over is answerable.',
+      details: [{ label: 'Garment', value: `${line.product_title} · ${line.variant || '—'}` }],
+      confirmLabel: 'Clear the notice',
+    })) return
+    const res = await apiFetch(`/api/inventory/rto/alerts/${line.id}/skip`, { method: 'POST', body: JSON.stringify({}) })
+    if (!res || res.error) { toast.error(res?.error || 'Failed'); return }
+    toast.info('Notice cleared — kept in the history')
+    load()
+  }
+
+  const reopenAlert = async (row) => {
+    const res = await apiFetch(`/api/inventory/rto/alerts/${row.id}/reopen`, { method: 'POST', body: JSON.stringify({}) })
+    if (!res || res.error) { toast.error(res?.error || 'Failed'); return }
+    toast.success('Notice reopened'); load()
   }
 
   const removeEntry = async (row) => {
@@ -223,24 +244,41 @@ export default function RtoTab({ onCounts }) {
             {matches.some(m => m.source === 'seeding') && <span style={{ fontWeight: 400, color: 'var(--text-muted)' }}> — shop and seeding</span>}
           </h2>
           <p style={{ color: 'var(--text-muted)', fontSize: 12.5, marginBottom: 12 }}>
-            Send the returned piece instead of printing a new one. Mark it used below and the blank goes back into stock.
-            {matches.some(m => m.lines.some(l => l.fulfilled)) && ' Orders already marked fulfilled are included for three days, because fulfilment is marked at handover and the garment may not be printed yet.'}
+            Each stays here until someone answers it — either send the returned piece, or say a fresh
+            one was printed. It will not disappear on its own when the order is marked fulfilled.
           </p>
           {matches.map(m => (
-            <button type="button" className={`review-row review-row-btn ${focus === `order:${m.order_number}` ? 'review-row-on' : ''}`}
-              key={m.order_number} title={`Show only what ${m.order_number} needs`}
-              onClick={() => setFocus(f => f === `order:${m.order_number}` ? null : `order:${m.order_number}`)}>
-              <span>
+            <div className={`review-row rto-notice ${focus === `order:${m.order_number}` ? 'review-row-on' : ''}`} key={m.order_number}>
+              <button type="button" className="rto-notice-main" title={`Show only what ${m.order_number} needs`}
+                onClick={() => setFocus(f => f === `order:${m.order_number}` ? null : `order:${m.order_number}`)}>
                 <b>{m.order_number}</b> · {day(m.created_at)}
                 {m.source === 'seeding' && <span className="rto-pill">seeding{m.customer ? ` · ${m.customer}` : ''}</span>}
-                {m.fulfilled && <span className="rto-pill rto-pill-warn">already fulfilled — check before printing</span>}
                 {m.lines.map((l, i) => (
                   <span key={i} style={{ color: 'var(--text-muted)' }}>
-                    {' · '}{l.product_title} {l.variant} <b style={{ color: 'var(--success)' }}>({l.available} on shelf)</b>
+                    {' · '}{l.product_title} {l.variant}{' '}
+                    {l.available > 0
+                      ? <b style={{ color: 'var(--success)' }}>({l.available} on shelf)</b>
+                      : <b style={{ color: 'var(--warning)' }}>(none left on the shelf)</b>}
                   </span>
                 ))}
-              </span>
-            </button>
+              </button>
+              {canEdit && (
+                <span style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                  {m.lines.some(l => l.available > 0) && (
+                    <button className="mini-btn mini-btn-active" onClick={() => {
+                      const line = m.lines.find(l => l.available > 0)
+                      const entry = (data.entries || []).find(e => e.available > 0
+                        && (line.variant_id ? String(e.variant_id) === String(line.variant_id)
+                          : e.product_title === line.product_title && e.variant === line.variant))
+                      if (!entry) { toast.error('That piece is no longer on the shelf'); return }
+                      setUse({ row: entry, order_number: m.order_number, qty: 1 })
+                    }}>Send to this order</button>
+                  )}
+                  <button className="mini-btn" title="A fresh one was printed for this order"
+                    onClick={() => skipAlert(m, m.lines[0])}>Didn't use it</button>
+                </span>
+              )}
+            </div>
           ))}
         </div>
       )}
@@ -310,6 +348,62 @@ export default function RtoTab({ onCounts }) {
             </tbody>
           </table>
         </div>
+      )}
+
+      {/* What was done about every notice raised. The point of keeping it: whether the shelf is
+          actually saving garments, or quietly being walked past. */}
+      {!!(data.history || []).length && (
+        <>
+          <div className="dash-toolbar" style={{ marginTop: 22, marginBottom: 12 }}>
+            <div>
+              <h2 style={{ fontSize: 17 }}>Notices answered</h2>
+              <p style={{ color: 'var(--text-muted)', fontSize: 12.5 }}>
+                {num(s.saved)} filled from the shelf · {num(s.missed)} printed fresh anyway
+              </p>
+            </div>
+            <button className="mini-btn" onClick={() => setNotices(v => !v)}>{notices ? 'Hide' : 'Show'}</button>
+          </div>
+
+          {notices && (
+            <div className="data-table-wrapper">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Order</th><th>Garment</th><th>Outcome</th><th>Answered</th><th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.history.map(h => (
+                    <tr key={h.id}>
+                      <td className="cell-primary">
+                        {h.order_ref}
+                        {h.source === 'seeding' && <span className="rto-pill">seeding</span>}
+                      </td>
+                      <td data-label="Garment">{h.product_title}<div style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>{h.variant}</div></td>
+                      <td data-label="Outcome">
+                        <span className={`rto-pill ${h.status === 'used' ? '' : 'rto-pill-warn'}`}>
+                          {h.status === 'used' ? 'sent from the shelf' : 'printed fresh'}
+                        </span>
+                        {h.resolution_note && <div style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>{h.resolution_note}</div>}
+                      </td>
+                      <td data-label="Answered" style={{ fontSize: 12 }}>
+                        <div>{day(h.resolved_at)}</div>
+                        {h.resolved_by && <div style={{ color: 'var(--text-muted)' }}>{h.resolved_by}</div>}
+                      </td>
+                      <td style={{ textAlign: 'right' }}>
+                        {/* Only a hand-cleared notice can come back; one answered by actually
+                            sending a piece is a fact, not a decision to revisit. */}
+                        {canEdit && h.status === 'skipped' && (
+                          <button className="mini-btn" onClick={() => reopenAlert(h)}>Reopen</button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
       )}
 
       <div className="dash-toolbar" style={{ marginTop: 22, marginBottom: 12 }}>
