@@ -343,8 +343,20 @@ router.get('/orders', async (req, res) => {
        FROM marketing_orders ${whereSql}`, vals);
     const s = sums.rows[0] || {};
 
+    // Which of these could be filled from the RTO shelf instead of a fresh print. Same prompt the
+    // shop orders get — a seeding parcel draws on the same designs.
+    let rto = {};
+    try {
+      for (const m of await inv.seedingRtoMatches(inv.availabilityIndex(await inv.rtoAvailable()))) {
+        (rto[m.order_number] = rto[m.order_number] || []).push(m);
+      }
+    } catch (err) {
+      console.error('marketing RTO check failed:', err.message);
+    }
+
     res.json({
       orders,
+      rto,
       canDispatch: await canDispatch(req),
       canApprove: await canApprove(req),
       pagination: pagination(s.total || 0, t),

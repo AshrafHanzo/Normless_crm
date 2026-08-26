@@ -677,9 +677,39 @@ async function rtoMatches() {
         for (const m of matchesForOrder(o, index)) {
             out.push({
                 order_number: o.order_number, shopify_id: o.shopify_id, created_at: o.created_at,
+                source: 'shop',
                 // Flagged rather than filtered: a fulfilled order may still be waiting to print,
                 // and the two cases read differently to whoever acts on them.
                 fulfilled: isFulfilled(o), ...m,
+            });
+        }
+    }
+    // Seeding orders draw on the same designs, so a returned piece serves them just as well.
+    out.push(...await seedingRtoMatches(index));
+    return out;
+}
+
+/**
+ * Seeding orders that could be served from the shelf.
+ *
+ * They print on the same designs the shop sells, so a creator's parcel can just as well be filled
+ * from a returned piece. Only orders that have not gone out yet: once a seeding order is dispatched
+ * the garment has left, and unlike a shop order there is no gap between marking it and sending it.
+ */
+const SEEDING_OPEN = ['Pending Approval', 'Dispatch Pending'];
+
+async function seedingRtoMatches(index) {
+    const rows = (await db.query(
+        `SELECT id, ref_no, name, status, items, order_date FROM marketing_orders
+          WHERE status = ANY($1) ORDER BY order_date DESC LIMIT 200`, [SEEDING_OPEN])).rows;
+    const out = [];
+    for (const o of rows) {
+        const pseudo = { line_items_json: JSON.stringify(marketingLines(o)) };
+        for (const m of matchesForOrder(pseudo, index)) {
+            out.push({
+                order_number: o.ref_no ? `M${String(o.ref_no).padStart(3, '0')}` : `MK#${o.id}`,
+                marketing_id: o.id, customer: o.name, created_at: o.order_date,
+                source: 'seeding', status: o.status, fulfilled: false, ...m,
             });
         }
     }
@@ -712,5 +742,6 @@ module.exports = {
     crewfitHoldState, crewfitBlankFor, parseSizeBreakdown, normSize, crewfitDeductions,
     applyCrewfitOrder, releaseCrewfitOrder, applyCrewfitSince,
     normVariant, moveBlank, rtoAvailable, rtoMatches, rtoAlertCount, rtoForOrderNumber, RTO_MATCH_DAYS,
+    seedingRtoMatches, SEEDING_OPEN,
     availabilityIndex, matchesForOrder, OPEN_ORDER_SQL,
 };

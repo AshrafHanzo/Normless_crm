@@ -431,6 +431,8 @@ export default function Marketing() {
   // unpaginated copy. 200 is the server's ceiling — well past the size of the roster.
   const [allInfluencers, setAllInfluencers] = useState([])
   const [orders, setOrders] = useState([])
+  // ref → RTO shelf lines that could fill it, from the list response.
+  const [rto, setRto] = useState({})
   const [summary, setSummary] = useState(null)
   const [products, setProducts] = useState([])
   const [productsError, setProductsError] = useState('')
@@ -456,7 +458,7 @@ export default function Marketing() {
   }
   const loadOrders = async (q = search, s = status) => {
     const r = await apiFetch('/api/marketing/orders?' + ordTable.query({ search: q, status: s }))
-    if (r && !r.error) { setOrders(r.orders || []); setSummary(r.summary || null); ordTable.setPagination(r.pagination) }
+    if (r && !r.error) { setOrders(r.orders || []); setRto(r.rto || {}); setSummary(r.summary || null); ordTable.setPagination(r.pagination) }
   }
   const loadPicker = async () => {
     const r = await apiFetch('/api/marketing/influencers?limit=200&sort=name&dir=asc')
@@ -641,7 +643,15 @@ export default function Marketing() {
               <tbody>
                 {sortedOrders.map(o => (
                   <tr key={o.id} onClick={() => setOrderTarget(o)} style={{ cursor: 'pointer' }}>
-                    <td className="cell-primary"><span className="badge-primary">{o.ref}</span></td>
+                    <td className="cell-primary">
+                      <span className="badge-primary">{o.ref}</span>
+                      {/* Already printed and sitting on the shelf — send that one instead. */}
+                      {!!rto[o.ref] && (
+                        <span className="rto-tag" title={rto[o.ref].map(l => `${l.product_title} ${l.variant} — ${l.available} on the RTO shelf`).join('\n')}>
+                          ↩ RTO
+                        </span>
+                      )}
+                    </td>
                     <td>
                       {/* The order carries a snapshot of the creator's details, so reaching the
                           live profile from here saves a trip through the roster tab. */}

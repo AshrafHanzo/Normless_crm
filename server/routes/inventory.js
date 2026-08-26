@@ -326,7 +326,7 @@ router.get('/rto', async (req, res) => {
                FROM inventory_rto r ORDER BY r.created_at DESC, r.id DESC LIMIT 200`)).rows;
         const byOrder = new Map();
         for (const m of matches) {
-            if (!byOrder.has(m.order_number)) byOrder.set(m.order_number, { order_number: m.order_number, created_at: m.created_at, fulfilled: m.fulfilled, lines: [] });
+            if (!byOrder.has(m.order_number)) byOrder.set(m.order_number, { order_number: m.order_number, created_at: m.created_at, fulfilled: m.fulfilled, source: m.source, customer: m.customer, lines: [] });
             byOrder.get(m.order_number).lines.push(m);
         }
         res.json({

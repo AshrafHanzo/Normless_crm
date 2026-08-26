@@ -220,6 +220,7 @@ export default function RtoTab({ onCounts }) {
           <h2 style={{ fontSize: 15, marginBottom: 6 }}>
             <Icon name="alert" size={16} style={{ marginRight: 6, verticalAlign: '-3px' }} />
             {matches.length} order{matches.length > 1 ? 's' : ''} can be served from this shelf
+            {matches.some(m => m.source === 'seeding') && <span style={{ fontWeight: 400, color: 'var(--text-muted)' }}> — shop and seeding</span>}
           </h2>
           <p style={{ color: 'var(--text-muted)', fontSize: 12.5, marginBottom: 12 }}>
             Send the returned piece instead of printing a new one. Mark it used below and the blank goes back into stock.
@@ -231,6 +232,7 @@ export default function RtoTab({ onCounts }) {
               onClick={() => setFocus(f => f === `order:${m.order_number}` ? null : `order:${m.order_number}`)}>
               <span>
                 <b>{m.order_number}</b> · {day(m.created_at)}
+                {m.source === 'seeding' && <span className="rto-pill">seeding{m.customer ? ` · ${m.customer}` : ''}</span>}
                 {m.fulfilled && <span className="rto-pill rto-pill-warn">already fulfilled — check before printing</span>}
                 {m.lines.map((l, i) => (
                   <span key={i} style={{ color: 'var(--text-muted)' }}>
