@@ -18,7 +18,20 @@ const QUOTE_SORTS = {
 const trimText = (v) => { const t = String(v ?? '').trim(); return t || null; };
 
 function safeJson(v, fallback) { try { return typeof v === 'string' ? JSON.parse(v) : (v || fallback); } catch { return fallback; } }
-const parseQuote = (q) => ({ ...q, line_items: safeJson(q.line_items, []) });
+/**
+ * A DATE column comes back as a Date at local midnight, and anything that serialises it through
+ * UTC lands on the previous day. Read the local parts and hand on a plain 'YYYY-MM-DD' string,
+ * which is what a date input wants anyway.
+ */
+const dateOnly = (v) => {
+  if (!v) return null;
+  if (v instanceof Date) {
+    const p = (n) => String(n).padStart(2, '0');
+    return `${v.getFullYear()}-${p(v.getMonth() + 1)}-${p(v.getDate())}`;
+  }
+  return String(v).slice(0, 10);
+};
+const parseQuote = (q) => ({ ...q, line_items: safeJson(q.line_items, []), delivery_date: dateOnly(q.delivery_date) });
 
 // Tier labels look like "5–10" or "100+"; price is a number or the string "On request".
 function parseTierRange(label) {
@@ -200,7 +213,12 @@ router.get('/', async (req, res) => {
 // No payment link involved — this is just a priced, saveable quote to send the customer.
 router.post('/', async (req, res) => {
   try {
-    const { customer_name, contact_number, items, zoneId, notes, shippingCharge } = req.body || {};
+    const {
+      customer_name, contact_number, items, zoneId, notes, shippingCharge,
+      // Optional buyer paperwork. A quote is often raised before any of it exists, so nothing here
+      // is required — whatever is missing is simply left off the printed quotation.
+      company_name, contact_person, email, gstin, delivery_address, delivery_date,
+    } = req.body || {};
     if (!customer_name || !contact_number) return res.status(400).json({ error: 'Customer name and phone are required' });
     if (!isValidMobile(contact_number)) return res.status(400).json({ error: 'Phone must be exactly 10 digits' });
 
@@ -212,10 +230,15 @@ router.post('/', async (req, res) => {
 
     const ins = await db.query(
       `INSERT INTO crewfit_quotes
-         (customer_name, contact_number, zone_id, zone_label, line_items, product_total, shipping_charge, gst_amount, grand_total, notes, status, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'Draft',$11) RETURNING *`,
+         (customer_name, contact_number, zone_id, zone_label, line_items, product_total, shipping_charge,
+          gst_amount, grand_total, notes, status, created_by,
+          company_name, contact_person, email, gstin, delivery_address, delivery_date)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'Draft',$11,$12,$13,$14,$15,$16,$17) RETURNING *`,
       [customer_name, contact_number, zoneId || null, result.zoneLabel, JSON.stringify(result.lineItems),
-        result.productTotal, result.shippingCharge, result.gstAmount, result.grandTotal, notes || null, req.user?.username || null]
+        result.productTotal, result.shippingCharge, result.gstAmount, result.grandTotal, notes || null,
+        req.user?.username || null,
+        trimText(company_name), trimText(contact_person), trimText(email), trimText(gstin),
+        trimText(delivery_address), delivery_date || null]
     );
     res.status(201).json(parseQuote(ins.rows[0]));
   } catch (err) {

@@ -455,6 +455,15 @@ async function ensureCrewfitSchema() {
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
                 ALTER TABLE crewfit_quotes ADD COLUMN IF NOT EXISTS gst_amount NUMERIC;
+                -- Everything a printed quotation says about the buyer beyond a name and a phone
+                -- number. All optional: a quote is often raised before the paperwork exists, and a
+                -- blank field is left off the PDF rather than printed empty.
+                ALTER TABLE crewfit_quotes ADD COLUMN IF NOT EXISTS contact_person TEXT;
+                ALTER TABLE crewfit_quotes ADD COLUMN IF NOT EXISTS email TEXT;
+                ALTER TABLE crewfit_quotes ADD COLUMN IF NOT EXISTS gstin TEXT;
+                ALTER TABLE crewfit_quotes ADD COLUMN IF NOT EXISTS company_name TEXT;
+                ALTER TABLE crewfit_quotes ADD COLUMN IF NOT EXISTS delivery_address TEXT;
+                ALTER TABLE crewfit_quotes ADD COLUMN IF NOT EXISTS delivery_date DATE;
             `);
         } catch (e) { console.error('crewfit_quotes ensure:', e.message); }
 

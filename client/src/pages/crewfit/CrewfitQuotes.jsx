@@ -115,6 +115,12 @@ export default function CrewfitQuotes() {
   }, [items, zoneId, shippingOverride])
 
   const setItem = (i, patch) => setItems(list => list.map((it, idx) => idx === i ? { ...it, ...patch } : it))
+  // Everything the printed quotation carries beyond a name and a number. All optional — a quote is
+  // often raised before any of this exists, and a blank field is left off the PDF entirely.
+  const [buyer, setBuyer] = useState({ company_name: '', contact_person: '', email: '', gstin: '', delivery_address: '', delivery_date: '' })
+  const setB = (patch) => setBuyer(b => ({ ...b, ...patch }))
+  const [showBuyer, setShowBuyer] = useState(false)
+
   const addItem = () => setItems(list => [...list, blankItem()])
   const removeItem = (i) => setItems(list => list.length > 1 ? list.filter((_, idx) => idx !== i) : list)
 
@@ -129,6 +135,7 @@ export default function CrewfitQuotes() {
       method: 'POST',
       body: JSON.stringify({
         customer_name: customerName.trim(), contact_number: contactNumber.trim(), notes: notes.trim(),
+        ...buyer,
         items: valid.map(it => ({
           product_id: it.product_id, qty: it.qty, price_per_piece: it.price_per_piece || undefined,
           printing_placement: it.printing_placement, printing_type: it.printing_type,
@@ -272,7 +279,34 @@ export default function CrewfitQuotes() {
                     <input {...mobileInputProps} value={contactNumber} onChange={e => setContactNumber(cleanMobile(e.target.value))} />
                     {mobileError(contactNumber) && <div className="field-error">{mobileError(contactNumber)}</div>}</div>
                 </div>
-                <div className="input-group"><label>Notes (optional)</label><input value={notes} onChange={e => setNotes(e.target.value)} placeholder="Internal note for this quote" /></div>
+                <div className="input-group"><label>Notes (optional)</label><input value={notes} onChange={e => setNotes(e.target.value)} placeholder="Shown on the quotation, under the items" /></div>
+
+                {/* Folded away by default: most quotes are priced and sent before the buyer's
+                    paperwork exists, and an eight-field form would be in the way every time. */}
+                <button type="button" className="mini-btn" onClick={() => setShowBuyer(v => !v)}>
+                  {showBuyer ? '− Hide' : '+ Add'} details for the printed quotation
+                </button>
+                {showBuyer && (
+                  <div style={{ marginTop: 12 }}>
+                    <div className="form-row">
+                      <div className="input-group"><label>Company name</label>
+                        <input value={buyer.company_name} onChange={e => setB({ company_name: e.target.value })} placeholder="Heaven Structures Private Limited" /></div>
+                      <div className="input-group"><label>Contact person</label>
+                        <input value={buyer.contact_person} onChange={e => setB({ contact_person: e.target.value })} placeholder="Nanthini Poulraj (HR Manager)" /></div>
+                    </div>
+                    <div className="form-row">
+                      <div className="input-group"><label>Email</label>
+                        <input value={buyer.email} onChange={e => setB({ email: e.target.value })} placeholder="hr@company.com" /></div>
+                      <div className="input-group"><label>Buyer GSTIN</label>
+                        <input value={buyer.gstin} onChange={e => setB({ gstin: e.target.value.toUpperCase() })} placeholder="33AAECH1552M1ZM" /></div>
+                    </div>
+                    <div className="input-group"><label>Delivery address</label>
+                      <input value={buyer.delivery_address} onChange={e => setB({ delivery_address: e.target.value })} placeholder="Full address the goods ship to" /></div>
+                    <div className="input-group"><label>Delivery date</label>
+                      <input type="date" value={buyer.delivery_date} onChange={e => setB({ delivery_date: e.target.value })} />
+                      <span className="label-hint">Printed on the quotation and in the payment terms. Left off if blank.</span></div>
+                  </div>
+                )}
               </>
             )}
           </div>
