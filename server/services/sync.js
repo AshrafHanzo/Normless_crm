@@ -84,7 +84,7 @@ async function syncAll() {
         for (const item of orders) {
             item.line_items_json = mergeLineItems(item.line_items_json, storedItems.get(item.shopify_id));
             await db.query(`
-                INSERT INTO orders (shopify_id, order_number, customer_shopify_id, total_price, currency, financial_status, fulfillment_status, line_items_json, created_at)
+                INSERT INTO orders (shopify_id, order_number, customer_shopify_id, total_price, currency, financial_status, fulfillment_status, cancelled_at, line_items_json, created_at)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                 ON CONFLICT(shopify_id) DO UPDATE SET
                     order_number = excluded.order_number,
@@ -93,15 +93,27 @@ async function syncAll() {
                     currency = excluded.currency,
                     financial_status = excluded.financial_status,
                     fulfillment_status = excluded.fulfillment_status,
+                    cancelled_at = excluded.cancelled_at,
                     line_items_json = excluded.line_items_json
             `, [
                 item.shopify_id, item.order_number, item.customer_shopify_id, item.total_price, item.currency,
-                item.financial_status, item.fulfillment_status, item.line_items_json, item.created_at
+                item.financial_status, item.fulfillment_status, item.cancelled_at, item.line_items_json, item.created_at
             ]);
         }
 
         console.log(`✅ Synced ${orders.length} orders`);
         totalSynced += orders.length;
+
+        // On hold is not in the REST payload, so it is asked for separately and stamped on the
+        // rows. Never allowed to fail the sync: not knowing which orders are held is worse than a
+        // stale flag, but neither is worth losing the orders themselves over.
+        try {
+            const held = await shopify.fetchOnHoldOrderNames();
+            await db.query('UPDATE orders SET on_hold = (order_number = ANY($1))', [held]);
+            if (held.length) console.log(`⏸  ${held.length} order(s) on hold`);
+        } catch (e) {
+            console.error('on-hold status skipped:', e.message);
+        }
 
         // Draw the blanks these orders consume. Safe to run on every sync: each (order, variant)
         // owns one movement row, so re-importing the same order corrects it rather than deducting

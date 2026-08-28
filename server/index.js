@@ -811,6 +811,11 @@ async function ensureInventorySchema() {
 
             -- CREATE TABLE IF NOT EXISTS leaves an existing table alone, so anything added to the
             -- definitions above after they first ran has to arrive as its own ALTER.
+            -- Shopify knows an order is cancelled or on hold; we did not, so the RTO shelf kept
+            -- offering pieces to orders that are never going out.
+            ALTER TABLE orders ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMP;
+            ALTER TABLE orders ADD COLUMN IF NOT EXISTS on_hold BOOLEAN DEFAULT false;
+
             ALTER TABLE inventory_rto ADD COLUMN IF NOT EXISTS variant_id BIGINT;
             ALTER TABLE inventory_damaged ADD COLUMN IF NOT EXISTS variant_id BIGINT;
             CREATE INDEX IF NOT EXISTS inventory_rto_variant_idx ON inventory_rto (variant_id);

@@ -98,12 +98,42 @@ async function fetchAllCustomers() {
 }
 
 /**
+ * Order names Shopify currently has on hold.
+ *
+ * REST reports an on-hold order as simply unfulfilled, so it cannot be told apart there. One
+ * GraphQL query with the store's own filter answers it for the whole shop at once, which is far
+ * cheaper than asking per order — and on-hold orders are recent by nature, so the 60-day limit on
+ * that scope never bites.
+ */
+async function fetchOnHoldOrderNames() {
+    const names = [];
+    let after = null;
+    for (let page = 0; page < 10; page++) {
+        const query = `{ orders(first: 250${after ? `, after: "${after}"` : ''}, query: "fulfillment_status:on_hold") {
+            edges { cursor node { name } } pageInfo { hasNextPage } } }`;
+        const res = await fetch(`https://${SHOPIFY_STORE_DOMAIN}/admin/api/2026-04/graphql.json`, {
+            method: 'POST',
+            headers: { 'X-Shopify-Access-Token': SHOPIFY_ACCESS_TOKEN, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ query }),
+        });
+        if (!res.ok) throw new Error(`Shopify on-hold query failed (${res.status})`);
+        const json = await res.json();
+        if (json.errors) throw new Error(`Shopify on-hold query: ${JSON.stringify(json.errors)}`);
+        const edges = json.data?.orders?.edges || [];
+        names.push(...edges.map(e => e.node.name));
+        if (!json.data?.orders?.pageInfo?.hasNextPage || !edges.length) break;
+        after = edges[edges.length - 1].cursor;
+    }
+    return names;
+}
+
+/**
  * Fetch all orders using REST API (status=any gets ALL orders including closed/archived)
  * GraphQL is limited to ~60 days by read_orders scope, but REST returns everything.
  */
 async function fetchAllOrders() {
     const allOrders = [];
-    let url = `${REST_BASE}/orders.json?status=any&limit=250&fields=id,name,created_at,total_price,currency,financial_status,fulfillment_status,customer,line_items`;
+    let url = `${REST_BASE}/orders.json?status=any&limit=250&fields=id,name,created_at,total_price,currency,financial_status,fulfillment_status,cancelled_at,customer,line_items`;
 
     while (url) {
         const response = await fetch(url, {
@@ -125,6 +155,8 @@ async function fetchAllOrders() {
             currency: o.currency || 'INR',
             financial_status: (o.financial_status || 'unknown').toUpperCase(),
             fulfillment_status: (o.fulfillment_status || 'unfulfilled').toUpperCase(),
+            // A cancelled order is never shipping, so nothing should be reserved or offered for it.
+            cancelled_at: o.cancelled_at || null,
             line_items_json: JSON.stringify((o.line_items || []).map(li => ({
                 title: li.title,
                 quantity: li.quantity,
@@ -283,6 +315,7 @@ async function testConnection() {
 module.exports = {
     fetchAllCustomers,
     fetchAllOrders,
+    fetchOnHoldOrderNames,
     fetchProducts,
     countOrders,
     fetchOrdersInRange,

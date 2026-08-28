@@ -323,8 +323,8 @@ router.get('/rto', async (req, res) => {
         // Raise a notice for anything newly matched before reading them back, so opening the tab
         // never shows a stale picture of what the shelf could serve.
         await inv.syncRtoAlerts();
-        const [shelf, alerts, history, waiting] = await Promise.all([
-            inv.rtoAvailable(), inv.openRtoAlerts(), inv.rtoAlertHistory(300), inv.rtoWaiting(),
+        const [shelf, alerts, history, waiting, sent] = await Promise.all([
+            inv.rtoAvailable(), inv.openRtoAlerts(), inv.rtoAlertHistory(300), inv.rtoWaiting(), inv.rtoSentLog(300),
         ]);
         const entries = (await db.query(
             `SELECT r.*, (r.qty - r.qty_used - r.qty_written_off) AS available
@@ -333,12 +333,16 @@ router.get('/rto', async (req, res) => {
         // Orders whose garment the shelf no longer holds. Not listed — there is nothing to offer
         // for them — but counted, so they are not silently forgotten.
         const waitingOrders = new Set(waiting.flatMap(g => g.orders.map(o => o.order_ref)));
-        const dormant = [...new Set(alerts.filter(a => a.available === 0).map(a => a.order_ref))]
-            .filter(ref => !waitingOrders.has(ref));
+        // Nothing to offer: either the garment has gone, or the order has been cancelled or held.
+        const dormant = [...new Set(alerts
+            .filter(a => a.available === 0 || a.order_cancelled || a.order_on_hold)
+            .map(a => a.order_ref))].filter(ref => !waitingOrders.has(ref));
+        const parked = alerts.filter(a => a.order_cancelled || a.order_on_hold).length;
 
         res.json({
-            shelf, entries, waiting, history,
+            shelf, entries, waiting, history, sent,
             dormant_orders: dormant.length,
+            parked_orders: parked,
             summary: {
                 pieces: shelf.reduce((n, r) => n + r.available, 0),
                 designs: shelf.length,
@@ -347,8 +351,9 @@ router.get('/rto', async (req, res) => {
                 waiting_pieces: waiting.length,
                 waiting_orders: waitingOrders.size,
                 dormant_orders: dormant.length,
-                used: entries.reduce((n, r) => n + r.qty_used, 0),
-                saved: history.filter(h => h.status === 'used').length,
+                // Pieces that left the shelf — the same figure the sent table lists, so the card
+                // and the table below it can never disagree.
+                used: sent.reduce((n, r) => n + (r.qty || 0), 0),
                 missed: history.filter(h => h.status === 'skipped').length,
             },
         });

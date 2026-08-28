@@ -655,7 +655,8 @@ const RTO_MATCH_DAYS = 3;
 const OPEN_ORDER_SQL = `
     (UPPER(COALESCE(fulfillment_status,'')) NOT IN ('FULFILLED','RESTOCKED')
      OR created_at > NOW() - INTERVAL '${RTO_MATCH_DAYS} days')
-    AND UPPER(COALESCE(financial_status,'')) NOT IN ('VOIDED','REFUNDED')`;
+    AND UPPER(COALESCE(financial_status,'')) NOT IN ('VOIDED','REFUNDED')
+    AND cancelled_at IS NULL AND COALESCE(on_hold, false) = false`;
 
 /** Whether an order has already been marked fulfilled — a match on one reads differently. */
 const isFulfilled = (o) => ['FULFILLED', 'RESTOCKED'].includes(String(o.fulfillment_status || '').toUpperCase());
@@ -756,8 +757,13 @@ async function syncRtoAlerts() {
  * between the notice being raised and someone reading it, and "1 waiting" would then be a lie.
  */
 async function openRtoAlerts() {
+    // An order can be cancelled or put on hold after its notice was raised, and a piece must not
+    // go on being offered to something that is not shipping.
     const rows = (await db.query(
-        `SELECT * FROM inventory_rto_alerts WHERE status = 'open' ORDER BY created_at DESC LIMIT 200`)).rows;
+        `SELECT a.*, (o.cancelled_at IS NOT NULL) AS order_cancelled, COALESCE(o.on_hold, false) AS order_on_hold
+           FROM inventory_rto_alerts a
+           LEFT JOIN orders o ON a.source = 'shop' AND o.order_number = a.order_ref
+          WHERE a.status = 'open' ORDER BY a.created_at DESC LIMIT 300`)).rows;
     if (!rows.length) return [];
     const index = availabilityIndex(await rtoAvailable());
     const withStock = rows.map(a => {
@@ -772,6 +778,19 @@ async function openRtoAlerts() {
         (b.available > 0) - (a.available > 0)
         || `${a.product_title}${a.variant}`.localeCompare(`${b.product_title}${b.variant}`)
         || new Date(a.order_date || a.created_at) - new Date(b.order_date || b.created_at));
+}
+
+/**
+ * Every piece that has gone back out, which is not the same as every notice answered — a piece can
+ * be sent straight from the shelf without a notice ever being raised for that order. The count of
+ * pieces sent is the honest one, so it is what this reads.
+ */
+async function rtoSentLog(limit = 300) {
+    return (await db.query(
+        `SELECT e.id, e.qty, e.order_number, e.created_by, e.created_at,
+                r.product_title, r.variant, r.blank_type, r.color, r.size
+           FROM inventory_rto_events e JOIN inventory_rto r ON r.id = e.rto_id
+          WHERE e.kind = 'used' ORDER BY e.created_at DESC, e.id DESC LIMIT $1`, [limit])).rows;
 }
 
 /** Answered notices — how often the shelf actually saved a garment, and how often it did not. */
@@ -840,7 +859,7 @@ async function rtoWaiting() {
     const open = await openRtoAlerts();
     const groups = new Map();
     for (const a of open) {
-        if (a.available <= 0) continue;
+        if (a.available <= 0 || a.order_cancelled || a.order_on_hold) continue;
         const key = a.variant_id ? `v${a.variant_id}` : `t${a.product_title}|${normVariant(a.variant)}`;
         if (!groups.has(key)) {
             groups.set(key, {
@@ -914,6 +933,6 @@ module.exports = {
     normVariant, moveBlank, rtoAvailable, rtoMatches, rtoAlertCount, rtoForOrderNumber, RTO_MATCH_DAYS,
     seedingRtoMatches, SEEDING_OPEN,
     syncRtoAlerts, openRtoAlerts, rtoAlertHistory, resolveRtoAlert, resolveAlertsForOrder,
-    staleRtoAlertCount, clearStaleRtoAlerts, rtoWaiting, markOrderNotUsed,
+    staleRtoAlertCount, clearStaleRtoAlerts, rtoWaiting, markOrderNotUsed, rtoSentLog,
     availabilityIndex, matchesForOrder, OPEN_ORDER_SQL,
 };

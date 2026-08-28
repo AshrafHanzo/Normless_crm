@@ -185,7 +185,9 @@ export default function RtoTab({ onCounts }) {
   // One row per garment, not per order: four orders wanting the same shirt is one shirt and one
   // decision. Which order gets it is chosen in the picker.
   const waiting = d.waiting || []
-  const sentHistory = (d.history || []).filter(h => h.status === 'used')
+  // Every piece that went back out, whether or not a notice prompted it — a piece can be sent
+  // straight from the shelf, and counting only answered notices under-reported the shelf's work.
+  const sentLog = d.sent || []
   const skippedHistory = (d.history || []).filter(h => h.status !== 'used')
 
   /** The shelf entry a garment's pieces actually come from. */
@@ -215,7 +217,7 @@ export default function RtoTab({ onCounts }) {
   // 97-row shelf under a 7-row notice list is what made the page hard to read.
   const waitPager = useLocalPager(waiting, 10)
   const shelfPager = useLocalPager(visible, 10)
-  const sentPager = useLocalPager(sentHistory, 10)
+  const sentPager = useLocalPager(sentLog, 10)
   const skipPager = useLocalPager(skippedHistory, 10)
 
 
@@ -244,8 +246,8 @@ export default function RtoTab({ onCounts }) {
 
       <div className="kpi-grid" style={{ marginBottom: 18 }}>
         {[
-          { icon: 'box', label: 'Pieces on the shelf', value: num(s.pieces), key: 'all' },
-          { icon: 'shirt', label: 'Designs held', value: num(s.designs) },
+          { icon: 'box', label: 'Pieces on the shelf', value: num(s.pieces), key: 'all',
+            sub: s.designs ? `across ${num(s.designs)} designs` : null },
           { icon: 'alert', label: 'Pieces an order wants', value: num(s.waiting_pieces), key: 'matched',
             sub: s.waiting_orders ? `${num(s.waiting_orders)} order${s.waiting_orders === 1 ? '' : 's'} waiting` : null },
           { icon: 'trending', label: 'Sent out again', value: num(s.used) },
@@ -319,8 +321,10 @@ export default function RtoTab({ onCounts }) {
           them — but not hidden either, and they come back on their own if a piece is returned. */}
       {!!d.dormant_orders && (
         <p style={{ color: 'var(--text-muted)', fontSize: 12.5, marginBottom: 16 }}>
-          {num(d.dormant_orders)} other order{d.dormant_orders === 1 ? '' : 's'} asked for a garment the
-          shelf no longer holds. Nothing to send — they reappear here if another one comes back.
+          {num(d.dormant_orders)} other order{d.dormant_orders === 1 ? '' : 's'} asked for a piece but
+          cannot take one — the garment has gone, or the order is cancelled or on hold
+          {d.parked_orders ? ` (${num(d.parked_orders)} of those)` : ''}. They come back on their own
+          if that changes.
         </p>
       )}
 
@@ -409,31 +413,31 @@ export default function RtoTab({ onCounts }) {
 
       {/* Tables 2 and 3 — what was done about every notice raised. Split apart because they answer
           different questions: one is the shelf earning its keep, the other is it being walked past. */}
-      {!!sentHistory.length && (
+      {!!sentLog.length && (
         <>
           <div className="dash-toolbar" style={{ marginTop: 22, marginBottom: 12 }}>
             <div>
               <h2 style={{ fontSize: 17 }}>Sent from the shelf</h2>
               <p style={{ color: 'var(--text-muted)', fontSize: 12.5 }}>
-                {num(s.saved)} garment{s.saved === 1 ? '' : 's'} that did not have to be printed again
+                {num(s.used)} garment{s.used === 1 ? '' : 's'} that did not have to be printed again
               </p>
             </div>
           </div>
           <div className="data-table-wrapper">
             <table className="data-table">
               <thead>
-                <tr><th>Order</th><th>Garment</th><th>Sent</th><th>By</th></tr>
+                <tr><th>Order</th><th>Garment</th><th>Blank credited</th><th>Sent</th><th>By</th></tr>
               </thead>
               <tbody>
-                {sentPager.slice.map(h => (
-                  <tr key={h.id}>
-                    <td className="cell-primary">
-                      {h.order_ref}
-                      {h.source === 'seeding' && <span className="rto-pill">seeding</span>}
+                {sentPager.slice.map(e => (
+                  <tr key={e.id}>
+                    <td className="cell-primary">{e.order_number || '—'}</td>
+                    <td data-label="Garment">{e.product_title}<div style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>{e.variant}</div></td>
+                    <td data-label="Blank credited" style={{ color: 'var(--text-muted)', fontSize: 12.5 }}>
+                      {e.blank_type ? `${e.blank_type} ${e.color} ${e.size} +${e.qty}` : '—'}
                     </td>
-                    <td data-label="Garment">{h.product_title}<div style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>{h.variant}</div></td>
-                    <td data-label="Sent">{day(h.resolved_at)}</td>
-                    <td data-label="By" style={{ color: 'var(--text-muted)', fontSize: 12 }}>{h.resolved_by || '—'}</td>
+                    <td data-label="Sent">{day(e.created_at)}</td>
+                    <td data-label="By" style={{ color: 'var(--text-muted)', fontSize: 12 }}>{e.created_by || '—'}</td>
                   </tr>
                 ))}
               </tbody>
@@ -685,12 +689,15 @@ export default function RtoTab({ onCounts }) {
 
             <div className="confirm-actions">
               {canEdit && (
-                <button className="btn btn-secondary" onClick={() => {
+                <button className="btn btn-danger" onClick={() => {
                   const entry = entryFor(pick)
                   if (!entry) { toast.error('That piece is no longer on the shelf'); return }
                   setPick(null)
                   setDamage({ row: entry, qty: 1, stage: 'courier', reason: '', note: '' })
-                }}>The piece is damaged</button>
+                }}>
+                  <Icon name="alert" size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
+                  Write this piece off as damaged
+                </button>
               )}
               <button className="btn btn-secondary" onClick={() => setPick(null)}>Close</button>
             </div>
