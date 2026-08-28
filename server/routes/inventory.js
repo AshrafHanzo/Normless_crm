@@ -323,37 +323,30 @@ router.get('/rto', async (req, res) => {
         // Raise a notice for anything newly matched before reading them back, so opening the tab
         // never shows a stale picture of what the shelf could serve.
         await inv.syncRtoAlerts();
-        const [shelf, alerts, history] = await Promise.all([
-            inv.rtoAvailable(), inv.openRtoAlerts(), inv.rtoAlertHistory(100),
+        const [shelf, alerts, history, waiting] = await Promise.all([
+            inv.rtoAvailable(), inv.openRtoAlerts(), inv.rtoAlertHistory(300), inv.rtoWaiting(),
         ]);
         const entries = (await db.query(
             `SELECT r.*, (r.qty - r.qty_used - r.qty_written_off) AS available
                FROM inventory_rto r ORDER BY r.created_at DESC, r.id DESC LIMIT 200`)).rows;
 
-        // Grouped by order, because that is the unit a person acts on — one parcel, one decision.
-        const byOrder = new Map();
-        for (const a of alerts) {
-            if (!byOrder.has(a.order_ref)) {
-                byOrder.set(a.order_ref, {
-                    order_number: a.order_ref, created_at: a.order_date, source: a.source,
-                    customer: a.customer, raised_at: a.created_at, lines: [],
-                });
-            }
-            byOrder.get(a.order_ref).lines.push(a);
-        }
-        const ready = [...byOrder.values()].filter(o => o.lines.some(l => l.available > 0));
+        // Orders whose garment the shelf no longer holds. Not listed — there is nothing to offer
+        // for them — but counted, so they are not silently forgotten.
+        const waitingOrders = new Set(waiting.flatMap(g => g.orders.map(o => o.order_ref)));
+        const dormant = [...new Set(alerts.filter(a => a.available === 0).map(a => a.order_ref))]
+            .filter(ref => !waitingOrders.has(ref));
+
         res.json({
-            shelf, entries, matches: [...byOrder.values()], history,
+            shelf, entries, waiting, history,
+            dormant_orders: dormant.length,
             summary: {
                 pieces: shelf.reduce((n, r) => n + r.available, 0),
                 designs: shelf.length,
-                // Only orders a piece is actually waiting for. Counting the rest made the card
-                // promise stock that has since gone to someone else.
-                matched_orders: ready.length,
-                // Orders, not notices — the card below counts orders, and two figures describing
-                // the same pile must not disagree. An order with one line left on the shelf and one
-                // gone belongs to the actionable side, not this one.
-                stale_orders: [...byOrder.values()].length - ready.length,
+                // Pieces an order is waiting for, and the orders waiting — the list is per garment
+                // now, so both figures are named rather than one standing in for the other.
+                waiting_pieces: waiting.length,
+                waiting_orders: waitingOrders.size,
+                dormant_orders: dormant.length,
                 used: entries.reduce((n, r) => n + r.qty_used, 0),
                 saved: history.filter(h => h.status === 'used').length,
                 missed: history.filter(h => h.status === 'skipped').length,
@@ -533,6 +526,24 @@ router.post('/rto/alerts/:id/skip', canEdit, async (req, res) => {
     } catch (err) {
         console.error('inventory rto alert skip error:', err);
         res.status(500).json({ error: 'Failed to clear the notice' });
+    }
+});
+
+// POST /api/inventory/rto/alerts/mark-not-used { order_number, note }
+// For a parcel that went out before anyone looked at the shelf. Keyed on the order number because
+// that is what the person has in front of them — they know the order, not which notice it raised.
+router.post('/rto/alerts/mark-not-used', canEdit, async (req, res) => {
+    try {
+        const orderNumber = String(req.body?.order_number || '').trim();
+        if (!orderNumber) return res.status(400).json({ error: 'Enter an order number' });
+        const out = await inv.markOrderNotUsed(orderNumber, req.body?.note, req.user?.username);
+        if (!out.cleared) {
+            return res.status(404).json({ error: `No open RTO notice for ${orderNumber} — nothing on the shelf was flagged for it` });
+        }
+        res.json({ success: true, ...out });
+    } catch (err) {
+        console.error('inventory rto mark-not-used error:', err);
+        res.status(500).json({ error: 'Failed to mark that order' });
     }
 });
 

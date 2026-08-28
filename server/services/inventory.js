@@ -828,6 +828,58 @@ async function staleRtoAlertCount() {
     return open.filter(a => a.available === 0).length;
 }
 
+/**
+ * Open notices grouped by the garment rather than by the order.
+ *
+ * Four orders wanting the same shirt is one shirt and one decision, not four notices — the list
+ * shows the piece, and picking who gets it happens in one place. A garment the shelf no longer
+ * holds simply drops out: there is nothing to offer, so there is nothing to show. Its notices stay
+ * open and the garment reappears here if another one is returned.
+ */
+async function rtoWaiting() {
+    const open = await openRtoAlerts();
+    const groups = new Map();
+    for (const a of open) {
+        if (a.available <= 0) continue;
+        const key = a.variant_id ? `v${a.variant_id}` : `t${a.product_title}|${normVariant(a.variant)}`;
+        if (!groups.has(key)) {
+            groups.set(key, {
+                key, product_title: a.product_title, variant: a.variant, variant_id: a.variant_id,
+                shopify_product_id: a.shopify_product_id, color: a.color, size: a.size,
+                blank_type: a.blank_type, available: a.available, orders: [],
+            });
+        }
+        groups.get(key).orders.push({
+            alert_id: a.id, order_ref: a.order_ref, source: a.source,
+            customer: a.customer, order_date: a.order_date, qty: a.qty,
+        });
+    }
+    // Oldest order first within a garment, then the garment with the longest wait at the top.
+    const out = [...groups.values()];
+    for (const g of out) g.orders.sort((x, y) => new Date(x.order_date || 0) - new Date(y.order_date || 0));
+    out.sort((a, b) => new Date(a.orders[0]?.order_date || 0) - new Date(b.orders[0]?.order_date || 0));
+    return out;
+}
+
+/**
+ * Answer every open notice an order raised, without a piece being sent.
+ *
+ * Takes an order number rather than a notice id: this is for a parcel that went out before anyone
+ * looked at the shelf, where the person knows the order and not which notice it raised.
+ */
+async function markOrderNotUsed(orderRef, note, user) {
+    const ref = String(orderRef || '').trim();
+    if (!ref) return { cleared: 0 };
+    const alt = ref.startsWith('#') ? ref.slice(1) : `#${ref}`;
+    const r = await db.query(
+        `UPDATE inventory_rto_alerts
+            SET status = 'skipped', resolved_by = $1, resolved_at = CURRENT_TIMESTAMP,
+                resolution_note = $2
+          WHERE status = 'open' AND (order_ref = $3 OR order_ref = $4) RETURNING order_ref, product_title, variant`,
+        [user || null, note || 'Shipped without checking the shelf', ref, alt]);
+    return { cleared: r.rowCount, rows: r.rows };
+}
+
 /** Answer every notice whose garment is gone, in one go. */
 async function clearStaleRtoAlerts(user) {
     const stale = (await openRtoAlerts()).filter(a => a.available === 0).map(a => a.id);
@@ -862,6 +914,6 @@ module.exports = {
     normVariant, moveBlank, rtoAvailable, rtoMatches, rtoAlertCount, rtoForOrderNumber, RTO_MATCH_DAYS,
     seedingRtoMatches, SEEDING_OPEN,
     syncRtoAlerts, openRtoAlerts, rtoAlertHistory, resolveRtoAlert, resolveAlertsForOrder,
-    staleRtoAlertCount, clearStaleRtoAlerts,
+    staleRtoAlertCount, clearStaleRtoAlerts, rtoWaiting, markOrderNotUsed,
     availabilityIndex, matchesForOrder, OPEN_ORDER_SQL,
 };
