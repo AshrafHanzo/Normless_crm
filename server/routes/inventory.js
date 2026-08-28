@@ -334,9 +334,8 @@ router.get('/rto', async (req, res) => {
         // for them — but counted, so they are not silently forgotten.
         const waitingOrders = new Set(waiting.flatMap(g => g.orders.map(o => o.order_ref)));
         // Nothing to offer: either the garment has gone, or the order has been cancelled or held.
-        const dormant = [...new Set(alerts
-            .filter(a => a.available === 0 || a.order_cancelled || a.order_on_hold)
-            .map(a => a.order_ref))].filter(ref => !waitingOrders.has(ref));
+        const dormant = [...new Set(alerts.filter(a => !inv.isActionable(a)).map(a => a.order_ref))]
+            .filter(ref => !waitingOrders.has(ref));
         const parked = alerts.filter(a => a.order_cancelled || a.order_on_hold).length;
 
         res.json({
@@ -371,7 +370,7 @@ router.get('/rto/alerts', async (req, res) => {
         // The badge counts orders a piece is actually waiting for — the same rule the page's card
         // uses. Counting every open notice made the badge say 13 while the card said 7, which is
         // exactly the kind of disagreement that stops people trusting either number.
-        const live = alerts.filter(a => a.available > 0);
+        const live = alerts.filter(inv.isActionable);
         const orders = [...new Set(live.map(a => a.order_ref))];
         const staleOrders = [...new Set(alerts.map(a => a.order_ref))].filter(ref => !orders.includes(ref));
         res.json({

@@ -838,7 +838,7 @@ async function resolveAlertsForOrder(orderRef, rtoId, user) {
  */
 async function rtoAlertCount() {
     const open = await openRtoAlerts();
-    return new Set(open.filter(a => a.available > 0).map(a => a.order_ref)).size;
+    return new Set(open.filter(isActionable).map(a => a.order_ref)).size;
 }
 
 /** Notices left standing for a garment the shelf no longer holds. */
@@ -855,11 +855,18 @@ async function staleRtoAlertCount() {
  * holds simply drops out: there is nothing to offer, so there is nothing to show. Its notices stay
  * open and the garment reappears here if another one is returned.
  */
+/**
+ * Whether a notice can still be acted on: a piece is on the shelf, and the order is still going
+ * out. Every count on the tab runs through this — the badge, the card and the list disagreeing
+ * about the same pile is what made the page impossible to trust.
+ */
+const isActionable = (a) => a.available > 0 && !a.order_cancelled && !a.order_on_hold;
+
 async function rtoWaiting() {
     const open = await openRtoAlerts();
     const groups = new Map();
     for (const a of open) {
-        if (a.available <= 0 || a.order_cancelled || a.order_on_hold) continue;
+        if (!isActionable(a)) continue;
         const key = a.variant_id ? `v${a.variant_id}` : `t${a.product_title}|${normVariant(a.variant)}`;
         if (!groups.has(key)) {
             groups.set(key, {
@@ -933,6 +940,6 @@ module.exports = {
     normVariant, moveBlank, rtoAvailable, rtoMatches, rtoAlertCount, rtoForOrderNumber, RTO_MATCH_DAYS,
     seedingRtoMatches, SEEDING_OPEN,
     syncRtoAlerts, openRtoAlerts, rtoAlertHistory, resolveRtoAlert, resolveAlertsForOrder,
-    staleRtoAlertCount, clearStaleRtoAlerts, rtoWaiting, markOrderNotUsed, rtoSentLog,
+    staleRtoAlertCount, clearStaleRtoAlerts, rtoWaiting, markOrderNotUsed, rtoSentLog, isActionable,
     availabilityIndex, matchesForOrder, OPEN_ORDER_SQL,
 };
