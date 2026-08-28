@@ -19,7 +19,7 @@ const REASONS = ['Undelivered — RTO', 'Refused by customer', 'Address issue', 
  * exactly why the shelf is matched against open orders: the whole value of keeping it is catching
  * the moment someone is about to print a second one.
  */
-export default function RtoTab({ onCounts }) {
+export default function RtoTab({ onChanged }) {
   const apiFetch = useApi()
   const toast = useToast()
   const { user } = useAuth()
@@ -45,7 +45,7 @@ export default function RtoTab({ onCounts }) {
 
   const load = async () => {
     const r = await apiFetch('/api/inventory/rto')
-    if (r && !r.error) { setData(r); onCounts?.(r.summary || {}) }
+    if (r && !r.error) { setData(r); onChanged?.() }
     else if (r?.error) toast.error(r.error)
     setLoading(false)
   }

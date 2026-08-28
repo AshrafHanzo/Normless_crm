@@ -48,7 +48,10 @@ export default function Inventory() {
       </div>
 
       {tab === 'stock' && <StockTab />}
-      {tab === 'rto' && <RtoTab onCounts={(s) => setAlerts(s.matched_orders || 0)} />}
+      {/* The tab reports that something moved; the count itself always comes from the one endpoint
+          that defines it. Reading a field off the tab's payload coupled the badge to that field's
+          name, and renaming it silently zeroed the badge the moment the tab was opened. */}
+      {tab === 'rto' && <RtoTab onChanged={loadAlerts} />}
       {tab === 'damaged' && <DamagedTab />}
     </div>
   )
