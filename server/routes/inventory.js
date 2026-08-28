@@ -341,12 +341,19 @@ router.get('/rto', async (req, res) => {
             }
             byOrder.get(a.order_ref).lines.push(a);
         }
+        const ready = [...byOrder.values()].filter(o => o.lines.some(l => l.available > 0));
         res.json({
             shelf, entries, matches: [...byOrder.values()], history,
             summary: {
                 pieces: shelf.reduce((n, r) => n + r.available, 0),
                 designs: shelf.length,
-                matched_orders: byOrder.size,
+                // Only orders a piece is actually waiting for. Counting the rest made the card
+                // promise stock that has since gone to someone else.
+                matched_orders: ready.length,
+                // Orders, not notices — the card below counts orders, and two figures describing
+                // the same pile must not disagree. An order with one line left on the shelf and one
+                // gone belongs to the actionable side, not this one.
+                stale_orders: [...byOrder.values()].length - ready.length,
                 used: entries.reduce((n, r) => n + r.qty_used, 0),
                 saved: history.filter(h => h.status === 'used').length,
                 missed: history.filter(h => h.status === 'skipped').length,
@@ -363,8 +370,16 @@ router.get('/rto/alerts', async (req, res) => {
     try {
         await inv.syncRtoAlerts();
         const alerts = await inv.openRtoAlerts();
-        const orders = [...new Set(alerts.map(a => a.order_ref))];
-        res.json({ orders: orders.length, order_numbers: orders.slice(0, 20), lines: alerts.length });
+        // The badge counts orders a piece is actually waiting for — the same rule the page's card
+        // uses. Counting every open notice made the badge say 13 while the card said 7, which is
+        // exactly the kind of disagreement that stops people trusting either number.
+        const live = alerts.filter(a => a.available > 0);
+        const orders = [...new Set(live.map(a => a.order_ref))];
+        const staleOrders = [...new Set(alerts.map(a => a.order_ref))].filter(ref => !orders.includes(ref));
+        res.json({
+            orders: orders.length, order_numbers: orders.slice(0, 20),
+            lines: live.length, stale_orders: staleOrders.length,
+        });
     } catch (err) {
         console.error('inventory rto alerts error:', err);
         res.status(500).json({ error: 'Failed to load RTO alerts' });
@@ -518,6 +533,19 @@ router.post('/rto/alerts/:id/skip', canEdit, async (req, res) => {
     } catch (err) {
         console.error('inventory rto alert skip error:', err);
         res.status(500).json({ error: 'Failed to clear the notice' });
+    }
+});
+
+// POST /api/inventory/rto/alerts/clear-stale — answer every notice whose garment has gone.
+// One button because they arrive in groups: four orders wanting the same design all go dead the
+// moment its last piece is sent, and clearing them one at a time is busywork, not a decision.
+router.post('/rto/alerts/clear-stale', canEdit, async (req, res) => {
+    try {
+        const cleared = await inv.clearStaleRtoAlerts(req.user?.username);
+        res.json({ success: true, cleared });
+    } catch (err) {
+        console.error('inventory rto clear-stale error:', err);
+        res.status(500).json({ error: 'Failed to clear those notices' });
     }
 });
 

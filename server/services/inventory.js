@@ -760,11 +760,18 @@ async function openRtoAlerts() {
         `SELECT * FROM inventory_rto_alerts WHERE status = 'open' ORDER BY created_at DESC LIMIT 200`)).rows;
     if (!rows.length) return [];
     const index = availabilityIndex(await rtoAvailable());
-    return rows.map(a => {
+    const withStock = rows.map(a => {
         const hit = (a.variant_id && index.byVariant.get(String(a.variant_id)))
             || index.byText.get(`${a.shopify_product_id}|${normVariant(a.variant)}`);
         return { ...a, available: hit ? hit.available : 0 };
     });
+    // Read in the order someone would work the list: what can actually be sent first, then by
+    // garment so the same design's orders sit together, then oldest order first — an order placed
+    // in July has been waiting longer than one placed this morning.
+    return withStock.sort((a, b) =>
+        (b.available > 0) - (a.available > 0)
+        || `${a.product_title}${a.variant}`.localeCompare(`${b.product_title}${b.variant}`)
+        || new Date(a.order_date || a.created_at) - new Date(b.order_date || b.created_at));
 }
 
 /** Answered notices — how often the shelf actually saved a garment, and how often it did not. */
@@ -804,11 +811,33 @@ async function resolveAlertsForOrder(orderRef, rtoId, user) {
     return r.rowCount;
 }
 
-/** Just the number, for the badges. Distinct orders, because that is what a person acts on. */
+/**
+ * The number on the badges. Distinct orders, because that is what a person acts on — and only
+ * those a piece is actually waiting for. A notice whose garment has since gone to another order
+ * still needs answering, but it is not something to chase, and counting it made the badge claim
+ * stock that is not there.
+ */
 async function rtoAlertCount() {
+    const open = await openRtoAlerts();
+    return new Set(open.filter(a => a.available > 0).map(a => a.order_ref)).size;
+}
+
+/** Notices left standing for a garment the shelf no longer holds. */
+async function staleRtoAlertCount() {
+    const open = await openRtoAlerts();
+    return open.filter(a => a.available === 0).length;
+}
+
+/** Answer every notice whose garment is gone, in one go. */
+async function clearStaleRtoAlerts(user) {
+    const stale = (await openRtoAlerts()).filter(a => a.available === 0).map(a => a.id);
+    if (!stale.length) return 0;
     const r = await db.query(
-        "SELECT COUNT(DISTINCT order_ref)::int AS n FROM inventory_rto_alerts WHERE status = 'open'");
-    return r.rows[0]?.n || 0;
+        `UPDATE inventory_rto_alerts
+            SET status = 'skipped', resolved_by = $1, resolved_at = CURRENT_TIMESTAMP,
+                resolution_note = 'Cleared — the piece was no longer on the shelf'
+          WHERE id = ANY($2) AND status = 'open' RETURNING id`, [user || null, stale]);
+    return r.rowCount;
 }
 
 /** Shelf matches for a single order number — the scan-screen prompt. */
@@ -833,5 +862,6 @@ module.exports = {
     normVariant, moveBlank, rtoAvailable, rtoMatches, rtoAlertCount, rtoForOrderNumber, RTO_MATCH_DAYS,
     seedingRtoMatches, SEEDING_OPEN,
     syncRtoAlerts, openRtoAlerts, rtoAlertHistory, resolveRtoAlert, resolveAlertsForOrder,
+    staleRtoAlertCount, clearStaleRtoAlerts,
     availabilityIndex, matchesForOrder, OPEN_ORDER_SQL,
 };

@@ -167,12 +167,65 @@ export default function RtoTab({ onCounts }) {
     load()
   }
 
+  /** Clear every notice whose garment is gone — they always arrive as a group. */
+  const clearStale = async () => {
+    if (!await toast.confirm({
+      title: `Clear ${stale.length} notice${stale.length > 1 ? 's' : ''} with nothing left to send?`,
+      message: 'Each is recorded in the history as passed over. The orders themselves are untouched — if a piece comes back, a fresh notice is raised.',
+      confirmLabel: 'Clear them',
+    })) return
+    const res = await apiFetch('/api/inventory/rto/alerts/clear-stale', { method: 'POST', body: JSON.stringify({}) })
+    if (!res || res.error) { toast.error(res?.error || 'Failed'); return }
+    toast.success(`${res.cleared} notice${res.cleared === 1 ? '' : 's'} cleared`)
+    load()
+  }
+
   if (loading) return <div className="loader"><div className="spinner" /><span>Loading the RTO shelf…</span></div>
   if (!data) return <div className="empty-state"><p>RTO stock could not be loaded.</p></div>
 
   const s = data.summary || {}
   const shelf = data.shelf || []
   const matches = data.matches || []
+  // An order with even one line still on the shelf is actionable; one with none can only be
+  // answered. Splitting them is the difference between a list of jobs and a list of records.
+  const ready = matches.filter(m => m.lines.some(l => l.available > 0))
+  const stale = matches.filter(m => !m.lines.some(l => l.available > 0))
+
+  /** One standing notice: the order as a filter, the answers at the end of the row. */
+  const notice = (m) => (
+    <div className={`review-row rto-notice ${focus === `order:${m.order_number}` ? 'review-row-on' : ''}`} key={m.order_number}>
+      <button type="button" className="rto-notice-main" title={`Show only what ${m.order_number} needs`}
+        onClick={() => setFocus(f => f === `order:${m.order_number}` ? null : `order:${m.order_number}`)}>
+        <b>{m.order_number}</b> · {day(m.created_at)}
+        {m.source === 'seeding' && <span className="rto-pill">seeding{m.customer ? ` · ${m.customer}` : ''}</span>}
+        {m.lines.map((l, i) => (
+          <span key={i} style={{ color: 'var(--text-muted)' }}>
+            {' · '}{l.product_title} {l.variant}{' '}
+            {l.available > 0
+              ? <b style={{ color: 'var(--success)' }}>({l.available} on shelf)</b>
+              : <b style={{ color: 'var(--warning)' }}>(none left)</b>}
+          </span>
+        ))}
+      </button>
+      {canEdit && (
+        <span style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+          {m.lines.some(l => l.available > 0) && (
+            <button className="mini-btn mini-btn-active" onClick={() => {
+              const line = m.lines.find(l => l.available > 0)
+              const entry = (data.entries || []).find(e => e.available > 0
+                && (line.variant_id ? String(e.variant_id) === String(line.variant_id)
+                  : e.product_title === line.product_title && e.variant === line.variant))
+              if (!entry) { toast.error('That piece is no longer on the shelf'); return }
+              setUse({ row: entry, order_number: m.order_number, qty: 1 })
+            }}>Send to this order</button>
+          )}
+          <button className="mini-btn" title="A fresh one was printed for this order"
+            onClick={() => skipAlert(m, m.lines[0])}>Didn't use it</button>
+        </span>
+      )}
+    </div>
+  )
+
   // One shelf entry per design+variant is what gets acted on; the raw rows carry the provenance.
   const entriesFor = (row) => (data.entries || []).filter(e =>
     e.available > 0 && (row.variant_id ? String(e.variant_id) === String(row.variant_id)
@@ -220,7 +273,8 @@ export default function RtoTab({ onCounts }) {
         {[
           { icon: 'box', label: 'Pieces on the shelf', value: num(s.pieces), key: 'all' },
           { icon: 'shirt', label: 'Designs held', value: num(s.designs) },
-          { icon: 'alert', label: 'Orders that could use one', value: num(s.matched_orders), key: 'matched' },
+          { icon: 'alert', label: 'Orders waiting on a piece', value: num(s.matched_orders), key: 'matched',
+            sub: s.stale_orders ? `${num(s.stale_orders)} more have nothing left` : null },
           { icon: 'trending', label: 'Sent out again', value: num(s.used) },
         ].map(k => (
           <div className={`kpi-card ${k.key ? 'kpi-clickable' : ''} ${focus === k.key || (k.key === 'all' && !focus) ? 'kpi-active' : ''}`} key={k.label}
@@ -230,6 +284,7 @@ export default function RtoTab({ onCounts }) {
             <div className="kpi-head"><div className="kpi-icon"><Icon name={k.icon} size={20} /></div></div>
             <div className="kpi-value">{k.value}</div>
             <div className="kpi-label">{k.label}</div>
+            {k.sub && <div className="kpi-note">{k.sub}</div>}
           </div>
         ))}
       </div>
@@ -237,50 +292,45 @@ export default function RtoTab({ onCounts }) {
       {/* The point of the whole tab. Naming the orders is what makes it actionable — "you have
           stock" is useless without saying which order to send it to. */}
       {!!matches.length && (
-        <div className="card rto-alert" style={{ marginBottom: 18 }}>
-          <h2 style={{ fontSize: 15, marginBottom: 6 }}>
-            <Icon name="alert" size={16} style={{ marginRight: 6, verticalAlign: '-3px' }} />
-            {matches.length} order{matches.length > 1 ? 's' : ''} can be served from this shelf
-            {matches.some(m => m.source === 'seeding') && <span style={{ fontWeight: 400, color: 'var(--text-muted)' }}> — shop and seeding</span>}
-          </h2>
-          <p style={{ color: 'var(--text-muted)', fontSize: 12.5, marginBottom: 12 }}>
-            Each stays here until someone answers it — either send the returned piece, or say a fresh
-            one was printed. It will not disappear on its own when the order is marked fulfilled.
-          </p>
-          {matches.map(m => (
-            <div className={`review-row rto-notice ${focus === `order:${m.order_number}` ? 'review-row-on' : ''}`} key={m.order_number}>
-              <button type="button" className="rto-notice-main" title={`Show only what ${m.order_number} needs`}
-                onClick={() => setFocus(f => f === `order:${m.order_number}` ? null : `order:${m.order_number}`)}>
-                <b>{m.order_number}</b> · {day(m.created_at)}
-                {m.source === 'seeding' && <span className="rto-pill">seeding{m.customer ? ` · ${m.customer}` : ''}</span>}
-                {m.lines.map((l, i) => (
-                  <span key={i} style={{ color: 'var(--text-muted)' }}>
-                    {' · '}{l.product_title} {l.variant}{' '}
-                    {l.available > 0
-                      ? <b style={{ color: 'var(--success)' }}>({l.available} on shelf)</b>
-                      : <b style={{ color: 'var(--warning)' }}>(none left on the shelf)</b>}
-                  </span>
-                ))}
-              </button>
-              {canEdit && (
-                <span style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
-                  {m.lines.some(l => l.available > 0) && (
-                    <button className="mini-btn mini-btn-active" onClick={() => {
-                      const line = m.lines.find(l => l.available > 0)
-                      const entry = (data.entries || []).find(e => e.available > 0
-                        && (line.variant_id ? String(e.variant_id) === String(line.variant_id)
-                          : e.product_title === line.product_title && e.variant === line.variant))
-                      if (!entry) { toast.error('That piece is no longer on the shelf'); return }
-                      setUse({ row: entry, order_number: m.order_number, qty: 1 })
-                    }}>Send to this order</button>
-                  )}
-                  <button className="mini-btn" title="A fresh one was printed for this order"
-                    onClick={() => skipAlert(m, m.lines[0])}>Didn't use it</button>
-                </span>
-              )}
+        <>
+          {!!ready.length && (
+            <div className="card rto-alert" style={{ marginBottom: 14 }}>
+              <h2 style={{ fontSize: 15, marginBottom: 6 }}>
+                <Icon name="alert" size={16} style={{ marginRight: 6, verticalAlign: '-3px' }} />
+                {ready.length} order{ready.length > 1 ? 's' : ''} can be served from this shelf
+                {ready.some(m => m.source === 'seeding') && <span style={{ fontWeight: 400, color: 'var(--text-muted)' }}> — shop and seeding</span>}
+              </h2>
+              <p style={{ color: 'var(--text-muted)', fontSize: 12.5, marginBottom: 12 }}>
+                Each stays here until someone answers it — either send the returned piece, or say a fresh
+                one was printed. It will not disappear on its own when the order is marked fulfilled.
+              </p>
+              {ready.map(m => notice(m))}
             </div>
-          ))}
-        </div>
+          )}
+
+          {/* Kept apart from the list above rather than mixed into it: these cannot be sent, only
+              answered, and interleaving them made a list of thirteen look like thirteen things to
+              do when only seven were. */}
+          {!!stale.length && (
+            <div className="card" style={{ marginBottom: 18 }}>
+              <div className="dash-toolbar" style={{ marginBottom: 8 }}>
+                <div>
+                  <h2 style={{ fontSize: 14, marginBottom: 4 }}>
+                    {stale.length} order{stale.length > 1 ? 's' : ''} wanted a piece that has since gone
+                  </h2>
+                  <p style={{ color: 'var(--text-muted)', fontSize: 12.5 }}>
+                    The shelf held one when the notice was raised; it has since been sent elsewhere or
+                    written off. Nothing to send — clear them, or leave them in case one comes back.
+                  </p>
+                </div>
+                {canEdit && (
+                  <button className="mini-btn" onClick={clearStale}>Clear all {stale.length}</button>
+                )}
+              </div>
+              {stale.map(m => notice(m))}
+            </div>
+          )}
+        </>
       )}
 
       {shelf.length > 1 && (
@@ -291,7 +341,7 @@ export default function RtoTab({ onCounts }) {
           </div>
           {filtered && (
             <button className="mini-btn" onClick={() => { setFocus(null); setQuery('') }}>
-              Showing {visible.length} of {shelf.length} · clear
+              Showing {visible.length} of {shelf.length} designs · clear
             </button>
           )}
         </div>

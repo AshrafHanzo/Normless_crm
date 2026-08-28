@@ -645,6 +645,9 @@ select { cursor: pointer; appearance: none;
 .ss-empty { padding: 10px; font-size: 12px; color: var(--text-muted); text-align: center; }
 .ss-disabled .ss-input { opacity: 0.55; }
 
+/* A qualifier under a KPI, for a number the headline figure deliberately leaves out. */
+.kpi-note { margin-top: 5px; font-size: 11px; color: var(--warning); }
+
 .rto-alert { border-color: color-mix(in srgb, var(--warning) 45%, var(--border)); }
 .rto-lines { display: flex; flex-direction: column; gap: 6px; margin: 12px 0; max-height: 260px; overflow-y: auto; }
 .rto-line {
