@@ -1918,32 +1918,44 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .label-hint { font-weight: 400; color: var(--text-muted); font-size: 11px; }
 
 /* ============================================================
+   FORM ITEM LINES  (offline sales, shoot samples)
+   ============================================================ */
+/* A product line is a few fields of very unequal weight — a long product title next to a
+   two-digit quantity — so it gets explicit proportions rather than the equal auto-fit columns
+   the rest of the app uses. The remove button is not a field, so it sits outside the grid and
+   lines up with the inputs rather than claiming a column of its own. */
+.form-item-row { display: flex; align-items: flex-end; gap: 12px; margin-bottom: 12px; }
+.form-item-row > .form-row { flex: 1; min-width: 0; }
+.form-item-row > .btn-icon { flex: 0 0 auto; margin-bottom: 6px; }
+/* product · colour/size · qty · price */
+.item-cols-4 > .form-row { grid-template-columns: minmax(0, 2.2fr) minmax(0, 1.6fr) minmax(0, 0.6fr) minmax(0, 0.9fr); }
+/* design · colour/size · qty */
+.item-cols-3 > .form-row { grid-template-columns: minmax(0, 2.4fr) minmax(0, 1.8fr) minmax(0, 0.6fr); }
+/* The row above already carries the spacing; the button only needs to clear the last one. */
+.form-item-add { margin-top: 2px; }
+
+/* Below this the drawer is full width even on a laptop and those columns stop being readable.
+   Stated here rather than left to the global one-column rule, because that rule is less
+   specific than the grids above and would never win. */
+@media (max-width: 900px) {
+  .form-item-row { flex-direction: column; align-items: stretch; }
+  .item-cols-4 > .form-row,
+  .item-cols-3 > .form-row { grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr)); }
+  .form-item-row > .btn-icon { align-self: flex-end; margin-bottom: 0; }
+}
+
+/* ============================================================
    OFFLINE SALES
    ============================================================ */
-/* A sale line is four fields of very unequal weight — a long product title next to a two-digit
-   quantity — so it gets explicit proportions rather than the equal auto-fit columns the rest of
-   the app uses. The remove button is not a field, so it sits outside the grid and lines up with
-   the inputs rather than claiming a column of its own. */
-.os-item-row { display: flex; align-items: flex-end; gap: 12px; margin-bottom: 14px; }
-.os-item-row > .form-row {
-  flex: 1; min-width: 0;
-  grid-template-columns: minmax(0, 2.2fr) minmax(0, 1.6fr) minmax(0, 0.6fr) minmax(0, 0.9fr);
-}
-.os-item-row > .btn-icon { flex: 0 0 auto; margin-bottom: 6px; }
-
-/* The link is only worth creating if it reaches the customer, so the three ways of sending it
-   share the width equally instead of hiding behind one another. */
+/* The link is only worth creating if it reaches the customer, so the ways of sending it share
+   the width equally instead of hiding behind one another. */
 .os-link-actions { display: flex; justify-content: center; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
 .os-link-actions .btn { flex: 1 1 140px; padding: 10px 14px; }
 /* Checking the link yourself is occasionally useful and never the main thing — it takes only
    the width it needs so the two ways of sending it keep the row. */
 .os-link-actions .os-link-open { flex: 0 1 auto; }
 
-/* Below this the drawer is full-width on a laptop and the columns above stop being readable.
-   Stated here rather than left to the global one-column rule because that rule is less specific
-   than the grid above and would never win. */
-@media (max-width: 900px) {
-  .os-item-row { flex-direction: column; align-items: stretch; }
-  .os-item-row > .form-row { grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr)); }
-  .os-item-row > .btn-icon { align-self: flex-end; margin-bottom: 0; }
-}
+/* The link on the row itself, so it can be read and copied without opening anything. */
+.os-row-link { display: flex; align-items: center; gap: 6px; margin-top: 5px; }
+.os-row-link .pay-link { font-size: 11.5px; white-space: nowrap; }
+.os-row-link .btn-icon { width: 26px; height: 26px; flex: 0 0 auto; }

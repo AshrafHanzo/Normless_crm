@@ -5,12 +5,16 @@ import Icon from '../../components/Icon'
 import SearchSelect from '../../components/SearchSelect'
 import Pagination from '../../components/Pagination'
 import useLocalPager from '../../hooks/useLocalPager'
+import useDirtyGuard from '../../hooks/useDirtyGuard'
 
 const num = (v) => new Intl.NumberFormat('en-IN').format(Number(v) || 0)
 const day = (v) => (v ? new Date(v).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit' }) : '—')
 
 // The stage a request is at. A blank is held from 'In Production' — the point it is actually made.
 const FLOW = ['Pending Approval', 'Approved', 'In Production', 'With Marketing', 'Returned']
+// The stages at which a blank is actually held, which is what decides whether cancelling gives
+// anything back.
+const HOLDS_STOCK = ['In Production', 'With Marketing', 'Returned']
 const STATUS_CLASS = {
   'Pending Approval': 'pending', Approved: 'info', 'In Production': 'warning',
   'With Marketing': 'info', Returned: 'success', Cancelled: 'danger',
@@ -59,7 +63,17 @@ export default function SamplesTab() {
   const setF = (patch) => setForm(f => ({ ...f, ...patch }))
   const setItem = (i, patch) => setForm(f => ({ ...f, items: f.items.map((it, j) => (j === i ? { ...it, ...patch } : it)) }))
 
-  const save = async () => {
+  const guard = useDirtyGuard({
+    snapshot: form && { ...form },
+    identity: form ? 'new' : null,
+    onDiscard: () => setForm(null),
+    confirm: toast.confirm,
+    title: 'Discard this request?',
+    message: 'What you have filled in will be lost.',
+  })
+
+  const save = async (e) => {
+    e?.preventDefault?.()
     if (!form.purpose.trim()) { toast.error('Say what the sample is for'); return }
     const items = form.items.filter(it => it.product && Number(it.qty) > 0)
     if (!items.length) { toast.error('Add at least one product'); return }
@@ -68,17 +82,64 @@ export default function SamplesTab() {
     setBusy(false)
     if (!res || res.error) { toast.error(res?.error || 'Failed to raise the request'); return }
     toast.success(`${res.ref} raised — waiting for approval`)
+    guard.reset()
     setForm(null); load()
+  }
+
+  // What is already sitting on the RTO shelf for each request, keyed by request id. Read both by
+  // the table and by the confirmations, so it is derived before either.
+  const onShelf = data?.onShelf || {}
+
+  /**
+   * What each stage change is about to do, in the words of what happens to the garments.
+   *
+   * Every one of these is asked before it happens, because they are not equal: approving costs
+   * nothing, starting production spends blanks that are never credited back, and returning one
+   * puts a sellable piece on the shelf. Being told which of those you are about to do is the
+   * difference between a pipeline and a row of buttons.
+   */
+  const CONFIRM = {
+    Approved: (x) => ({
+      title: `Approve ${x.ref}?`,
+      message: 'Production can start once this is signed off. Nothing is printed and no blank moves yet.',
+      confirmLabel: 'Approve',
+    }),
+    'In Production': (x, shelf) => ({
+      title: `Start production on ${x.ref}?`,
+      message: shelf.length
+        ? 'The blanks below come off the shelf now — but there are pieces already on the RTO shelf for this request. Taking one of those prints nothing and spends no blank.'
+        : 'The blanks below come off the shelf now, because this is the point the garments are actually made. They are not credited back when the sample returns — the piece goes onto the RTO shelf instead.',
+      details: x.items.map(it => ({ label: it.product, value: `${it.variant || '—'} × ${it.qty}` })),
+      confirmLabel: 'Start production',
+    }),
+    'With Marketing': (x) => ({
+      title: `Hand ${x.ref} over to marketing?`,
+      message: 'The garments leave for the shoot. Blank stock does not change — it was spent when they were printed.',
+      details: x.items.map(it => ({ label: it.product, value: `${it.variant || '—'} × ${it.qty}` })),
+      confirmLabel: 'Handed over',
+    }),
+    Returned: (x) => ({
+      title: `Mark ${x.ref} as received back?`,
+      message: 'The garments go onto the RTO shelf, where they can be sent to a customer order. Blank stock does not change — the blank was spent when they were printed.',
+      details: x.items.map(it => ({ label: it.product, value: `${it.variant || '—'} × ${it.qty}` })),
+      confirmLabel: 'Received',
+    }),
+    Cancelled: (x) => ({
+      title: `Cancel ${x.ref}?`,
+      // Whether anything comes back depends on whether anything was ever taken, so say which.
+      message: HOLDS_STOCK.includes(x.status)
+        ? 'The request stops here and any blanks held for it are given back to stock.'
+        : 'The request stops here. Nothing has been made for it, so no stock moves.',
+      confirmLabel: 'Cancel the request',
+      cancelLabel: 'Keep it',
+      danger: true,
+    }),
   }
 
   /** Move a request along. The server owns the stock rule; this only reports what it did. */
   const move = async (sample, status) => {
-    if (status === 'Returned' && !await toast.confirm({
-      title: `Mark ${sample.ref} as received back?`,
-      message: 'The garments go onto the RTO shelf, where they can be sent to a customer order. Blank stock does not change — the blank was spent when they were printed.',
-      details: sample.items.map(it => ({ label: it.product, value: `${it.variant || '—'} × ${it.qty}` })),
-      confirmLabel: 'Received',
-    })) return
+    const ask = CONFIRM[status]?.(sample, onShelf[sample.id] || [])
+    if (ask && !await toast.confirm(ask)) return
 
     const res = await apiFetch(`/api/marketing/samples/${sample.id}/status`, {
       method: 'POST', body: JSON.stringify({ status }),
@@ -127,7 +188,6 @@ export default function SamplesTab() {
   if (!data) return <div className="empty-state"><p>Sample requests could not be loaded.</p></div>
 
   const s = data.summary || {}
-  const onShelf = data.onShelf || {}
   const nextStage = (status) => FLOW[FLOW.indexOf(status) + 1]
   const product = (id) => (products || []).find(p => String(p.shopify_id) === String(id))
 
@@ -232,71 +292,95 @@ export default function SamplesTab() {
         </div>
       )}
 
-      {/* ---- Raise a request ---------------------------------------------------------- */}
+      {/* ---- Raise a request ----------------------------------------------------------
+          A drawer, like the offline sale: the product list grows, and a centred card pushes its
+          own save button off the bottom of the screen as soon as it does. */}
       {form && (
-        <div className="confirm-overlay" onClick={() => setForm(null)}>
-          <div className="confirm-card" style={{ maxWidth: 640 }} onClick={e => e.stopPropagation()} role="dialog" aria-modal="true">
-            <h3 className="confirm-title">Request a sample</h3>
-            <div className="input-group">
-              <label>What is it for</label>
-              <input value={form.purpose} autoFocus placeholder="Diwali campaign shoot"
-                onChange={e => setF({ purpose: e.target.value })} />
-            </div>
-            <div className="form-row">
-              <div className="input-group">
-                <label>Who or where <span style={{ color: 'var(--text-muted)' }}>optional</span></label>
-                <input value={form.requested_for} placeholder="Creator, studio or event"
-                  onChange={e => setF({ requested_for: e.target.value })} />
-              </div>
-              <div className="input-group">
-                <label>Shoot date <span style={{ color: 'var(--text-muted)' }}>optional</span></label>
-                <input type="date" value={form.shoot_date} onChange={e => setF({ shoot_date: e.target.value })} />
-              </div>
+        <div className="drawer-overlay" onClick={guard.requestClose}>
+          <div className="drawer" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true">
+            <div className="drawer-header">
+              <h2>Request a sample</h2>
+              <button type="button" className="btn-icon" onClick={guard.requestClose}><Icon name="close" size={16} /></button>
             </div>
 
-            {form.items.map((it, i) => {
-              const p = product(it.shopify_product_id)
-              return (
-                <div className="form-row" key={i} style={{ alignItems: 'end' }}>
-                  <div className="input-group">
-                    <label>Design</label>
-                    <SearchSelect value={it.shopify_product_id} placeholder="Type to search products…"
-                      options={(products || []).map(x => ({ value: x.shopify_id, label: x.title, hint: x.blank_type || '' }))}
-                      onChange={(v, opt) => setItem(i, { shopify_product_id: v, product: opt?.label || '', shopify_variant_id: '', variant: '', blank_type: (products || []).find(x => String(x.shopify_id) === String(v))?.blank_type || '' })} />
-                  </div>
-                  <div className="input-group">
-                    <label>Colour / size</label>
-                    <SearchSelect value={it.shopify_variant_id} disabled={!p}
-                      placeholder={p ? 'Type to search…' : 'Pick a design first'}
-                      options={(p?.variants || []).map(v => ({ value: v.variant_id, label: v.variant }))}
-                      onChange={(v) => {
-                        const variant = p?.variants.find(x => String(x.variant_id) === String(v))
-                        setItem(i, { shopify_variant_id: v, variant: variant?.variant || '', color: variant?.color || '', size: variant?.size || '' })
-                      }} />
-                  </div>
-                  <div className="input-group" style={{ maxWidth: 90 }}>
-                    <label>Qty</label>
-                    <input type="number" min="1" value={it.qty} onChange={e => setItem(i, { qty: e.target.value })} />
-                  </div>
-                  {form.items.length > 1 && (
-                    <button className="mini-btn" style={{ marginBottom: 14 }}
-                      onClick={() => setF({ items: form.items.filter((_, j) => j !== i) })}>×</button>
-                  )}
+            <div className="drawer-body">
+              <form id="mk-sample-form" onSubmit={save}>
+                <div className="form-section" style={{ marginTop: 0 }}>The shoot</div>
+                <div className="input-group">
+                  <label>What is it for *</label>
+                  <input value={form.purpose} autoFocus placeholder="Diwali campaign shoot"
+                    onChange={e => setF({ purpose: e.target.value })} />
                 </div>
-              )
-            })}
-            <button className="mini-btn" onClick={() => setF({ items: [...form.items, blankItem()] })}>+ Another product</button>
+                <div className="form-row">
+                  <div className="input-group">
+                    <label>Who or where <span className="label-hint">optional</span></label>
+                    <input value={form.requested_for} placeholder="Creator, studio or event"
+                      onChange={e => setF({ requested_for: e.target.value })} />
+                  </div>
+                  <div className="input-group">
+                    <label>Shoot date <span className="label-hint">optional</span></label>
+                    <input type="date" value={form.shoot_date} onChange={e => setF({ shoot_date: e.target.value })} />
+                  </div>
+                </div>
 
-            <div className="input-group" style={{ marginTop: 12 }}>
-              <label>Note <span style={{ color: 'var(--text-muted)' }}>optional</span></label>
-              <input value={form.notes} onChange={e => setF({ notes: e.target.value })} />
+                <div className="form-section">Garments
+                  <span className="unit-hint">Checked against the RTO shelf before anything is printed</span>
+                </div>
+                {form.items.map((it, i) => {
+                  const p = product(it.shopify_product_id)
+                  return (
+                    <div className="form-item-row item-cols-3" key={i}>
+                      <div className="form-row">
+                        <div className="input-group">
+                          <label>Design</label>
+                          <SearchSelect value={it.shopify_product_id} placeholder="Type to search products…"
+                            options={(products || []).map(x => ({ value: x.shopify_id, label: x.title, hint: x.blank_type || '' }))}
+                            onChange={(v, opt) => setItem(i, { shopify_product_id: v, product: opt?.label || '', shopify_variant_id: '', variant: '', blank_type: (products || []).find(x => String(x.shopify_id) === String(v))?.blank_type || '' })} />
+                        </div>
+                        <div className="input-group">
+                          <label>Colour / size</label>
+                          <SearchSelect value={it.shopify_variant_id} disabled={!p}
+                            placeholder={p ? 'Type to search…' : 'Pick a design first'}
+                            options={(p?.variants || []).map(v => ({ value: v.variant_id, label: v.variant }))}
+                            onChange={(v) => {
+                              const variant = p?.variants.find(x => String(x.variant_id) === String(v))
+                              setItem(i, { shopify_variant_id: v, variant: variant?.variant || '', color: variant?.color || '', size: variant?.size || '' })
+                            }} />
+                        </div>
+                        <div className="input-group">
+                          <label>Qty</label>
+                          <input type="number" min="1" value={it.qty} onChange={e => setItem(i, { qty: e.target.value })} />
+                        </div>
+                      </div>
+                      {form.items.length > 1 && (
+                        <button type="button" className="btn-icon" title="Remove this line"
+                          onClick={() => setF({ items: form.items.filter((_, j) => j !== i) })}>
+                          <Icon name="trash" size={14} />
+                        </button>
+                      )}
+                    </div>
+                  )
+                })}
+                <button type="button" className="mini-btn form-item-add"
+                  onClick={() => setF({ items: [...form.items, blankItem()] })}>+ Another product</button>
+
+                <div className="form-section">Anything else</div>
+                <div className="input-group">
+                  <label>Note <span className="label-hint">optional</span></label>
+                  <input value={form.notes} onChange={e => setF({ notes: e.target.value })} />
+                </div>
+                <p className="img-upload-hint">
+                  It goes to an admin for approval. Nothing is printed and no blank moves until
+                  production starts.
+                </p>
+              </form>
             </div>
-            <p className="confirm-message" style={{ fontSize: 12.5 }}>
-              It goes to an admin for approval. Nothing is printed and no blank moves until production starts.
-            </p>
-            <div className="confirm-actions">
-              <button className="btn btn-secondary" onClick={() => setForm(null)}>Cancel</button>
-              <button className="btn btn-primary" disabled={busy} onClick={save}>{busy ? 'Saving…' : 'Raise the request'}</button>
+
+            <div className="drawer-footer">
+              <button type="button" className="btn btn-secondary" onClick={guard.requestClose}>Cancel</button>
+              <button type="submit" form="mk-sample-form" className="btn btn-primary" disabled={busy}>
+                {busy ? 'Saving…' : 'Raise the request'}
+              </button>
             </div>
           </div>
         </div>

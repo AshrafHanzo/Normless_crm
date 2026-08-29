@@ -85,7 +85,8 @@ export default function OfflineSales() {
   const [catalog, setCatalog] = useState(null)
   const [form, setForm] = useState(null)       // the sale being created or edited
   const [pay, setPay] = useState(null)         // { sale, mode, method, amount, reference, link }
-  const [copied, setCopied] = useState(false)
+  const [copied, setCopied] = useState(false)   // inside the payment dialog
+  const [copiedRow, setCopiedRow] = useState(null)
   const [search, setSearch] = useState('')
   const [status, setStatus] = useState('')
   const t = useServerTable({ sort: 'created_at', dir: 'desc', limit: 25 })
@@ -114,7 +115,14 @@ export default function OfflineSales() {
   // A half-filled sale is several minutes of typing; a stray click on the overlay should not
   // take it away. Only genuine edits prompt — see useDirtyGuard.
   const guard = useDirtyGuard({
-    snapshot: form && { ...form },
+    // Only the fields this form actually saves. Payment lives on the same record but is changed
+    // by its own calls, so leaving it out is what stops a link raised from inside the drawer
+    // from reading as an unsaved edit.
+    snapshot: form && {
+      customer_name: form.customer_name, contact_number: form.contact_number, email: form.email,
+      address: form.address, items: form.items, discount: form.discount, shipping: form.shipping,
+      status: form.status, notes: form.notes, mot: form.mot, awb: form.awb,
+    },
     identity: form ? (form.id ?? 'new') : null,
     onDiscard: () => setForm(null),
     confirm: toast.confirm,
@@ -155,14 +163,28 @@ export default function OfflineSales() {
     setForm(null); load()
   }
 
-  const openPayment = (sale) => {
+  /**
+   * Fold a payment response back into the drawer, when the drawer is showing that same sale.
+   *
+   * The list reloads either way; this is what stops the open form from still saying "no link"
+   * a moment after one was raised from inside it. Only the payment fields are taken — anything
+   * being typed in the form is left alone.
+   */
+  const patchOpenForm = (row) => setForm(f => (f && f.id === row.id ? {
+    ...f,
+    payment_status: row.payment_status, payment_method: row.payment_method,
+    payment_ref: row.payment_ref, paid_amount: row.paid_amount,
+    razorpay_short_url: row.razorpay_short_url,
+  } : f))
+
+  const openPayment = (sale, mode) => {
     setCopied(false)
     setPay({
-      sale, mode: sale.razorpay_short_url ? 'link' : 'record',
+      sale, mode: mode || (sale.razorpay_short_url ? 'link' : 'record'),
       method: 'Cash', amount: sale.total, reference: '',
-      // An existing link opens straight on the link itself — the usual reason for coming back
-      // to a sale that already has one is to send it again.
-      link: sale.razorpay_short_url || null,
+      // From the row, an existing link opens straight onto the link itself — the usual reason for
+      // coming back to a sale that has one is to send it again. Asking for a mode overrides that.
+      link: mode ? null : (sale.razorpay_short_url || null),
     })
   }
 
@@ -184,10 +206,12 @@ export default function OfflineSales() {
       toast.success(ok ? 'Payment link created and copied' : 'Payment link created — copy it below',
         { title: 'Ready to send' })
       setPay(v => ({ ...v, link: res.link, sale: { ...v.sale, razorpay_short_url: res.link } }))
+      patchOpenForm(res)
       load()
       return
     }
     toast.success(`${res.ref} marked ${res.payment_status.toLowerCase()}`)
+    patchOpenForm(res)
     setPay(null); load()
   }
 
@@ -204,10 +228,24 @@ export default function OfflineSales() {
     window.open(n ? `https://wa.me/${n}?text=${msg}` : `https://wa.me/?text=${msg}`, '_blank')
   }
 
+  const copyRowLink = async (sale) => {
+    const ok = await copyText(sale.razorpay_short_url)
+    if (!ok) { toast.error('Could not copy — open the sale and copy it from there'); return }
+    setCopiedRow(sale.id)
+    setTimeout(() => setCopiedRow(null), 2000)
+  }
+
+  const sendRowLink = (sale) => {
+    const n = toWaNumber(sale.contact_number)
+    const msg = encodeURIComponent(linkMessage(sale, sale.razorpay_short_url))
+    window.open(n ? `https://wa.me/${n}?text=${msg}` : `https://wa.me/?text=${msg}`, '_blank')
+  }
+
   const syncPayment = async (sale) => {
     const res = await apiFetch(`/api/offline-sales/${sale.id}/payment/sync`, { method: 'POST', body: JSON.stringify({}) })
     if (!res || res.error) { toast.error(res?.error || 'Failed'); return }
     toast[res.settled ? 'success' : 'info'](res.settled ? `${res.ref} is paid` : `Link is still ${res.link_status}`)
+    patchOpenForm(res)
     load()
   }
 
@@ -310,6 +348,23 @@ export default function OfflineSales() {
                   <td data-label="Payment">
                     <span className={`status-badge ${PAY_CLASS[x.payment_status] || 'pending'}`}>{x.payment_status}</span>
                     {x.payment_method && <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{x.payment_method}</div>}
+                    {/* The link, in full, on the row — a link you have to go looking for is a
+                        link that does not get sent. */}
+                    {x.razorpay_short_url && (
+                      <div className="os-row-link" onClick={e => e.stopPropagation()}>
+                        {/* The scheme is noise in a table cell this narrow, and without it the
+                            link fits on one line. Copy still takes the whole thing. */}
+                        <a className="pay-link" href={x.razorpay_short_url} target="_blank" rel="noreferrer">
+                          {x.razorpay_short_url.replace(/^https?:\/\//, '')}
+                        </a>
+                        <button className="btn-icon" title="Copy the payment link" onClick={() => copyRowLink(x)}>
+                          <Icon name={copiedRow === x.id ? 'check' : 'copy'} size={13} />
+                        </button>
+                        <button className="btn-icon" title="Send it on WhatsApp" onClick={() => sendRowLink(x)}>
+                          <Icon name="phone" size={13} />
+                        </button>
+                      </div>
+                    )}
                   </td>
                   <td data-label="Status"><span className={`status-badge ${STATUS_CLASS[x.status] || 'pending'}`}>{x.status}</span></td>
                   <td data-label="Date" style={{ fontSize: 12 }}>{day(x.created_at)}</td>
@@ -367,7 +422,7 @@ export default function OfflineSales() {
                   const p = product(it.shopify_product_id)
                   const changed = it.shopify_price != null && Number(it.unit_price) !== Number(it.shopify_price)
                   return (
-                    <div className="os-item-row" key={i}>
+                    <div className="form-item-row item-cols-4" key={i}>
                       <div className="form-row">
                         <div className="input-group">
                           <label>Product</label>
@@ -413,7 +468,7 @@ export default function OfflineSales() {
                     </div>
                   )
                 })}
-                <button type="button" className="mini-btn" style={{ marginTop: 12 }}
+                <button type="button" className="mini-btn form-item-add"
                   onClick={() => setF({ items: [...form.items, blankItem()] })}>+ Another product</button>
 
                 <div className="form-section">Money</div>
@@ -439,6 +494,75 @@ export default function OfflineSales() {
                 <p className="img-upload-hint" style={{ marginTop: 10 }}>
                   Blanks come off the shelf once the sale leaves Draft. A draft holds nothing.
                 </p>
+
+                {/* Payment lives on the sale, the same way it does on a Crewfit order: the link is
+                    printed here in full so it can be read, copied and sent without hunting for it. */}
+                {form.id && (() => {
+                  const link = form.razorpay_short_url
+                  const paid = form.payment_status === 'Paid'
+                  const part = form.payment_status === 'Partial'
+                  const state = paid ? 'issued' : 'ready'
+                  return (
+                    <>
+                      <div className="form-section">Payment
+                        <span className="unit-hint">Razorpay · a link stays unpaid until the money lands</span>
+                      </div>
+                      <div className={`invoice-card invoice-card-${state}`}>
+                        <div className="invoice-card-head">
+                          <span className="invoice-card-icon">{paid ? '✅' : link ? '🔗' : '💵'}</span>
+                          {/* The big number is always the one that matters next: what is still
+                              owed while it is owed, and what was taken once it has been. */}
+                          <div className="invoice-card-heading">
+                            <div className="invoice-card-title">{paid ? 'Paid in full' : part ? 'Still to collect' : 'Amount due'}</div>
+                            <div className="invoice-card-amount">{money(paid ? form.paid_amount : form.total - (Number(form.paid_amount) || 0))}</div>
+                            <div className="invoice-card-sub">
+                              {part ? `${money(form.paid_amount)} of ${money(form.total)} taken · ${form.payment_method || 'recorded'}`
+                                : paid ? `${form.payment_method || 'recorded'}${form.payment_ref ? ` · ${form.payment_ref}` : ''}`
+                                  : 'Nothing collected yet'}
+                            </div>
+                          </div>
+                          <span className={`invoice-status-pill invoice-status-${state}`}>{form.payment_status}</span>
+                        </div>
+
+                        {link && (
+                          <div className="invoice-card-meta" style={{ display: 'block' }}>
+                            <a className="pay-link" href={link} target="_blank" rel="noreferrer">{link}</a>
+                            <div style={{ marginTop: 4 }}>
+                              {paid ? 'Settled through this link' : 'Copy it or send it on WhatsApp — then check whether it has been paid'}
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="pay-card-actions">
+                          {link && (
+                            <>
+                              <button type="button" className="btn btn-secondary btn-sm" onClick={() => sendRowLink(form)}>💬 WhatsApp</button>
+                              <button type="button" className="mini-btn" onClick={() => copyRowLink(form)}>
+                                {copiedRow === form.id ? '✓ Copied' : '📋 Copy'}
+                              </button>
+                              {!paid && <button type="button" className="mini-btn" onClick={() => syncPayment(form)}>Check link</button>}
+                            </>
+                          )}
+                          {!paid && (
+                            <>
+                              <button type="button" className="mini-btn mini-btn-active"
+                                onClick={() => openPayment(form, 'record')}>💵 Record money taken</button>
+                              <button type="button" className="mini-btn"
+                                disabled={guard.dirty || data?.paymentsEnabled === false}
+                                title={guard.dirty ? 'Save the sale first — a link is raised for the saved total' : ''}
+                                onClick={() => openPayment(form, 'link')}>
+                                {link ? '🔗 New link' : '🔗 Create a payment link'}
+                              </button>
+                            </>
+                          )}
+                        </div>
+                        {guard.dirty && !paid && (
+                          <span className="label-hint">Save the sale first — a link is raised for the saved total.</span>
+                        )}
+                      </div>
+                    </>
+                  )
+                })()}
 
                 <div className="form-section">Dispatch</div>
                 <div className="form-row">
