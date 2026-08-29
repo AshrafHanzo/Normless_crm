@@ -634,13 +634,13 @@ async function releaseSampleRequest(id) {
 }
 
 /**
- * Take a piece off the RTO shelf for a shoot, without touching blank stock.
+ * Take pieces off the RTO shelf for something that never printed them.
  *
- * Unlike sending one to a customer order, there is no blank to credit: the sample never deducted
- * one, because it was never printed. The garment simply moves from the shelf to the shoot, and is
- * put back on the shelf when it returns.
+ * Unlike sending one to a Shopify order, there is no blank to credit: nothing was ever deducted,
+ * because nothing was made. The garment simply leaves the shelf. The note says what took it, so
+ * the shelf's own history still reads as a sentence.
  */
-async function takeRtoForSample(rtoId, qty, ref, user) {
+async function takeRtoPiece(rtoId, qty, ref, note, user) {
     const n = parseInt(qty, 10) || 1;
     return db.transaction(async (tx) => {
         const row = (await tx.query('SELECT * FROM inventory_rto WHERE id = $1 FOR UPDATE', [rtoId])).rows[0];
@@ -651,9 +651,35 @@ async function takeRtoForSample(rtoId, qty, ref, user) {
         await tx.query('UPDATE inventory_rto SET qty_used = qty_used + $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2', [n, row.id]);
         await tx.query(
             `INSERT INTO inventory_rto_events (rto_id, kind, qty, order_number, note, created_by)
-             VALUES ($1,'used',$2,$3,'Lent for a shoot — no blank was spent',$4)`,
-            [row.id, n, ref, user || null]);
-        return { product_title: row.product_title, variant: row.variant, qty: n };
+             VALUES ($1,'used',$2,$3,$4,$5)`,
+            [row.id, n, ref, note, user || null]);
+        return { rto_id: row.id, product_title: row.product_title, variant: row.variant, qty: n };
+    });
+}
+
+/** A shoot borrows the piece and brings it back; the shelf gets it again on return. */
+const takeRtoForSample = (rtoId, qty, ref, user) =>
+    takeRtoPiece(rtoId, qty, ref, 'Lent for a shoot — no blank was spent', user);
+
+/**
+ * Put back everything a given reference took off the shelf.
+ *
+ * Only used when the thing that took them is being undone entirely — a deleted sale — so the
+ * pieces genuinely never left. The events are removed rather than reversed, because a shelf
+ * history reading "used, then un-used" describes a mistake in this app rather than a garment.
+ */
+async function giveBackRtoForRef(ref) {
+    if (!ref) return 0;
+    return db.transaction(async (tx) => {
+        const rows = (await tx.query(
+            `SELECT id, rto_id, qty FROM inventory_rto_events WHERE kind = 'used' AND order_number = $1`, [ref])).rows;
+        for (const e of rows) {
+            await tx.query(
+                'UPDATE inventory_rto SET qty_used = GREATEST(qty_used - $1, 0), updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+                [e.qty, e.rto_id]);
+            await tx.query('DELETE FROM inventory_rto_events WHERE id = $1', [e.id]);
+        }
+        return rows.length;
     });
 }
 
@@ -709,13 +735,22 @@ function offlineHoldState(row) {
 
 const offlineRef = (id) => `offline:${id}`;
 
-/** Marketing and offline sales share an item shape; both read as line items the same way. */
+/**
+ * Marketing and offline sales share an item shape; both read as line items the same way.
+ *
+ * Anything taken off the RTO shelf is subtracted here rather than deducted and credited back: the
+ * piece was already printed, so its blank was spent long ago and must not be spent twice. A line
+ * filled entirely from the shelf drops out, because there is nothing left of it to make.
+ */
 function offlineLines(row) {
     const items = typeof row.items === 'string' ? (() => { try { return JSON.parse(row.items || '[]'); } catch { return []; } })() : (row.items || []);
-    return items.map(it => ({
-        title: it.product, quantity: it.qty, variant: it.variant,
-        shopify_product_id: it.shopify_product_id, shopify_variant_id: it.shopify_variant_id,
-    }));
+    return items
+        .map(it => ({
+            title: it.product, quantity: (parseInt(it.qty, 10) || 0) - (parseInt(it.rto_qty, 10) || 0),
+            variant: it.variant,
+            shopify_product_id: it.shopify_product_id, shopify_variant_id: it.shopify_variant_id,
+        }))
+        .filter(it => it.quantity > 0);
 }
 
 async function applyOfflineSale(row) {
@@ -743,8 +778,11 @@ async function applyOfflineSale(row) {
 }
 
 /** Forget a sale's movements, giving back anything still held. Used on delete. */
-async function releaseOfflineSale(id) {
+async function releaseOfflineSale(id, saleRef) {
     const ref = offlineRef(id);
+    // Pieces it took off the shelf are part of "anything still held" — the sale is going away,
+    // so the garments are back to being unsold stock.
+    await giveBackRtoForRef(saleRef);
     return db.transaction(async (tx) => {
         const rows = (await tx.query(
             'SELECT id, item_id, delta FROM inventory_movements WHERE source_ref LIKE $1', [`${ref}:%`])).rows;
@@ -1134,12 +1172,12 @@ module.exports = {
     deductionsFor, holdState, applyOrder, applyOrders, applySince, setStock,
     marketingHoldState, applyMarketingOrder, releaseMarketingOrder, applyMarketingSince,
     sampleHoldState, applySampleRequest, releaseSampleRequest, takeRtoForSample, shelveSampleReturn,
-    offlineHoldState, applyOfflineSale, releaseOfflineSale,
+    offlineHoldState, applyOfflineSale, releaseOfflineSale, takeRtoPiece, giveBackRtoForRef,
     crewfitHoldState, crewfitBlankFor, parseSizeBreakdown, normSize, crewfitDeductions,
     applyCrewfitOrder, releaseCrewfitOrder, applyCrewfitSince,
     normVariant, moveBlank, rtoAvailable, rtoMatches, rtoAlertCount, rtoForOrderNumber, RTO_MATCH_DAYS,
     seedingRtoMatches, SEEDING_OPEN,
     syncRtoAlerts, openRtoAlerts, rtoAlertHistory, resolveRtoAlert, resolveAlertsForOrder,
     staleRtoAlertCount, clearStaleRtoAlerts, rtoWaiting, markOrderNotUsed, rtoSentLog, isActionable,
-    availabilityIndex, matchesForOrder, OPEN_ORDER_SQL,
+    availabilityIndex, matchLine, matchesForOrder, OPEN_ORDER_SQL,
 };

@@ -64,6 +64,10 @@ function priceSale(rawItems, { discount, shipping }) {
         product: trim(it.product), variant: trim(it.variant),
         shopify_product_id: it.shopify_product_id || null,
         shopify_variant_id: it.shopify_variant_id || null,
+        // How many of this line came off the RTO shelf instead of being printed, and which shelf
+        // entry they came from. Carried through every save so a re-price never loses it.
+        rto_qty: Math.min(parseInt(it.rto_qty, 10) || 0, parseInt(it.qty, 10) || 0),
+        rto_id: it.rto_id || null,
         // Kept beside the charged price so a discount is visible as a discount rather than
         // disappearing into a number nobody can check.
         shopify_price: it.shopify_price != null ? money(it.shopify_price) : null,
@@ -77,6 +81,58 @@ function priceSale(rawItems, { discount, shipping }) {
   const disc = Math.min(money(discount), subtotal);
   const ship = money(shipping);
   return { items, subtotal, discount: disc, shipping: ship, total: money(subtotal - disc + ship), totalQty: items.reduce((n, it) => n + it.qty, 0) };
+}
+
+/**
+ * What the RTO shelf could supply for these sales.
+ *
+ * The same matching rule as the order notices: a returned piece only fits a line for the same
+ * design in the same colour and size. Reported per line, because a sale of three things may have
+ * one of them already sitting in the building — and printing that one again is the waste this
+ * whole shelf exists to prevent.
+ */
+async function shelfFor(rows) {
+  const shelf = await inv.rtoAvailable();
+  if (!shelf.length) return {};
+  const index = inv.availabilityIndex(shelf);
+  const entries = (await db.query(
+    `SELECT id, variant_id, product_title, variant, (qty - qty_used - qty_written_off) AS available
+       FROM inventory_rto WHERE (qty - qty_used - qty_written_off) > 0
+      ORDER BY created_at ASC`)).rows;
+  const entryFor = (line) => entries.find(e => (line.variant_id && e.variant_id
+    ? String(e.variant_id) === String(line.variant_id)
+    : e.product_title === line.product_title && e.variant === line.variant));
+
+  const out = {};
+  for (const r of rows) {
+    if (r.status === 'Cancelled') continue;
+    // Only the part of a line that still has to be made can be filled from the shelf.
+    const open = r.items
+      .map((it, i) => ({ it, i, left: (parseInt(it.qty, 10) || 0) - (parseInt(it.rto_qty, 10) || 0) }))
+      .filter(x => x.left > 0);
+    if (!open.length) continue;
+
+    // Matched a line at a time, so every hit keeps the index of the line it belongs to — that
+    // index is what a later "use one" call needs in order to mark the right line.
+    const lines = [];
+    for (const x of open) {
+      const hit = inv.matchLine({
+        title: x.it.product, variant: x.it.variant,
+        shopify_product_id: x.it.shopify_product_id, shopify_variant_id: x.it.shopify_variant_id,
+      }, index);
+      if (!hit) continue;
+      const line = {
+        product_title: x.it.product, variant: x.it.variant, qty: x.left,
+        available: hit.available, variant_id: hit.variant_id,
+        color: hit.color, size: hit.size, blank_type: hit.blank_type,
+        item_index: x.i,
+      };
+      const entry = entryFor(line);
+      if (entry) lines.push({ ...line, entry_id: entry.id, entry_available: entry.available });
+    }
+    if (lines.length) out[r.id] = lines;
+  }
+  return out;
 }
 
 /** Push a sale's current state at blank stock, without ever failing the save that caused it. */
@@ -120,8 +176,14 @@ router.get('/', async (req, res) => {
               COALESCE(SUM(total_qty) FILTER (WHERE status <> 'Cancelled'), 0)::int AS units
          FROM offline_sales`)).rows[0] || {};
 
+    // Never let a shelf lookup take the list down with it; the sales matter more than the hint.
+    let onShelf = {};
+    try { onShelf = await shelfFor(rows); }
+    catch (err) { console.error('offline sale RTO check failed:', err.message); }
+
     res.json({
       sales: rows,
+      onShelf,
       pagination: pagination(total, t),
       statuses: STATUSES, paymentMethods: PAYMENT_METHODS, mots: MOTS,
       canEdit: await hasPermission(req, 'can_edit_offline_sales'),
@@ -163,7 +225,13 @@ router.get('/catalog', async (req, res) => {
         });
       }
     }
-    res.json({ products: [...byId.values()].filter(p => p.variants.length) });
+    // Availability by variant, so picking a colour and size can say "there is one of these on
+    // the shelf" at the moment the choice is made rather than after the sale is saved.
+    const shelf = {};
+    for (const r of await inv.rtoAvailable()) {
+      if (r.variant_id) shelf[String(r.variant_id)] = r.available;
+    }
+    res.json({ products: [...byId.values()].filter(p => p.variants.length), shelf });
   } catch (err) {
     console.error('offline sales catalog error:', err);
     res.status(500).json({ error: 'Failed to load the product catalog' });
@@ -232,6 +300,46 @@ router.put('/:id', canEdit, async (req, res) => {
   } catch (err) {
     console.error('offline sale update error:', err);
     res.status(500).json({ error: 'Failed to update the sale' });
+  }
+});
+
+/**
+ * POST /api/offline-sales/:id/take-from-rto { rto_id, item_index, qty }
+ *
+ * Fill part of a sale from a piece already on the shelf. Nothing is printed for it, so no blank is
+ * spent — and none is credited either: the blank behind that garment was spent when it was first
+ * made. If the sale had already deducted for the line, re-applying gives that deduction back,
+ * which is the whole saving.
+ */
+router.post('/:id/take-from-rto', canEdit, async (req, res) => {
+  try {
+    const sale = (await db.query('SELECT * FROM offline_sales WHERE id = $1', [req.params.id])).rows[0];
+    if (!sale) return res.status(404).json({ error: 'Sale not found' });
+    if (sale.status === 'Cancelled') return res.status(409).json({ error: 'This sale is cancelled' });
+
+    const items = safeJson(sale.items, []);
+    const idx = parseInt(req.body?.item_index, 10);
+    const line = items[idx];
+    if (!line) return res.status(400).json({ error: 'That line is no longer on the sale' });
+
+    const want = parseInt(req.body?.qty, 10) || 1;
+    const left = (parseInt(line.qty, 10) || 0) - (parseInt(line.rto_qty, 10) || 0);
+    if (want > left) return res.status(400).json({ error: `Only ${left} of that line still needs making` });
+
+    const ref = sale.sale_no ? `OS${String(sale.sale_no).padStart(4, '0')}` : `OS#${sale.id}`;
+    const took = await inv.takeRtoPiece(req.body?.rto_id, want, ref,
+      'Sold over the counter — no blank was spent', req.user?.username);
+    if (took.error) return res.status(took.status || 400).json({ error: took.error });
+
+    items[idx] = { ...line, rto_qty: (parseInt(line.rto_qty, 10) || 0) + want, rto_id: took.rto_id };
+    const r = await db.query(
+      'UPDATE offline_sales SET items = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING *',
+      [JSON.stringify(items), sale.id]);
+    const stock = await applyStock(r.rows[0]);
+    res.json({ ...hydrate(r.rows[0]), inventory: stock, took });
+  } catch (err) {
+    console.error('offline sale take-from-rto error:', err);
+    res.status(500).json({ error: 'Failed to take that piece from the shelf' });
   }
 });
 
@@ -317,7 +425,9 @@ router.post('/:id/payment/sync', canEdit, async (req, res) => {
 router.delete('/:id', canEdit, async (req, res) => {
   if (!isAdmin(req)) return res.status(403).json({ error: 'Only the account owner can do this' });
   try {
-    await inv.releaseOfflineSale(req.params.id);
+    const sale = (await db.query('SELECT sale_no FROM offline_sales WHERE id = $1', [req.params.id])).rows[0];
+    const ref = sale?.sale_no ? `OS${String(sale.sale_no).padStart(4, '0')}` : `OS#${req.params.id}`;
+    await inv.releaseOfflineSale(req.params.id, ref);
     const r = await db.query('DELETE FROM offline_sales WHERE id = $1 RETURNING id', [req.params.id]);
     if (!r.rows[0]) return res.status(404).json({ error: 'Sale not found' });
     res.json({ success: true });

@@ -83,6 +83,9 @@ export default function OfflineSales() {
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [catalog, setCatalog] = useState(null)
+  const [shelf, setShelf] = useState({})   // variant_id → how many are on the RTO shelf
+  const [takeFor, setTakeFor] = useState(null)  // { sale, lines }
+  const [version, setVersion] = useState(0)     // bumped when the server hands the form new truth
   const [form, setForm] = useState(null)       // the sale being created or edited
   const [pay, setPay] = useState(null)         // { sale, mode, method, amount, reference, link }
   const [copied, setCopied] = useState(false)   // inside the payment dialog
@@ -106,7 +109,7 @@ export default function OfflineSales() {
     setForm(sale ? { ...sale, items: sale.items.length ? sale.items : [blankItem()] } : blankSale())
     if (!catalog) {
       const r = await apiFetch('/api/offline-sales/catalog')
-      if (r && !r.error) setCatalog(r.products)
+      if (r && !r.error) { setCatalog(r.products); setShelf(r.shelf || {}) }
     }
   }
   const setF = (patch) => setForm(f => ({ ...f, ...patch }))
@@ -123,7 +126,7 @@ export default function OfflineSales() {
       address: form.address, items: form.items, discount: form.discount, shipping: form.shipping,
       status: form.status, notes: form.notes, mot: form.mot, awb: form.awb,
     },
-    identity: form ? (form.id ?? 'new') : null,
+    identity: form ? `${form.id ?? 'new'}:${version}` : null,
     onDiscard: () => setForm(null),
     confirm: toast.confirm,
     title: 'Discard this sale?',
@@ -164,18 +167,24 @@ export default function OfflineSales() {
   }
 
   /**
-   * Fold a payment response back into the drawer, when the drawer is showing that same sale.
+   * Fold a server response back into the drawer, when the drawer is showing that same sale.
    *
-   * The list reloads either way; this is what stops the open form from still saying "no link"
-   * a moment after one was raised from inside it. Only the payment fields are taken — anything
-   * being typed in the form is left alone.
+   * The list reloads either way; this is what stops the open form from still saying "no link" a
+   * moment after one was raised from inside it, or still showing a line as needing printing after
+   * it was filled from the shelf. Bumping the version re-captures the guard's baseline, since what
+   * came back IS the saved truth and must not read as an unsaved edit.
    */
-  const patchOpenForm = (row) => setForm(f => (f && f.id === row.id ? {
-    ...f,
-    payment_status: row.payment_status, payment_method: row.payment_method,
-    payment_ref: row.payment_ref, paid_amount: row.paid_amount,
-    razorpay_short_url: row.razorpay_short_url,
-  } : f))
+  const patchOpenForm = (row) => setForm(f => {
+    if (!f || f.id !== row.id) return f
+    setVersion(v => v + 1)
+    return {
+      ...f,
+      items: row.items ?? f.items,
+      payment_status: row.payment_status, payment_method: row.payment_method,
+      payment_ref: row.payment_ref, paid_amount: row.paid_amount,
+      razorpay_short_url: row.razorpay_short_url,
+    }
+  })
 
   const openPayment = (sale, mode) => {
     setCopied(false)
@@ -228,6 +237,25 @@ export default function OfflineSales() {
     window.open(n ? `https://wa.me/${n}?text=${msg}` : `https://wa.me/?text=${msg}`, '_blank')
   }
 
+  /**
+   * Fill a line from the shelf instead of printing it.
+   *
+   * The piece already exists, so nothing is made and no blank is spent — and if the sale had
+   * already deducted for that line, the deduction comes back. That saving is what the toast
+   * reports, because it is the only visible sign anything happened.
+   */
+  const takeFromShelf = async (sale, line) => {
+    const res = await apiFetch(`/api/offline-sales/${sale.id}/take-from-rto`, {
+      method: 'POST',
+      body: JSON.stringify({ rto_id: line.entry_id, item_index: line.item_index, qty: 1 }),
+    })
+    if (!res || res.error) { toast.error(res?.error || 'Failed'); return }
+    toast.success(`${res.ref} — ${res.took.product_title} ${res.took.variant} taken off the shelf. Nothing to print, no blank spent.`,
+      { title: 'Filled from RTO' })
+    patchOpenForm(res)
+    setTakeFor(null); load()
+  }
+
   const copyRowLink = async (sale) => {
     const ok = await copyText(sale.razorpay_short_url)
     if (!ok) { toast.error('Could not copy — open the sale and copy it from there'); return }
@@ -252,7 +280,7 @@ export default function OfflineSales() {
   const remove = async (sale) => {
     if (!await toast.confirm({
       title: `Delete ${sale.ref}?`,
-      message: 'Any blanks it took out of stock are given back.',
+      message: 'Any blanks it took out of stock are given back, and any piece it took off the RTO shelf goes back on the shelf.',
       details: [{ label: 'Customer', value: sale.customer_name }, { label: 'Total', value: money(sale.total) }],
       confirmLabel: 'Delete', danger: true,
     })) return
@@ -266,6 +294,7 @@ export default function OfflineSales() {
   const sales = data?.sales || []
   const s = data?.summary || {}
   const canEdit = data?.canEdit
+  const onShelf = data?.onShelf || {}
   const product = (id) => (catalog || []).find(p => String(p.shopify_id) === String(id))
 
   return (
@@ -343,6 +372,18 @@ export default function OfflineSales() {
                       <div key={i}>{it.product} <span style={{ color: 'var(--text-muted)' }}>{it.variant} × {it.qty}</span></div>
                     ))}
                     {x.items.length > 2 && <div style={{ color: 'var(--text-muted)' }}>+{x.items.length - 2} more</div>}
+                    {/* The point of the shelf: this one is already made, so do not print it again. */}
+                    {canEdit && !!(onShelf[x.id] || []).length && (
+                      <button className="rto-tag" style={{ marginLeft: 0, marginTop: 5, cursor: 'pointer', border: 'none' }}
+                        onClick={e => { e.stopPropagation(); setTakeFor({ sale: x, lines: onShelf[x.id] }) }}>
+                        ↩ {(onShelf[x.id] || []).length} on the RTO shelf — use one
+                      </button>
+                    )}
+                    {x.items.some(it => it.rto_qty > 0) && (
+                      <div className="rto-pill" style={{ marginLeft: 0, marginTop: 5, display: 'inline-block' }}>
+                        {x.items.reduce((n, it) => n + (Number(it.rto_qty) || 0), 0)} from the shelf
+                      </div>
+                    )}
                   </td>
                   <td data-label="Total" style={{ textAlign: 'right', fontWeight: 700 }}>{money(x.total)}</td>
                   <td data-label="Payment">
@@ -421,6 +462,7 @@ export default function OfflineSales() {
                 {form.items.map((it, i) => {
                   const p = product(it.shopify_product_id)
                   const changed = it.shopify_price != null && Number(it.unit_price) !== Number(it.shopify_price)
+                  const onShelf = Number(shelf[String(it.shopify_variant_id)] || 0)
                   return (
                     <div className="form-item-row item-cols-4" key={i}>
                       <div className="form-row">
@@ -448,6 +490,18 @@ export default function OfflineSales() {
                                 unit_price: variant?.price ?? '', shopify_price: variant?.price ?? null,
                               })
                             }} />
+                          {/* Said at the moment the colour and size are chosen, which is the only
+                              moment it can still change what gets printed. */}
+                          {onShelf > 0 && !it.rto_qty && (
+                            <span className="rto-tag" style={{ marginLeft: 0, marginTop: 5, alignSelf: 'flex-start' }}>
+                              ↩ {onShelf} on the RTO shelf
+                            </span>
+                          )}
+                          {it.rto_qty > 0 && (
+                            <span className="rto-pill" style={{ marginLeft: 0, marginTop: 5, alignSelf: 'flex-start' }}>
+                              {it.rto_qty} from the shelf
+                            </span>
+                          )}
                         </div>
                         <div className="input-group">
                           <label>Qty</label>
@@ -492,7 +546,8 @@ export default function OfflineSales() {
                   </div>
                 )}
                 <p className="img-upload-hint" style={{ marginTop: 10 }}>
-                  Blanks come off the shelf once the sale leaves Draft. A draft holds nothing.
+                  Blanks come off the shelf once the sale leaves Draft. A draft holds nothing — and
+                  anything filled from the RTO shelf costs no blank at all, because it is already made.
                 </p>
 
                 {/* Payment lives on the sale, the same way it does on a Crewfit order: the link is
@@ -585,6 +640,33 @@ export default function OfflineSales() {
               <button type="submit" form="os-sale-form" className="btn btn-primary" disabled={busy}>
                 {busy ? 'Saving…' : 'Save the sale'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ---- Take one off the RTO shelf ------------------------------------------------ */}
+      {takeFor && (
+        <div className="confirm-overlay" onClick={() => setTakeFor(null)}>
+          <div className="confirm-card" style={{ maxWidth: 560 }} onClick={e => e.stopPropagation()} role="dialog" aria-modal="true">
+            <h3 className="confirm-title">Fill {takeFor.sale.ref} from the shelf</h3>
+            <p className="confirm-message">
+              These are already printed and sitting on the shelf. Taking one means nothing is made
+              for this sale, and no blank is spent — if one was already deducted, it comes back.
+            </p>
+            <div className="rto-lines">
+              {takeFor.lines.map((l, i) => (
+                <div className="rto-line" key={i}>
+                  <span style={{ flex: 1, textAlign: 'left' }}>
+                    <b>{l.product_title}</b>
+                    <span style={{ color: 'var(--text-muted)' }}> · {l.variant} · {l.available} on the shelf, {l.qty} still to make</span>
+                  </span>
+                  <button className="mini-btn mini-btn-active" onClick={() => takeFromShelf(takeFor.sale, l)}>Use this one</button>
+                </div>
+              ))}
+            </div>
+            <div className="confirm-actions">
+              <button className="btn btn-secondary" onClick={() => setTakeFor(null)}>Close</button>
             </div>
           </div>
         </div>
