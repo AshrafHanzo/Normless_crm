@@ -5,6 +5,7 @@ import Icon from '../components/Icon'
 import SearchSelect from '../components/SearchSelect'
 import Pagination from '../components/Pagination'
 import useServerTable from '../hooks/useServerTable'
+import useDirtyGuard from '../hooks/useDirtyGuard'
 import SortTh from '../components/SortTh'
 
 const money = (v) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(Number(v) || 0)
@@ -22,6 +23,48 @@ const blankSale = () => ({
   customer_name: '', contact_number: '', email: '', address: '',
   items: [blankItem()], discount: 0, shipping: 0, status: 'Draft', notes: '',
 })
+
+// Indian mobile → wa.me wants digits only, with the country code.
+function toWaNumber(phone) {
+  let d = (phone || '').replace(/\D/g, '')
+  if (!d) return null
+  if (d.length === 10) d = '91' + d
+  else if (d.length === 11 && d.startsWith('0')) d = '91' + d.slice(1)
+  return d
+}
+
+/**
+ * Copy, with the old trick behind the modern API.
+ *
+ * `navigator.clipboard` only exists in a secure context, so on a plain-http LAN address — which is
+ * exactly how a counter machine tends to reach this app — it is simply undefined. The hidden
+ * textarea still works there, and the boolean lets the caller say plainly when neither did.
+ */
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text)
+    return true
+  } catch { /* not a secure context, or permission refused — fall through */ }
+  try {
+    const el = document.createElement('textarea')
+    el.value = text
+    el.setAttribute('readonly', '')
+    el.style.cssText = 'position:fixed;top:0;left:0;opacity:0'
+    document.body.appendChild(el)
+    el.select()
+    const ok = document.execCommand('copy')
+    el.remove()
+    return ok
+  } catch { return false }
+}
+
+const linkMessage = (sale, link) => [
+  `Hi ${sale.customer_name || 'there'}! 👋`, '',
+  `Here is the payment link for your order ${sale.ref}:`,
+  link, '',
+  `Amount: ${money(sale.total)}`, '',
+  'Thank you!',
+].join('\n')
 
 /**
  * Sales made away from Shopify — the counter, an event, a phone order.
@@ -41,7 +84,8 @@ export default function OfflineSales() {
   const [busy, setBusy] = useState(false)
   const [catalog, setCatalog] = useState(null)
   const [form, setForm] = useState(null)       // the sale being created or edited
-  const [pay, setPay] = useState(null)         // { sale, mode, method, amount, reference }
+  const [pay, setPay] = useState(null)         // { sale, mode, method, amount, reference, link }
+  const [copied, setCopied] = useState(false)
   const [search, setSearch] = useState('')
   const [status, setStatus] = useState('')
   const t = useServerTable({ sort: 'created_at', dir: 'desc', limit: 25 })
@@ -67,6 +111,17 @@ export default function OfflineSales() {
   const setF = (patch) => setForm(f => ({ ...f, ...patch }))
   const setItem = (i, patch) => setForm(f => ({ ...f, items: f.items.map((it, j) => (j === i ? { ...it, ...patch } : it)) }))
 
+  // A half-filled sale is several minutes of typing; a stray click on the overlay should not
+  // take it away. Only genuine edits prompt — see useDirtyGuard.
+  const guard = useDirtyGuard({
+    snapshot: form && { ...form },
+    identity: form ? (form.id ?? 'new') : null,
+    onDiscard: () => setForm(null),
+    confirm: toast.confirm,
+    title: 'Discard this sale?',
+    message: 'What you have filled in will be lost.',
+  })
+
   // Mirrors the server's arithmetic so the total moves as you type; the server still recomputes it.
   const totals = (() => {
     if (!form) return null
@@ -77,7 +132,8 @@ export default function OfflineSales() {
     return { subtotal, discount, shipping, total: subtotal - discount + shipping, qty: items.reduce((n, it) => n + Number(it.qty), 0) }
   })()
 
-  const save = async () => {
+  const save = async (e) => {
+    e?.preventDefault?.()
     if (!form.customer_name.trim()) { toast.error('Customer name is required'); return }
     const items = form.items.filter(it => it.product && Number(it.qty) > 0)
     if (!items.length) { toast.error('Add at least one product'); return }
@@ -95,7 +151,19 @@ export default function OfflineSales() {
       toast.error(res.inventory.unmapped.map(u => `${u.product} — ${u.reason}`).join(' · '),
         { title: 'Not deducted from blank stock', duration: 0 })
     }
+    guard.reset()
     setForm(null); load()
+  }
+
+  const openPayment = (sale) => {
+    setCopied(false)
+    setPay({
+      sale, mode: sale.razorpay_short_url ? 'link' : 'record',
+      method: 'Cash', amount: sale.total, reference: '',
+      // An existing link opens straight on the link itself — the usual reason for coming back
+      // to a sale that already has one is to send it again.
+      link: sale.razorpay_short_url || null,
+    })
   }
 
   const savePayment = async () => {
@@ -109,12 +177,31 @@ export default function OfflineSales() {
     setBusy(false)
     if (!res || res.error) { toast.error(res?.error || 'Failed'); return }
     if (pay.mode === 'link') {
-      await navigator.clipboard?.writeText(res.link).catch(() => {})
-      toast.success('Payment link created and copied — send it to the customer')
-    } else {
-      toast.success(`${res.ref} marked ${res.payment_status.toLowerCase()}`)
+      // The dialog stays open on the link, because a link nobody can reach the customer with
+      // is not worth creating.
+      const ok = await copyText(res.link)
+      setCopied(ok)
+      toast.success(ok ? 'Payment link created and copied' : 'Payment link created — copy it below',
+        { title: 'Ready to send' })
+      setPay(v => ({ ...v, link: res.link, sale: { ...v.sale, razorpay_short_url: res.link } }))
+      load()
+      return
     }
+    toast.success(`${res.ref} marked ${res.payment_status.toLowerCase()}`)
     setPay(null); load()
+  }
+
+  const copyLink = async () => {
+    const ok = await copyText(pay.link)
+    setCopied(ok)
+    if (!ok) { toast.error('Could not copy — select the link and copy it by hand'); return }
+    setTimeout(() => setCopied(false), 2000)
+  }
+
+  const sendLink = () => {
+    const n = toWaNumber(pay.sale.contact_number)
+    const msg = encodeURIComponent(linkMessage(pay.sale, pay.link))
+    window.open(n ? `https://wa.me/${n}?text=${msg}` : `https://wa.me/?text=${msg}`, '_blank')
   }
 
   const syncPayment = async (sale) => {
@@ -226,17 +313,18 @@ export default function OfflineSales() {
                   </td>
                   <td data-label="Status"><span className={`status-badge ${STATUS_CLASS[x.status] || 'pending'}`}>{x.status}</span></td>
                   <td data-label="Date" style={{ fontSize: 12 }}>{day(x.created_at)}</td>
-                  <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }} onClick={e => e.stopPropagation()}>
-                    {canEdit && x.payment_status !== 'Paid' && (
-                      <button className="mini-btn mini-btn-active"
-                        onClick={() => setPay({ sale: x, mode: 'record', method: 'Cash', amount: x.total, reference: '' })}>
-                        Payment
-                      </button>
-                    )}
-                    {canEdit && x.razorpay_short_url && x.payment_status !== 'Paid' && (
-                      <button className="mini-btn" style={{ marginLeft: 6 }} onClick={() => syncPayment(x)}>Check link</button>
-                    )}
-                    {isAdmin && <button className="mini-btn mini-btn-danger" style={{ marginLeft: 6 }} onClick={() => remove(x)}>Delete</button>}
+                  <td className="cell-actions" style={{ textAlign: 'right' }} onClick={e => e.stopPropagation()}>
+                    <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                      {canEdit && x.payment_status !== 'Paid' && (
+                        <button className="mini-btn mini-btn-active" onClick={() => openPayment(x)}>
+                          {x.razorpay_short_url ? 'Send link' : 'Payment'}
+                        </button>
+                      )}
+                      {canEdit && x.razorpay_short_url && x.payment_status !== 'Paid' && (
+                        <button className="mini-btn" onClick={() => syncPayment(x)}>Check link</button>
+                      )}
+                      {isAdmin && <button className="mini-btn mini-btn-danger" onClick={() => remove(x)}>Delete</button>}
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -246,114 +334,133 @@ export default function OfflineSales() {
       </div>
       {!!sales.length && <Pagination table={t} noun="sales" />}
 
-      {/* ---- The sale ------------------------------------------------------------------ */}
+      {/* ---- The sale ------------------------------------------------------------------
+          A drawer rather than a modal: this form runs to four sections and a variable number of
+          product lines, which is more than a centred card can hold without the save button
+          drifting off the bottom of the screen. */}
       {form && (
-        <div className="confirm-overlay" onClick={() => setForm(null)}>
-          <div className="confirm-card" style={{ maxWidth: 780 }} onClick={e => e.stopPropagation()} role="dialog" aria-modal="true">
-            <h3 className="confirm-title">{form.id ? `Sale ${form.ref}` : 'New offline sale'}</h3>
-
-            <div className="form-row">
-              <div className="input-group"><label>Customer name</label>
-                <input value={form.customer_name} autoFocus onChange={e => setF({ customer_name: e.target.value })} /></div>
-              <div className="input-group"><label>Phone</label>
-                <input value={form.contact_number || ''} onChange={e => setF({ contact_number: e.target.value })} /></div>
-            </div>
-            <div className="form-row">
-              <div className="input-group"><label>Email <span style={{ color: 'var(--text-muted)' }}>optional</span></label>
-                <input value={form.email || ''} onChange={e => setF({ email: e.target.value })} /></div>
-              <div className="input-group"><label>Address <span style={{ color: 'var(--text-muted)' }}>optional</span></label>
-                <input value={form.address || ''} onChange={e => setF({ address: e.target.value })} /></div>
+        <div className="drawer-overlay" onClick={guard.requestClose}>
+          <div className="drawer drawer-wide" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true">
+            <div className="drawer-header">
+              <h2>{form.id ? `Sale ${form.ref}` : 'New offline sale'}</h2>
+              <button type="button" className="btn-icon" onClick={guard.requestClose}><Icon name="close" size={16} /></button>
             </div>
 
-            <div className="form-section">Products</div>
-            {form.items.map((it, i) => {
-              const p = product(it.shopify_product_id)
-              const changed = it.shopify_price != null && Number(it.unit_price) !== Number(it.shopify_price)
-              return (
-                <div className="form-row" key={i} style={{ alignItems: 'end' }}>
-                  <div className="input-group">
-                    <label>Product</label>
-                    <SearchSelect value={it.shopify_product_id} placeholder="Type to search Shopify products…"
-                      options={(catalog || []).map(x => ({ value: x.shopify_id, label: x.title, hint: x.blank_type || '' }))}
-                      onChange={(v, opt) => setItem(i, {
-                        shopify_product_id: v, product: opt?.label || '', shopify_variant_id: '', variant: '',
-                        unit_price: '', shopify_price: null,
-                        blank_type: (catalog || []).find(x => String(x.shopify_id) === String(v))?.blank_type || '',
-                      })} />
-                  </div>
-                  <div className="input-group">
-                    <label>Colour / size</label>
-                    <SearchSelect value={it.shopify_variant_id} disabled={!p}
-                      placeholder={p ? 'Type to search…' : 'Pick a product first'}
-                      options={(p?.variants || []).map(v => ({ value: v.variant_id, label: v.variant, hint: v.price != null ? `₹${v.price}` : '' }))}
-                      onChange={(v) => {
-                        const variant = p?.variants.find(x => String(x.variant_id) === String(v))
-                        setItem(i, {
-                          shopify_variant_id: v, variant: variant?.variant || '',
-                          color: variant?.color || '', size: variant?.size || '',
-                          // Starts at the shop price, and stays editable — that is the point.
-                          unit_price: variant?.price ?? '', shopify_price: variant?.price ?? null,
-                        })
-                      }} />
-                  </div>
-                  <div className="input-group" style={{ maxWidth: 80 }}>
-                    <label>Qty</label>
-                    <input type="number" min="1" value={it.qty} onChange={e => setItem(i, { qty: e.target.value })} />
-                  </div>
-                  <div className="input-group" style={{ maxWidth: 120 }}>
-                    <label>Price each</label>
-                    <input type="number" min="0" value={it.unit_price} onChange={e => setItem(i, { unit_price: e.target.value })} />
-                    {changed && <span className="label-hint">Shopify: ₹{it.shopify_price}</span>}
-                  </div>
-                  {form.items.length > 1 && (
-                    <button className="mini-btn" style={{ marginBottom: 14 }}
-                      onClick={() => setF({ items: form.items.filter((_, j) => j !== i) })}>×</button>
-                  )}
+            <div className="drawer-body">
+              <form id="os-sale-form" onSubmit={save}>
+                <div className="form-section" style={{ marginTop: 0 }}>Customer</div>
+                <div className="form-row">
+                  <div className="input-group"><label>Name *</label>
+                    <input value={form.customer_name} autoFocus onChange={e => setF({ customer_name: e.target.value })} /></div>
+                  <div className="input-group"><label>Phone</label>
+                    <input value={form.contact_number || ''} onChange={e => setF({ contact_number: e.target.value })} /></div>
+                  <div className="input-group"><label>Email <span className="label-hint">optional</span></label>
+                    <input value={form.email || ''} onChange={e => setF({ email: e.target.value })} /></div>
                 </div>
-              )
-            })}
-            <button className="mini-btn" onClick={() => setF({ items: [...form.items, blankItem()] })}>+ Another product</button>
+                <div className="input-group"><label>Address <span className="label-hint">optional</span></label>
+                  <input value={form.address || ''} onChange={e => setF({ address: e.target.value })} /></div>
 
-            <div className="form-row" style={{ marginTop: 12 }}>
-              <div className="input-group"><label>Discount (₹)</label>
-                <input type="number" min="0" value={form.discount} onChange={e => setF({ discount: e.target.value })} /></div>
-              <div className="input-group"><label>Shipping (₹)</label>
-                <input type="number" min="0" value={form.shipping} onChange={e => setF({ shipping: e.target.value })} /></div>
-              <div className="input-group"><label>Status</label>
-                <select value={form.status} onChange={e => setF({ status: e.target.value })}>
-                  {(data?.statuses || []).map(x => <option key={x}>{x}</option>)}
-                </select></div>
+                <div className="form-section">Products
+                  <span className="unit-hint">Prices start at Shopify’s and can be changed</span>
+                </div>
+                {form.items.map((it, i) => {
+                  const p = product(it.shopify_product_id)
+                  const changed = it.shopify_price != null && Number(it.unit_price) !== Number(it.shopify_price)
+                  return (
+                    <div className="os-item-row" key={i}>
+                      <div className="form-row">
+                        <div className="input-group">
+                          <label>Product</label>
+                          <SearchSelect value={it.shopify_product_id} placeholder="Type to search Shopify products…"
+                            options={(catalog || []).map(x => ({ value: x.shopify_id, label: x.title, hint: x.blank_type || '' }))}
+                            onChange={(v, opt) => setItem(i, {
+                              shopify_product_id: v, product: opt?.label || '', shopify_variant_id: '', variant: '',
+                              unit_price: '', shopify_price: null,
+                              blank_type: (catalog || []).find(x => String(x.shopify_id) === String(v))?.blank_type || '',
+                            })} />
+                        </div>
+                        <div className="input-group">
+                          <label>Colour / size</label>
+                          <SearchSelect value={it.shopify_variant_id} disabled={!p}
+                            placeholder={p ? 'Type to search…' : 'Pick a product first'}
+                            options={(p?.variants || []).map(v => ({ value: v.variant_id, label: v.variant, hint: v.price != null ? `₹${v.price}` : '' }))}
+                            onChange={(v) => {
+                              const variant = p?.variants.find(x => String(x.variant_id) === String(v))
+                              setItem(i, {
+                                shopify_variant_id: v, variant: variant?.variant || '',
+                                color: variant?.color || '', size: variant?.size || '',
+                                // Starts at the shop price, and stays editable — that is the point.
+                                unit_price: variant?.price ?? '', shopify_price: variant?.price ?? null,
+                              })
+                            }} />
+                        </div>
+                        <div className="input-group">
+                          <label>Qty</label>
+                          <input type="number" min="1" value={it.qty} onChange={e => setItem(i, { qty: e.target.value })} />
+                        </div>
+                        <div className="input-group">
+                          <label>Price each</label>
+                          <input type="number" min="0" value={it.unit_price} onChange={e => setItem(i, { unit_price: e.target.value })} />
+                          {changed && <span className="label-hint">Shopify: ₹{it.shopify_price}</span>}
+                        </div>
+                      </div>
+                      {form.items.length > 1 && (
+                        <button type="button" className="btn-icon" title="Remove this line"
+                          onClick={() => setF({ items: form.items.filter((_, j) => j !== i) })}>
+                          <Icon name="trash" size={14} />
+                        </button>
+                      )}
+                    </div>
+                  )
+                })}
+                <button type="button" className="mini-btn" style={{ marginTop: 12 }}
+                  onClick={() => setF({ items: [...form.items, blankItem()] })}>+ Another product</button>
+
+                <div className="form-section">Money</div>
+                <div className="form-row">
+                  <div className="input-group"><label>Discount (₹)</label>
+                    <input type="number" min="0" value={form.discount} onChange={e => setF({ discount: e.target.value })} /></div>
+                  <div className="input-group"><label>Shipping (₹)</label>
+                    <input type="number" min="0" value={form.shipping} onChange={e => setF({ shipping: e.target.value })} /></div>
+                  <div className="input-group"><label>Status</label>
+                    <select value={form.status} onChange={e => setF({ status: e.target.value })}>
+                      {(data?.statuses || []).map(x => <option key={x}>{x}</option>)}
+                    </select></div>
+                </div>
+                {!!totals && (
+                  <div className="totals-bar">
+                    <div><span>Pieces</span><strong>{num(totals.qty)}</strong></div>
+                    <div><span>Subtotal</span><strong>{money(totals.subtotal)}</strong></div>
+                    {totals.discount > 0 && <div><span>Discount</span><strong style={{ color: 'var(--warning)' }}>−{money(totals.discount)}</strong></div>}
+                    {totals.shipping > 0 && <div><span>Shipping</span><strong>{money(totals.shipping)}</strong></div>}
+                    <div><span>Total</span><strong style={{ color: 'var(--success)' }}>{money(totals.total)}</strong></div>
+                  </div>
+                )}
+                <p className="img-upload-hint" style={{ marginTop: 10 }}>
+                  Blanks come off the shelf once the sale leaves Draft. A draft holds nothing.
+                </p>
+
+                <div className="form-section">Dispatch</div>
+                <div className="form-row">
+                  <div className="input-group"><label>How it goes out</label>
+                    <select value={form.mot || ''} onChange={e => setF({ mot: e.target.value })}>
+                      <option value="">—</option>
+                      {(data?.mots || []).map(m => <option key={m}>{m}</option>)}
+                    </select></div>
+                  <div className="input-group"><label>Tracking ID / AWB</label>
+                    <input value={form.awb || ''} onChange={e => setF({ awb: e.target.value })}
+                      placeholder="Not needed for Porter or self pickup" /></div>
+                </div>
+                <div className="input-group"><label>Note <span className="label-hint">optional</span></label>
+                  <input value={form.notes || ''} onChange={e => setF({ notes: e.target.value })} /></div>
+              </form>
             </div>
 
-            <div className="form-section">Dispatch</div>
-            <div className="form-row">
-              <div className="input-group"><label>How it goes out</label>
-                <select value={form.mot || ''} onChange={e => setF({ mot: e.target.value })}>
-                  <option value="">—</option>
-                  {(data?.mots || []).map(m => <option key={m}>{m}</option>)}
-                </select></div>
-              <div className="input-group"><label>Tracking ID / AWB</label>
-                <input value={form.awb || ''} onChange={e => setF({ awb: e.target.value })}
-                  placeholder="Not needed for Porter or self pickup" /></div>
-            </div>
-            <div className="input-group"><label>Note <span style={{ color: 'var(--text-muted)' }}>optional</span></label>
-              <input value={form.notes || ''} onChange={e => setF({ notes: e.target.value })} /></div>
-
-            {!!totals && (
-              <dl className="confirm-details">
-                <div className="confirm-detail"><dt>Subtotal</dt><dd>{money(totals.subtotal)}</dd></div>
-                {totals.discount > 0 && <div className="confirm-detail"><dt>Discount</dt><dd>−{money(totals.discount)}</dd></div>}
-                {totals.shipping > 0 && <div className="confirm-detail"><dt>Shipping</dt><dd>{money(totals.shipping)}</dd></div>}
-                <div className="confirm-detail"><dt>Total</dt><dd><b>{money(totals.total)}</b></dd></div>
-              </dl>
-            )}
-            <p className="confirm-message" style={{ fontSize: 12.5 }}>
-              Blanks come off the shelf once the sale leaves Draft. A draft holds nothing.
-            </p>
-
-            <div className="confirm-actions">
-              <button className="btn btn-secondary" onClick={() => setForm(null)}>Cancel</button>
-              <button className="btn btn-primary" disabled={busy} onClick={save}>{busy ? 'Saving…' : 'Save the sale'}</button>
+            <div className="drawer-footer">
+              <button type="button" className="btn btn-secondary" onClick={guard.requestClose}>Cancel</button>
+              <button type="submit" form="os-sale-form" className="btn btn-primary" disabled={busy}>
+                {busy ? 'Saving…' : 'Save the sale'}
+              </button>
             </div>
           </div>
         </div>
@@ -366,51 +473,86 @@ export default function OfflineSales() {
             <h3 className="confirm-title">Payment for {pay.sale.ref}</h3>
             <p className="confirm-message">{pay.sale.customer_name} · {money(pay.sale.total)}</p>
 
-            <div className="scan-tabs" style={{ marginBottom: 14 }}>
-              <button className={pay.mode === 'record' ? 'active' : ''} onClick={() => setPay(v => ({ ...v, mode: 'record' }))}>Money taken</button>
-              <button className={pay.mode === 'link' ? 'active' : ''} onClick={() => setPay(v => ({ ...v, mode: 'link' }))}>Send a link</button>
-            </div>
-
-            {pay.mode === 'record' ? (
+            {pay.link ? (
+              /* The link exists; the only thing left that matters is getting it to the customer. */
               <>
                 <div className="input-group">
-                  <label>How</label>
-                  <select value={pay.method} onChange={e => setPay(v => ({ ...v, method: e.target.value }))}>
-                    {(data?.paymentMethods || []).filter(m => m !== 'Payment link').map(m => <option key={m}>{m}</option>)}
-                  </select>
+                  <label>Payment link</label>
+                  <input readOnly value={pay.link} onFocus={e => e.target.select()} />
                 </div>
-                <div className="input-group">
-                  <label>Amount</label>
-                  <input type="number" min="1" value={pay.amount} onChange={e => setPay(v => ({ ...v, amount: e.target.value }))} />
-                  <span className="label-hint">Anything less than the total is recorded as a part payment</span>
+                <div className="os-link-actions">
+                  <button className="btn btn-secondary" onClick={copyLink}>
+                    <Icon name={copied ? 'check' : 'copy'} size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
+                    {copied ? 'Copied' : 'Copy link'}
+                  </button>
+                  <button className="btn btn-secondary" onClick={sendLink}>
+                    <Icon name="phone" size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
+                    {toWaNumber(pay.sale.contact_number) ? 'Send on WhatsApp' : 'Pick a WhatsApp chat'}
+                  </button>
+                  <button className="btn btn-secondary os-link-open" onClick={() => window.open(pay.link, '_blank', 'noopener')}>Open</button>
                 </div>
-                <div className="input-group">
-                  <label>Reference <span style={{ color: 'var(--text-muted)' }}>optional</span></label>
-                  <input value={pay.reference} placeholder="UPI ref, receipt number"
-                    onChange={e => setPay(v => ({ ...v, reference: e.target.value }))} />
-                </div>
+                <p className="confirm-message" style={{ fontSize: 12.5, marginTop: 12 }}>
+                  The sale stays unpaid until the money lands — use “Check link” on the row to ask
+                  Razorpay, or create a fresh link for a different amount.
+                </p>
+                <button className="mini-btn" onClick={() => { setCopied(false); setPay(v => ({ ...v, link: null })) }}>
+                  Take the money another way
+                </button>
               </>
             ) : (
               <>
-                <div className="input-group">
-                  <label>Amount to ask for</label>
-                  <input type="number" min="1" value={pay.amount} onChange={e => setPay(v => ({ ...v, amount: e.target.value }))} />
+                <div className="scan-tabs" style={{ marginBottom: 14 }}>
+                  <button className={pay.mode === 'record' ? 'active' : ''} onClick={() => setPay(v => ({ ...v, mode: 'record' }))}>Money taken</button>
+                  <button className={pay.mode === 'link' ? 'active' : ''} onClick={() => setPay(v => ({ ...v, mode: 'link' }))}>Send a link</button>
                 </div>
-                <p className="confirm-message" style={{ fontSize: 12.5 }}>
-                  A Razorpay link is created and copied to your clipboard to send on WhatsApp. The sale
-                  stays unpaid until the money lands — use “Check link” to ask Razorpay.
-                </p>
-                {data?.paymentsEnabled === false && (
-                  <div className="calc-warning">Razorpay is not configured, so a link cannot be created.</div>
+
+                {pay.mode === 'record' ? (
+                  <>
+                    <div className="input-group">
+                      <label>How</label>
+                      <select value={pay.method} onChange={e => setPay(v => ({ ...v, method: e.target.value }))}>
+                        {(data?.paymentMethods || []).filter(m => m !== 'Payment link').map(m => <option key={m}>{m}</option>)}
+                      </select>
+                    </div>
+                    <div className="input-group">
+                      <label>Amount</label>
+                      <input type="number" min="1" value={pay.amount} onChange={e => setPay(v => ({ ...v, amount: e.target.value }))} />
+                      <span className="label-hint">Anything less than the total is recorded as a part payment</span>
+                    </div>
+                    <div className="input-group">
+                      <label>Reference <span style={{ color: 'var(--text-muted)' }}>optional</span></label>
+                      <input value={pay.reference} placeholder="UPI ref, receipt number"
+                        onChange={e => setPay(v => ({ ...v, reference: e.target.value }))} />
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="input-group">
+                      <label>Amount to ask for</label>
+                      <input type="number" min="1" value={pay.amount} onChange={e => setPay(v => ({ ...v, amount: e.target.value }))} />
+                    </div>
+                    <p className="confirm-message" style={{ fontSize: 12.5 }}>
+                      A Razorpay link is created and shown here to copy or send on WhatsApp.
+                    </p>
+                    {data?.paymentsEnabled === false && (
+                      <div className="calc-warning">Razorpay is not configured, so a link cannot be created.</div>
+                    )}
+                  </>
                 )}
               </>
             )}
 
             <div className="confirm-actions">
-              <button className="btn btn-secondary" onClick={() => setPay(null)}>Cancel</button>
-              <button className="btn btn-primary" disabled={busy || (pay.mode === 'link' && data?.paymentsEnabled === false)} onClick={savePayment}>
-                {busy ? 'Saving…' : pay.mode === 'link' ? 'Create the link' : 'Record it'}
-              </button>
+              {pay.link ? (
+                <button className="btn btn-primary" onClick={() => setPay(null)}>Done</button>
+              ) : (
+                <>
+                  <button className="btn btn-secondary" onClick={() => setPay(null)}>Cancel</button>
+                  <button className="btn btn-primary" disabled={busy || (pay.mode === 'link' && data?.paymentsEnabled === false)} onClick={savePayment}>
+                    {busy ? 'Saving…' : pay.mode === 'link' ? 'Create the link' : 'Record it'}
+                  </button>
+                </>
+              )}
             </div>
           </div>
         </div>

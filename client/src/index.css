@@ -1916,3 +1916,34 @@ html, body { max-width: 100%; overflow-x: hidden; }
 /* Optional printing detail on a quote line — the pair shares a line under the priced row. */
 .calc-print { flex: 1 1 220px; min-width: 0; font-size: 12.5px; padding: 7px 10px; }
 .label-hint { font-weight: 400; color: var(--text-muted); font-size: 11px; }
+
+/* ============================================================
+   OFFLINE SALES
+   ============================================================ */
+/* A sale line is four fields of very unequal weight — a long product title next to a two-digit
+   quantity — so it gets explicit proportions rather than the equal auto-fit columns the rest of
+   the app uses. The remove button is not a field, so it sits outside the grid and lines up with
+   the inputs rather than claiming a column of its own. */
+.os-item-row { display: flex; align-items: flex-end; gap: 12px; margin-bottom: 14px; }
+.os-item-row > .form-row {
+  flex: 1; min-width: 0;
+  grid-template-columns: minmax(0, 2.2fr) minmax(0, 1.6fr) minmax(0, 0.6fr) minmax(0, 0.9fr);
+}
+.os-item-row > .btn-icon { flex: 0 0 auto; margin-bottom: 6px; }
+
+/* The link is only worth creating if it reaches the customer, so the three ways of sending it
+   share the width equally instead of hiding behind one another. */
+.os-link-actions { display: flex; justify-content: center; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+.os-link-actions .btn { flex: 1 1 140px; padding: 10px 14px; }
+/* Checking the link yourself is occasionally useful and never the main thing — it takes only
+   the width it needs so the two ways of sending it keep the row. */
+.os-link-actions .os-link-open { flex: 0 1 auto; }
+
+/* Below this the drawer is full-width on a laptop and the columns above stop being readable.
+   Stated here rather than left to the global one-column rule because that rule is less specific
+   than the grid above and would never win. */
+@media (max-width: 900px) {
+  .os-item-row { flex-direction: column; align-items: stretch; }
+  .os-item-row > .form-row { grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr)); }
+  .os-item-row > .btn-icon { align-self: flex-end; margin-bottom: 0; }
+}
