@@ -186,6 +186,8 @@ const { settlePayment } = crewfitPaymentsRoutes;
 const crewfitCustomersRoutes = require('./routes/crewfit-customers');
 const crewfitVendorOrderRoutes = require('./routes/crewfit-vendor-orders');
 const marketingRoutes = require('./routes/marketing');
+const marketingSampleRoutes = require('./routes/marketing-samples');
+const offlineSalesRoutes = require('./routes/offline-sales');
 
 // Public routes
 app.use('/api/auth', authRoutes);
@@ -258,7 +260,11 @@ app.use('/api/crewfit/vendor-orders', authMiddleware, crewfitVendorOrderRoutes);
 app.use('/api/crewfit/invoices', authMiddleware, require('./routes/crewfit-invoices'));
 app.use('/api/inventory', authMiddleware, require('./routes/inventory'));
 app.use('/api/crewfit', authMiddleware, crewfitRoutes);
+// Mounted before the marketing router: that one owns '/api/marketing/*' and would answer for
+// /samples itself, with a 404 from inside its own route table.
+app.use('/api/marketing/samples', authMiddleware, marketingSampleRoutes);
 app.use('/api/marketing', authMiddleware, marketingRoutes);
+app.use('/api/offline-sales', authMiddleware, offlineSalesRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
@@ -708,6 +714,9 @@ async function ensureInventorySchema() {
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             CREATE INDEX IF NOT EXISTS shopify_variants_product_idx ON shopify_variants (shopify_product_id);
+            -- What Shopify sells it for. An offline sale starts from this and may be discounted,
+            -- so the shop price is worth having beside the one actually charged.
+            ALTER TABLE shopify_variants ADD COLUMN IF NOT EXISTS price NUMERIC;
 
             -- Printed garments that came back — RTO, refused, undelivered. Not blank stock: the
             -- piece carries a design and can only go out again to an order for that same design
@@ -1011,6 +1020,87 @@ async function ensureMarketingSchema() {
     }
 }
 
+// Shoot samples (Marketing → Samples) and offline sales (its own menu)
+async function ensureSalesSchema() {
+    try {
+        await db.exec(`
+            -- A garment the marketing team needs for a shoot. It is printed like any other, lent
+            -- out, and comes back — which is why it ends on the RTO shelf rather than being written
+            -- off: it is a finished piece that can still go to a customer.
+            CREATE TABLE IF NOT EXISTS marketing_samples (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                ref_no INTEGER,
+                purpose TEXT NOT NULL,
+                shoot_date DATE,
+                requested_for TEXT,                 -- the shoot, campaign or creator it is for
+                -- [{ product, variant, qty, shopify_product_id, shopify_variant_id, blank_type, color, size }]
+                items TEXT,
+                total_qty INTEGER DEFAULT 0,
+                status TEXT DEFAULT 'Pending Approval',
+                notes TEXT,
+                -- Set when the request was filled from the RTO shelf instead of being printed, so
+                -- no blank is ever deducted for it.
+                from_rto BOOLEAN DEFAULT false,
+                approved_by TEXT, approved_at TIMESTAMP,
+                production_at TIMESTAMP,
+                handed_over_at TIMESTAMP,
+                returned_at TIMESTAMP, received_by TEXT,
+                created_by TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS marketing_samples_ref_idx ON marketing_samples (ref_no);
+            CREATE INDEX IF NOT EXISTS marketing_samples_status_idx ON marketing_samples (status);
+
+            -- Sales made off Shopify — at the counter, at an event, over the phone. The products
+            -- are the Shopify catalogue, but the money and the dispatch are ours to record.
+            CREATE TABLE IF NOT EXISTS offline_sales (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                sale_no INTEGER,
+                customer_name TEXT NOT NULL,
+                contact_number TEXT,
+                email TEXT,
+                address TEXT,
+                -- [{ product, variant, qty, unit_price, line_total, shopify_product_id,
+                --    shopify_variant_id, shopify_price, blank_type, color, size }]
+                items TEXT,
+                total_qty INTEGER DEFAULT 0,
+                subtotal NUMERIC DEFAULT 0,
+                discount NUMERIC DEFAULT 0,
+                shipping NUMERIC DEFAULT 0,
+                total NUMERIC DEFAULT 0,
+                status TEXT DEFAULT 'Draft',        -- Draft | Confirmed | In Production | Dispatched | Delivered | Cancelled
+                payment_status TEXT DEFAULT 'Unpaid',
+                -- Cash at the counter and a link sent on WhatsApp are both normal here, so both are
+                -- recorded rather than one being made to look like the other.
+                payment_method TEXT,                -- Cash | UPI | Card | Bank transfer | Payment link
+                payment_ref TEXT,
+                paid_amount NUMERIC DEFAULT 0,
+                paid_at TIMESTAMP,
+                razorpay_payment_link_id TEXT,
+                razorpay_short_url TEXT,
+                mot TEXT,                           -- courier, Porter, self pickup
+                tracking_link TEXT,
+                awb TEXT,
+                dispatch_date DATE,
+                notes TEXT,
+                created_by TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS offline_sales_no_idx ON offline_sales (sale_no);
+            CREATE INDEX IF NOT EXISTS offline_sales_status_idx ON offline_sales (status);
+            CREATE INDEX IF NOT EXISTS offline_sales_date_idx ON offline_sales (created_at DESC);
+        `);
+        await db.exec(`
+            ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_offline_sales BOOLEAN DEFAULT false;
+            ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_edit_offline_sales BOOLEAN DEFAULT false;
+        `);
+    } catch (err) {
+        console.error('ensureSalesSchema error:', err.message);
+    }
+}
+
 // Start Server
 app.listen(PORT, async () => {
     console.log(`🚀 Normless CRM Backend running on http://localhost:${PORT}`);
@@ -1025,6 +1115,7 @@ app.listen(PORT, async () => {
     await ensureOrderAuditSchema();
     // Ensure influencer marketing schema
     await ensureMarketingSchema();
+    await ensureSalesSchema();
 
     // START AUTO-SYNC IMMEDIATELY (no user action needed!)
     startAutoSync();

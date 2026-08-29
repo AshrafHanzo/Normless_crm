@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { useApi, useAuth } from '../App'
 import { useToast } from '../components/Toast'
 import Icon from '../components/Icon'
+import SamplesTab from './marketing/SamplesTab'
 import ComboInput from '../components/ComboInput'
 import AutoTextarea from '../components/AutoTextarea'
 import useDirtyGuard from '../hooks/useDirtyGuard'
@@ -575,7 +576,8 @@ export default function Marketing() {
           <h1>Marketing</h1>
           <p style={{ color: 'var(--text-muted)' }}>Influencer collabs and the product seeding behind them</p>
         </div>
-        <button className="btn btn-primary" onClick={() => (tab === 'orders' ? setOrderTarget('new') : setInfluencerTarget('new'))}>
+        <button className="btn btn-primary" style={{ display: tab === 'samples' ? 'none' : undefined }}
+          onClick={() => (tab === 'orders' ? setOrderTarget('new') : setInfluencerTarget('new'))}>
           <Icon name="plus" size={15} /> {tab === 'orders' ? 'New order' : 'New influencer'}
         </button>
       </div>
@@ -583,9 +585,11 @@ export default function Marketing() {
       <div className="scan-tabs" style={{ marginBottom: 16 }}>
         <button className={tab === 'orders' ? 'active' : ''} onClick={() => setTab('orders')}>📦 Orders</button>
         <button className={tab === 'influencers' ? 'active' : ''} onClick={() => setTab('influencers')}>⭐ Influencers</button>
+        <button className={tab === 'samples' ? 'active' : ''} onClick={() => setTab('samples')}>📸 Shoot samples</button>
       </div>
 
-      <div className="kpi-grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
+      {/* Influencer figures, which say nothing about a shoot sample — that tab brings its own. */}
+      <div className="kpi-grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)', display: tab === 'samples' ? 'none' : undefined }}>
         <div className="kpi-card">
           <div className="kpi-head"><div className="kpi-icon">⭐</div></div>
           <div className="kpi-value">{activeCount}</div><div className="kpi-label">Active influencers</div>
@@ -604,159 +608,165 @@ export default function Marketing() {
         </div>
       </div>
 
-      <div className="filters-row filters-row-search">
-        <div className="search-bar"><span className="search-icon" />
-          <input placeholder={tab === 'orders' ? 'Search name, item, AWB or order number…' : 'Search name, profile, location…'}
-            value={term} onChange={e => setTerm(e.target.value)} /></div>
-      </div>
-      <div className="filters-row">
-        {tab === 'orders' ? (
-          <select value={status} onChange={e => applyStatus(e.target.value)} style={{ width: 'auto' }}>
-            <option value="">All statuses</option>
-            {(meta?.statuses || []).map(s => <option key={s}>{s}</option>)}
-          </select>
-        ) : (
-          <select value={collab} onChange={e => applyCollab(e.target.value)} style={{ width: 'auto' }}>
-            <option value="">All collab types</option>
-            {(meta?.collabTypes || []).map(c => <option key={c}>{c}</option>)}
-          </select>
-        )}
-      </div>
+      {/* Samples are their own thing entirely — their own filters, table and actions —
+          so the shared search and list below are skipped rather than left empty. */}
+      {tab === 'samples' ? <SamplesTab /> : (
+        <>
+        <div className="filters-row filters-row-search">
+          <div className="search-bar"><span className="search-icon" />
+            <input placeholder={tab === 'orders' ? 'Search name, item, AWB or order number…' : 'Search name, profile, location…'}
+              value={term} onChange={e => setTerm(e.target.value)} /></div>
+        </div>
+        <div className="filters-row">
+          {tab === 'orders' ? (
+            <select value={status} onChange={e => applyStatus(e.target.value)} style={{ width: 'auto' }}>
+              <option value="">All statuses</option>
+              {(meta?.statuses || []).map(s => <option key={s}>{s}</option>)}
+            </select>
+          ) : (
+            <select value={collab} onChange={e => applyCollab(e.target.value)} style={{ width: 'auto' }}>
+              <option value="">All collab types</option>
+              {(meta?.collabTypes || []).map(c => <option key={c}>{c}</option>)}
+            </select>
+          )}
+        </div>
 
-      <div className="data-table-wrapper">
-        {loading ? <div className="loader"><div className="spinner" /></div> : tab === 'orders' ? (
-          sortedOrders.length === 0 ? (
-            <div className="empty-state"><div className="empty-icon">📦</div><p>No influencer orders yet.</p></div>
-          ) : (
-            <>
-            <table className="data-table">
-              <thead><tr>
-                <SortTh label="Ref" col="ref_no" sort={orderSort} onSort={toggleOrder} />
-                <SortTh label="Influencer" col="name" sort={orderSort} onSort={toggleOrder} />
-                <SortTh label="Items" col="items" sort={orderSort} onSort={toggleOrder} />
-                <SortTh label="Qty" col="total_qty" sort={orderSort} onSort={toggleOrder} align="center" />
-                <SortTh label="Date" col="order_date" sort={orderSort} onSort={toggleOrder} />
-                <SortTh label="Status" col="status" sort={orderSort} onSort={toggleOrder} />
-                <SortTh label="Dispatch" col="awb" sort={orderSort} onSort={toggleOrder} />
-                <SortTh label="" />
-              </tr></thead>
-              <tbody>
-                {sortedOrders.map(o => (
-                  <tr key={o.id} onClick={() => setOrderTarget(o)} style={{ cursor: 'pointer' }}>
-                    <td className="cell-primary">
-                      <span className="badge-primary">{o.ref}</span>
-                      {/* Already printed and sitting on the shelf — send that one instead. */}
-                      {!!rto[o.ref] && (
-                        <span className="rto-tag" title={rto[o.ref].map(l => `${l.product_title} ${l.variant} — ${l.available} on the RTO shelf`).join('\n')}>
-                          ↩ RTO
-                        </span>
-                      )}
-                    </td>
-                    <td>
-                      {/* The order carries a snapshot of the creator's details, so reaching the
-                          live profile from here saves a trip through the roster tab. */}
-                      <button type="button" className="link-name" onClick={e => { e.stopPropagation(); openInfluencer(o) }}
-                        title={o.influencer_id ? 'Open this influencer' : 'No influencer linked to this order'}>
-                        {o.name}
-                      </button>
-                      <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 2 }}>
-                        {o.collab_type && <span className={COLLAB_CLASS[o.collab_type] || 'badge-secondary'} style={{ fontSize: 10.5 }}>{o.collab_type}</span>}
-                        {o.profile_url && (
-                          <a className="track-link" href={o.profile_url} target="_blank" rel="noreferrer"
-                            onClick={e => e.stopPropagation()} title="Open their social profile">↗ Profile</a>
+        <div className="data-table-wrapper">
+          {loading ? <div className="loader"><div className="spinner" /></div> : tab === 'orders' ? (
+            sortedOrders.length === 0 ? (
+              <div className="empty-state"><div className="empty-icon">📦</div><p>No influencer orders yet.</p></div>
+            ) : (
+              <>
+              <table className="data-table">
+                <thead><tr>
+                  <SortTh label="Ref" col="ref_no" sort={orderSort} onSort={toggleOrder} />
+                  <SortTh label="Influencer" col="name" sort={orderSort} onSort={toggleOrder} />
+                  <SortTh label="Items" col="items" sort={orderSort} onSort={toggleOrder} />
+                  <SortTh label="Qty" col="total_qty" sort={orderSort} onSort={toggleOrder} align="center" />
+                  <SortTh label="Date" col="order_date" sort={orderSort} onSort={toggleOrder} />
+                  <SortTh label="Status" col="status" sort={orderSort} onSort={toggleOrder} />
+                  <SortTh label="Dispatch" col="awb" sort={orderSort} onSort={toggleOrder} />
+                  <SortTh label="" />
+                </tr></thead>
+                <tbody>
+                  {sortedOrders.map(o => (
+                    <tr key={o.id} onClick={() => setOrderTarget(o)} style={{ cursor: 'pointer' }}>
+                      <td className="cell-primary">
+                        <span className="badge-primary">{o.ref}</span>
+                        {/* Already printed and sitting on the shelf — send that one instead. */}
+                        {!!rto[o.ref] && (
+                          <span className="rto-tag" title={rto[o.ref].map(l => `${l.product_title} ${l.variant} — ${l.available} on the RTO shelf`).join('\n')}>
+                            ↩ RTO
+                          </span>
                         )}
-                      </div>
-                    </td>
-                    <td data-label="Items" style={{ fontSize: 12.5 }}>
-                      {summarise(o.items).map((s, i) => <div key={i}>{s}</div>)}
-                    </td>
-                    <td data-label="Qty" style={{ textAlign: 'center', fontWeight: 700 }}>{o.total_qty}</td>
-                    <td data-label="Date" style={{ fontSize: 12.5, color: 'var(--text-muted)' }}>{day(o.order_date)}</td>
-                    <td data-label="Status">
-                      <span className={`status-badge ${STATUS_CLASS[o.status] || 'pending'}`}>{o.status}</span>
-                      {o.status === 'Pending Approval' && canApprove && (
-                        <button className="mini-btn approve-btn" onClick={e => { e.stopPropagation(); setApproval(o, true) }}>✓ Approve</button>
-                      )}
-                      {o.status === 'Dispatch Pending' && canApprove && (
-                        <button className="mini-btn" style={{ marginTop: 5 }} onClick={e => { e.stopPropagation(); setApproval(o, false) }}>↩ Send back</button>
-                      )}
-                      {o.approved_by && o.status !== 'Pending Approval' && (
-                        <div style={{ fontSize: 10.5, color: 'var(--text-muted)', marginTop: 3 }}>by {o.approved_by}</div>
-                      )}
-                    </td>
-                    <td data-label="Dispatch" style={{ fontSize: 12 }}>
-                      {o.shipping_partner ? <div>{o.shipping_partner}</div> : <span style={{ color: 'var(--text-muted)' }}>—</span>}
-                      {o.awb && (o.tracking_link
-                        ? <a className="track-link" href={o.tracking_link} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()}>{o.awb}</a>
-                        : <div style={{ color: 'var(--text-muted)' }}>{o.awb}</div>)}
-                      {o.shopify_order_number && <div style={{ color: 'var(--text-muted)' }}>{o.shopify_order_number}</div>}
-                    </td>
-                    <td className="cell-actions" onClick={e => e.stopPropagation()}>
-                      <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-                        <button className="btn-icon" title="Open" onClick={() => setOrderTarget(o)}><Icon name="edit" size={14} /></button>
-                        {isAdmin && <button className="btn-icon" title="Delete" onClick={() => del('orders', o)} style={{ color: 'var(--danger)' }}><Icon name="trash" size={14} /></button>}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <Pagination table={ordTable} noun="orders" />
-            </>
-          )
-        ) : (
-          sortedInfluencers.length === 0 ? (
-            <div className="empty-state"><div className="empty-icon">⭐</div><p>No influencers yet.</p></div>
-          ) : (
-            <>
-            <table className="data-table">
-              <thead><tr>
-                <SortTh label="Name" col="name" sort={infSort} onSort={toggleInf} />
-                <SortTh label="Type" col="content_type" sort={infSort} onSort={toggleInf} />
-                <SortTh label="Profile" col="profile_url" sort={infSort} onSort={toggleInf} />
-                <SortTh label="Collab" col="collab_type" sort={infSort} onSort={toggleInf} />
-                <SortTh label="Location" col="location" sort={infSort} onSort={toggleInf} />
-                <SortTh label="Content" col="total_content" sort={infSort} onSort={toggleInf} align="center" />
-                <SortTh label="Per video" col="payment_per_video" sort={infSort} onSort={toggleInf} />
-                <SortTh label="Orders" col="order_count" sort={infSort} onSort={toggleInf} align="center" />
-                <SortTh label="" />
-              </tr></thead>
-              <tbody>
-                {sortedInfluencers.map(i => (
-                  <tr key={i.id} onClick={() => setInfluencerTarget(i)} style={{ cursor: 'pointer', opacity: i.active ? 1 : 0.55 }}>
-                    <td className="cell-primary">
-                      <div style={{ fontWeight: 600 }}>{i.name}</div>
-                      {!i.active && <span className="badge-secondary" style={{ fontSize: 10 }}>Inactive</span>}
-                    </td>
-                    <td data-label="Type" style={{ fontSize: 12.5 }}>{i.content_type || '—'}</td>
-                    <td data-label="Profile" style={{ fontSize: 12.5 }}>
-                      {i.profile_url
-                        ? <a className="track-link" href={i.profile_url} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()}>{i.handle || 'Profile'}</a>
-                        : '—'}
-                    </td>
-                    <td data-label="Collab"><span className={COLLAB_CLASS[i.collab_type] || 'badge-secondary'}>{i.collab_type}</span></td>
-                    <td data-label="Location" style={{ fontSize: 12.5 }}>{i.location || '—'}</td>
-                    <td data-label="Content" style={{ textAlign: 'center' }}>{i.total_content || 0}</td>
-                    <td data-label="Per video" style={{ fontSize: 12.5 }}>{i.payment_per_video || 'N/A'}</td>
-                    <td data-label="Orders" style={{ textAlign: 'center' }}>{i.order_count || 0}</td>
-                    <td className="cell-actions" onClick={e => e.stopPropagation()}>
-                      <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-                        <button className="btn-icon" title="Send products" onClick={() => setOrderTarget({ ...blankOrder(), influencer_id: i.id, name: i.name, email: i.email || '', contact_number: i.contact_number || '', address: i.address || '', collab_type: i.collab_type, __new: true })}>
-                          <Icon name="truck" size={14} />
+                      </td>
+                      <td>
+                        {/* The order carries a snapshot of the creator's details, so reaching the
+                            live profile from here saves a trip through the roster tab. */}
+                        <button type="button" className="link-name" onClick={e => { e.stopPropagation(); openInfluencer(o) }}
+                          title={o.influencer_id ? 'Open this influencer' : 'No influencer linked to this order'}>
+                          {o.name}
                         </button>
-                        <button className="btn-icon" title="Edit" onClick={() => setInfluencerTarget(i)}><Icon name="edit" size={14} /></button>
-                        {isAdmin && <button className="btn-icon" title="Delete" onClick={() => del('influencers', i)} style={{ color: 'var(--danger)' }}><Icon name="trash" size={14} /></button>}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <Pagination table={infTable} noun="influencers" />
-            </>
-          )
-        )}
-      </div>
+                        <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 2 }}>
+                          {o.collab_type && <span className={COLLAB_CLASS[o.collab_type] || 'badge-secondary'} style={{ fontSize: 10.5 }}>{o.collab_type}</span>}
+                          {o.profile_url && (
+                            <a className="track-link" href={o.profile_url} target="_blank" rel="noreferrer"
+                              onClick={e => e.stopPropagation()} title="Open their social profile">↗ Profile</a>
+                          )}
+                        </div>
+                      </td>
+                      <td data-label="Items" style={{ fontSize: 12.5 }}>
+                        {summarise(o.items).map((s, i) => <div key={i}>{s}</div>)}
+                      </td>
+                      <td data-label="Qty" style={{ textAlign: 'center', fontWeight: 700 }}>{o.total_qty}</td>
+                      <td data-label="Date" style={{ fontSize: 12.5, color: 'var(--text-muted)' }}>{day(o.order_date)}</td>
+                      <td data-label="Status">
+                        <span className={`status-badge ${STATUS_CLASS[o.status] || 'pending'}`}>{o.status}</span>
+                        {o.status === 'Pending Approval' && canApprove && (
+                          <button className="mini-btn approve-btn" onClick={e => { e.stopPropagation(); setApproval(o, true) }}>✓ Approve</button>
+                        )}
+                        {o.status === 'Dispatch Pending' && canApprove && (
+                          <button className="mini-btn" style={{ marginTop: 5 }} onClick={e => { e.stopPropagation(); setApproval(o, false) }}>↩ Send back</button>
+                        )}
+                        {o.approved_by && o.status !== 'Pending Approval' && (
+                          <div style={{ fontSize: 10.5, color: 'var(--text-muted)', marginTop: 3 }}>by {o.approved_by}</div>
+                        )}
+                      </td>
+                      <td data-label="Dispatch" style={{ fontSize: 12 }}>
+                        {o.shipping_partner ? <div>{o.shipping_partner}</div> : <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                        {o.awb && (o.tracking_link
+                          ? <a className="track-link" href={o.tracking_link} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()}>{o.awb}</a>
+                          : <div style={{ color: 'var(--text-muted)' }}>{o.awb}</div>)}
+                        {o.shopify_order_number && <div style={{ color: 'var(--text-muted)' }}>{o.shopify_order_number}</div>}
+                      </td>
+                      <td className="cell-actions" onClick={e => e.stopPropagation()}>
+                        <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                          <button className="btn-icon" title="Open" onClick={() => setOrderTarget(o)}><Icon name="edit" size={14} /></button>
+                          {isAdmin && <button className="btn-icon" title="Delete" onClick={() => del('orders', o)} style={{ color: 'var(--danger)' }}><Icon name="trash" size={14} /></button>}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <Pagination table={ordTable} noun="orders" />
+              </>
+            )
+          ) : (
+            sortedInfluencers.length === 0 ? (
+              <div className="empty-state"><div className="empty-icon">⭐</div><p>No influencers yet.</p></div>
+            ) : (
+              <>
+              <table className="data-table">
+                <thead><tr>
+                  <SortTh label="Name" col="name" sort={infSort} onSort={toggleInf} />
+                  <SortTh label="Type" col="content_type" sort={infSort} onSort={toggleInf} />
+                  <SortTh label="Profile" col="profile_url" sort={infSort} onSort={toggleInf} />
+                  <SortTh label="Collab" col="collab_type" sort={infSort} onSort={toggleInf} />
+                  <SortTh label="Location" col="location" sort={infSort} onSort={toggleInf} />
+                  <SortTh label="Content" col="total_content" sort={infSort} onSort={toggleInf} align="center" />
+                  <SortTh label="Per video" col="payment_per_video" sort={infSort} onSort={toggleInf} />
+                  <SortTh label="Orders" col="order_count" sort={infSort} onSort={toggleInf} align="center" />
+                  <SortTh label="" />
+                </tr></thead>
+                <tbody>
+                  {sortedInfluencers.map(i => (
+                    <tr key={i.id} onClick={() => setInfluencerTarget(i)} style={{ cursor: 'pointer', opacity: i.active ? 1 : 0.55 }}>
+                      <td className="cell-primary">
+                        <div style={{ fontWeight: 600 }}>{i.name}</div>
+                        {!i.active && <span className="badge-secondary" style={{ fontSize: 10 }}>Inactive</span>}
+                      </td>
+                      <td data-label="Type" style={{ fontSize: 12.5 }}>{i.content_type || '—'}</td>
+                      <td data-label="Profile" style={{ fontSize: 12.5 }}>
+                        {i.profile_url
+                          ? <a className="track-link" href={i.profile_url} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()}>{i.handle || 'Profile'}</a>
+                          : '—'}
+                      </td>
+                      <td data-label="Collab"><span className={COLLAB_CLASS[i.collab_type] || 'badge-secondary'}>{i.collab_type}</span></td>
+                      <td data-label="Location" style={{ fontSize: 12.5 }}>{i.location || '—'}</td>
+                      <td data-label="Content" style={{ textAlign: 'center' }}>{i.total_content || 0}</td>
+                      <td data-label="Per video" style={{ fontSize: 12.5 }}>{i.payment_per_video || 'N/A'}</td>
+                      <td data-label="Orders" style={{ textAlign: 'center' }}>{i.order_count || 0}</td>
+                      <td className="cell-actions" onClick={e => e.stopPropagation()}>
+                        <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                          <button className="btn-icon" title="Send products" onClick={() => setOrderTarget({ ...blankOrder(), influencer_id: i.id, name: i.name, email: i.email || '', contact_number: i.contact_number || '', address: i.address || '', collab_type: i.collab_type, __new: true })}>
+                            <Icon name="truck" size={14} />
+                          </button>
+                          <button className="btn-icon" title="Edit" onClick={() => setInfluencerTarget(i)}><Icon name="edit" size={14} /></button>
+                          {isAdmin && <button className="btn-icon" title="Delete" onClick={() => del('influencers', i)} style={{ color: 'var(--danger)' }}><Icon name="trash" size={14} /></button>}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <Pagination table={infTable} noun="influencers" />
+              </>
+            )
+          )}
+        </div>
+        </>
+      )}
 
       {influencerTarget && (
         <InfluencerDrawer target={influencerTarget} meta={meta} apiFetch={apiFetch} toast={toast}

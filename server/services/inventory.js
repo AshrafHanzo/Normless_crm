@@ -79,12 +79,14 @@ async function refreshProductCache() {
             // Every variant is cached, blank-backed or not: an RTO piece belongs to a design, and
             // a design with no blank behind it (a cap, an accessory) can still come back.
             await db.query(
-                `INSERT INTO shopify_variants (variant_id, shopify_product_id, variant, color, size, updated_at)
-                 VALUES ($1,$2,$3,$4,$5,CURRENT_TIMESTAMP)
+                `INSERT INTO shopify_variants (variant_id, shopify_product_id, variant, color, size, price, updated_at)
+                 VALUES ($1,$2,$3,$4,$5,$6,CURRENT_TIMESTAMP)
                  ON CONFLICT (variant_id) DO UPDATE SET
                    shopify_product_id = excluded.shopify_product_id, variant = excluded.variant,
-                   color = excluded.color, size = excluded.size, updated_at = CURRENT_TIMESTAMP`,
-                [v.id, p.id, v.title, parts?.color || null, parts?.size || null]);
+                   color = excluded.color, size = excluded.size, price = excluded.price,
+                   updated_at = CURRENT_TIMESTAMP`,
+                [v.id, p.id, v.title, parts?.color || null, parts?.size || null,
+                    v.price != null ? Number(v.price) : null]);
             // Record every colour/size this blank is sold in, so the grid can show a cell to count
             // into before any stock exists.
             if (blank && parts) {
@@ -562,6 +564,202 @@ async function applyMarketingSince(since) {
 }
 
 /* ------------------------------------------------------------------------------------------
+ * Shoot samples and offline sales
+ *
+ * Both draw on the same shelf as everything else, and both go through the same movement engine, so
+ * the only thing either has to decide is when a garment counts as printed.
+ * ---------------------------------------------------------------------------------------- */
+
+/** Marketing's item shape → the line-item shape the blank resolver reads. */
+function sampleLines(row) {
+    const items = typeof row.items === 'string' ? (() => { try { return JSON.parse(row.items || '[]'); } catch { return []; } })() : (row.items || []);
+    return items.map(it => ({
+        title: it.product, quantity: it.qty, variant: it.variant,
+        shopify_product_id: it.shopify_product_id, shopify_variant_id: it.shopify_variant_id,
+    }));
+}
+
+/**
+ * A shoot sample holds its blank from the moment it is printed.
+ *
+ * Not when the request is raised — most are approved days later and some never are — and never at
+ * all if it was filled from the RTO shelf, since in that case nothing is made.
+ */
+function sampleHoldState(row) {
+    if (row.from_rto) return { hold: false };
+    return { hold: ['In Production', 'With Marketing', 'Returned'].includes(row.status || '') };
+}
+
+const sampleRef = (id) => `sample:${id}`;
+
+/** Apply one sample request to blank stock. A no-op for requests that never reach production. */
+async function applySampleRequest(row) {
+    const state = sampleHoldState(row);
+    const ref = sampleRef(row.id);
+    const already = await db.query('SELECT 1 FROM inventory_movements WHERE source_ref LIKE $1 LIMIT 1', [`${ref}:%`]);
+    if (!state.hold && !already.rows.length) return { changed: 0, deducted: [], unmapped: [] };
+
+    const index = await productIndex();
+    const pseudo = {
+        shopify_id: ref,
+        order_number: row.ref_no ? `SH${String(row.ref_no).padStart(3, '0')}` : `SH#${row.id}`,
+        line_items_json: JSON.stringify(sampleLines(row)),
+    };
+    const { wanted, unmapped } = deductionsFor(pseudo, index);
+    let changed = 0;
+    await db.transaction(async (tx) => { changed = await applyOrder(tx, pseudo, index, state); });
+    return {
+        changed,
+        deducted: state.hold ? [...wanted.values()].map(w => ({ blank_type: w.blank_type, color: w.color, size: w.size, qty: w.qty })) : [],
+        released: !state.hold,
+        unmapped: [...unmapped.values()].map(u => ({ product: u.title, variant: u.variant, reason: u.reason })),
+    };
+}
+
+/** Forget a request's movements, giving back anything still held. Used on delete. */
+async function releaseSampleRequest(id) {
+    const ref = sampleRef(id);
+    return db.transaction(async (tx) => {
+        const rows = (await tx.query(
+            'SELECT id, item_id, delta FROM inventory_movements WHERE source_ref LIKE $1', [`${ref}:%`])).rows;
+        for (const m of rows) {
+            if (m.delta !== 0) {
+                await tx.query('UPDATE inventory_items SET qty = qty - $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2', [m.delta, m.item_id]);
+            }
+            await tx.query('DELETE FROM inventory_movements WHERE id = $1', [m.id]);
+        }
+        await tx.query('DELETE FROM inventory_unmapped WHERE source_ref LIKE $1', [`${ref}:%`]);
+        return rows.length;
+    });
+}
+
+/**
+ * Take a piece off the RTO shelf for a shoot, without touching blank stock.
+ *
+ * Unlike sending one to a customer order, there is no blank to credit: the sample never deducted
+ * one, because it was never printed. The garment simply moves from the shelf to the shoot, and is
+ * put back on the shelf when it returns.
+ */
+async function takeRtoForSample(rtoId, qty, ref, user) {
+    const n = parseInt(qty, 10) || 1;
+    return db.transaction(async (tx) => {
+        const row = (await tx.query('SELECT * FROM inventory_rto WHERE id = $1 FOR UPDATE', [rtoId])).rows[0];
+        if (!row) return { error: 'That shelf entry no longer exists', status: 404 };
+        const available = row.qty - row.qty_used - row.qty_written_off;
+        if (n > available) return { error: `Only ${available} left on the shelf`, status: 400 };
+
+        await tx.query('UPDATE inventory_rto SET qty_used = qty_used + $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2', [n, row.id]);
+        await tx.query(
+            `INSERT INTO inventory_rto_events (rto_id, kind, qty, order_number, note, created_by)
+             VALUES ($1,'used',$2,$3,'Lent for a shoot — no blank was spent',$4)`,
+            [row.id, n, ref, user || null]);
+        return { product_title: row.product_title, variant: row.variant, qty: n };
+    });
+}
+
+/**
+ * A returned sample goes onto the RTO shelf.
+ *
+ * It is a finished garment that has been worn for photographs and can still be sold, which is what
+ * the shelf holds. No blank moves: the one spent printing it is still spent.
+ */
+async function shelveSampleReturn(row, user) {
+    const items = typeof row.items === 'string' ? (() => { try { return JSON.parse(row.items || '[]'); } catch { return []; } })() : (row.items || []);
+    const ref = row.ref_no ? `SH${String(row.ref_no).padStart(3, '0')}` : `SH#${row.id}`;
+    const added = [];
+    for (const it of items) {
+        const qty = parseInt(it.qty, 10) || 0;
+        if (qty <= 0 || !it.product) continue;
+        const parts = splitVariant(it.variant);
+        const r = await db.query(
+            `INSERT INTO inventory_rto (shopify_product_id, variant_id, product_title, variant, color, size,
+                                        blank_type, qty, source_order_number, source_ref, reason, created_by)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'Back from a shoot',$11)
+             ON CONFLICT (source_ref) WHERE source_ref IS NOT NULL DO NOTHING RETURNING id`,
+            [it.shopify_product_id || null, it.shopify_variant_id || null, it.product, it.variant || null,
+                it.color || parts?.color || null, it.size || parts?.size || null, it.blank_type || null,
+                qty, ref, `${sampleRef(row.id)}:${it.shopify_variant_id || it.product}`, user || null]);
+        if (!r.rows[0]) continue;
+        await db.query(
+            `INSERT INTO inventory_rto_events (rto_id, kind, qty, order_number, note, created_by)
+             VALUES ($1,'in',$2,$3,'Returned from a shoot',$4)`, [r.rows[0].id, qty, ref, user || null]);
+        added.push({ product: it.product, variant: it.variant, qty });
+    }
+    return { added };
+}
+
+/**
+ * An offline sale holds its blanks from the moment it stops being a draft.
+ *
+ * Unlike a bulk run there is no production stage to wait for — the garment is spoken for the
+ * instant the sale is real, and most are handed over the same day. A cancelled sale gives them
+ * back unless it had already been dispatched, in which case the garment has gone.
+ */
+function offlineHoldState(row) {
+    const status = row.status || 'Draft';
+    if (status === 'Cancelled') {
+        if (row.dispatch_date || row.awb) {
+            return { hold: true, needs_review: true,
+                review_reason: 'Offline sale cancelled after it was dispatched — the garment has gone. Adjust by hand if it came back.' };
+        }
+        return { hold: false };
+    }
+    return { hold: status !== 'Draft' };
+}
+
+const offlineRef = (id) => `offline:${id}`;
+
+/** Marketing and offline sales share an item shape; both read as line items the same way. */
+function offlineLines(row) {
+    const items = typeof row.items === 'string' ? (() => { try { return JSON.parse(row.items || '[]'); } catch { return []; } })() : (row.items || []);
+    return items.map(it => ({
+        title: it.product, quantity: it.qty, variant: it.variant,
+        shopify_product_id: it.shopify_product_id, shopify_variant_id: it.shopify_variant_id,
+    }));
+}
+
+async function applyOfflineSale(row) {
+    const state = offlineHoldState(row);
+    const ref = offlineRef(row.id);
+    const already = await db.query('SELECT 1 FROM inventory_movements WHERE source_ref LIKE $1 LIMIT 1', [`${ref}:%`]);
+    if (!state.hold && !already.rows.length) return { changed: 0, deducted: [], unmapped: [] };
+
+    const index = await productIndex();
+    const pseudo = {
+        shopify_id: ref,
+        order_number: row.sale_no ? `OS${String(row.sale_no).padStart(4, '0')}` : `OS#${row.id}`,
+        line_items_json: JSON.stringify(offlineLines(row)),
+    };
+    const { wanted, unmapped } = deductionsFor(pseudo, index);
+    let changed = 0;
+    await db.transaction(async (tx) => { changed = await applyOrder(tx, pseudo, index, state); });
+    return {
+        changed,
+        deducted: state.hold ? [...wanted.values()].map(w => ({ blank_type: w.blank_type, color: w.color, size: w.size, qty: w.qty })) : [],
+        released: !state.hold,
+        needs_review: !!state.needs_review,
+        unmapped: [...unmapped.values()].map(u => ({ product: u.title, variant: u.variant, reason: u.reason })),
+    };
+}
+
+/** Forget a sale's movements, giving back anything still held. Used on delete. */
+async function releaseOfflineSale(id) {
+    const ref = offlineRef(id);
+    return db.transaction(async (tx) => {
+        const rows = (await tx.query(
+            'SELECT id, item_id, delta FROM inventory_movements WHERE source_ref LIKE $1', [`${ref}:%`])).rows;
+        for (const m of rows) {
+            if (m.delta !== 0) {
+                await tx.query('UPDATE inventory_items SET qty = qty - $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2', [m.delta, m.item_id]);
+            }
+            await tx.query('DELETE FROM inventory_movements WHERE id = $1', [m.id]);
+        }
+        await tx.query('DELETE FROM inventory_unmapped WHERE source_ref LIKE $1', [`${ref}:%`]);
+        return rows.length;
+    });
+}
+
+/* ------------------------------------------------------------------------------------------
  * RTO — printed garments that came back
  *
  * These are not blanks. A returned "Natty Forever / Black / L" can only go out again to another
@@ -935,6 +1133,8 @@ module.exports = {
     refreshProductCache, productIndex, blankTypeFor, splitVariant, safeItems,
     deductionsFor, holdState, applyOrder, applyOrders, applySince, setStock,
     marketingHoldState, applyMarketingOrder, releaseMarketingOrder, applyMarketingSince,
+    sampleHoldState, applySampleRequest, releaseSampleRequest, takeRtoForSample, shelveSampleReturn,
+    offlineHoldState, applyOfflineSale, releaseOfflineSale,
     crewfitHoldState, crewfitBlankFor, parseSizeBreakdown, normSize, crewfitDeductions,
     applyCrewfitOrder, releaseCrewfitOrder, applyCrewfitSince,
     normVariant, moveBlank, rtoAvailable, rtoMatches, rtoAlertCount, rtoForOrderNumber, RTO_MATCH_DAYS,

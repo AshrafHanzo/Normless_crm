@@ -21,6 +21,7 @@ const PERM_MAP = {
   inventory: 'can_view_inventory', inventory_edit: 'can_edit_inventory',
   marketing: 'can_view_marketing', marketing_dispatch: 'can_dispatch_marketing',
   marketing_approve: 'can_approve_marketing',
+  offline_sales: 'can_view_offline_sales', offline_sales_edit: 'can_edit_offline_sales',
 };
 const PERM_KEYS = Object.keys(PERM_MAP);
 const PERM_COLUMNS = Object.values(PERM_MAP);

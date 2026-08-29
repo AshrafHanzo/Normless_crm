@@ -29,6 +29,7 @@ import CrewfitVendorOrders from './pages/crewfit/CrewfitVendorOrders'
 import CrewfitInvoices from './pages/crewfit/CrewfitInvoices'
 import CrewfitActivity from './pages/crewfit/CrewfitActivity'
 import Inventory from './pages/Inventory'
+import OfflineSales from './pages/OfflineSales'
 
 // API base. In dev, VITE_API_URL (from .env.development.local) points at the
 // production backend + Postgres so previews use the real database.
@@ -167,6 +168,7 @@ function App() {
             <Route path="/marketing" element={<ProtectedRoute permission="can_view_marketing"><AppLayout><Marketing /></AppLayout></ProtectedRoute>} />
             <Route path="/invoices" element={<ProtectedRoute permission="can_view_invoices"><AppLayout><Invoices /></AppLayout></ProtectedRoute>} />
             <Route path="/inventory" element={<ProtectedRoute permission="can_view_inventory"><AppLayout><Inventory /></AppLayout></ProtectedRoute>} />
+            <Route path="/offline-sales" element={<ProtectedRoute permission="can_view_offline_sales"><AppLayout><OfflineSales /></AppLayout></ProtectedRoute>} />
             <Route path="/settings" element={<ProtectedRoute permission="can_sync_data"><AppLayout><Settings /></AppLayout></ProtectedRoute>} />
             <Route path="/admin" element={<AdminRoute><AppLayout><Admin /></AppLayout></AdminRoute>} />
             <Route path="/profile" element={<ProtectedRoute><AppLayout><Profile /></AppLayout></ProtectedRoute>} />

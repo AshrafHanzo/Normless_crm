@@ -14,6 +14,8 @@ const GROUPS = [
     { key: 'invoices', label: 'Invoices', icon: 'invoice' },
     { key: 'inventory', label: 'Inventory', icon: 'box' },
     { key: 'inventory_edit', label: 'Inventory — can edit', icon: 'edit', sub: 'inventory' },
+    { key: 'offline_sales', label: 'Offline Sales', icon: 'card' },
+    { key: 'offline_sales_edit', label: 'Offline Sales — can edit', icon: 'edit', sub: 'offline_sales' },
   ] },
   { brand: 'crewfit', label: 'Crewfit', glyph: 'shirt', pages: [
     { key: 'crewfit_analytics', label: 'Dashboard', icon: 'dashboard' },
@@ -29,17 +31,17 @@ const GROUPS = [
   ] },
 ]
 
-const blankForm = () => ({ username: '', password: '', role: 'operator', normless: true, dashboard: true, customers: true, orders: true, scanner: true, marketing: false, marketing_dispatch: false, marketing_approve: false, invoices: false, crewfit: false, crewfit_analytics: false, crewfit_followups: false, crewfit_orders: false, crewfit_catalog: false, crewfit_calculator: false, crewfit_payments: false, crewfit_customers: false, crewfit_vendors: false, crewfit_invoices: false, crewfit_orders_edit: false, inventory: false, inventory_edit: false, revenue: false })
+const blankForm = () => ({ username: '', password: '', role: 'operator', normless: true, dashboard: true, customers: true, orders: true, scanner: true, marketing: false, marketing_dispatch: false, marketing_approve: false, invoices: false, crewfit: false, crewfit_analytics: false, crewfit_followups: false, crewfit_orders: false, crewfit_catalog: false, crewfit_calculator: false, crewfit_payments: false, crewfit_customers: false, crewfit_vendors: false, crewfit_invoices: false, crewfit_orders_edit: false, inventory: false, inventory_edit: false, offline_sales: false, offline_sales_edit: false, revenue: false })
 const fromUser = (u) => ({
   id: u.id, username: u.username, password: '', role: u.role,
   normless: !!u.can_access_normless, dashboard: !!u.can_view_dashboard, customers: !!u.can_view_customers, orders: !!u.can_view_orders, scanner: !!u.can_scan_orders, invoices: !!u.can_view_invoices,
   marketing: !!u.can_view_marketing, marketing_dispatch: !!u.can_dispatch_marketing, marketing_approve: !!u.can_approve_marketing,
-  crewfit: !!u.can_access_crewfit, crewfit_analytics: !!u.can_view_crewfit_analytics, crewfit_followups: !!u.can_view_crewfit_followups, crewfit_orders: !!u.can_view_crewfit_orders, crewfit_catalog: !!u.can_view_crewfit_catalog, crewfit_calculator: !!u.can_view_crewfit_calculator, crewfit_payments: !!u.can_view_crewfit_payments, crewfit_customers: !!u.can_view_crewfit_customers, crewfit_vendors: !!u.can_view_crewfit_vendors, crewfit_invoices: !!u.can_view_crewfit_invoices, crewfit_orders_edit: !!u.can_edit_crewfit_orders, inventory: !!u.can_view_inventory, inventory_edit: !!u.can_edit_inventory, revenue: !!u.can_view_revenue,
+  crewfit: !!u.can_access_crewfit, crewfit_analytics: !!u.can_view_crewfit_analytics, crewfit_followups: !!u.can_view_crewfit_followups, crewfit_orders: !!u.can_view_crewfit_orders, crewfit_catalog: !!u.can_view_crewfit_catalog, crewfit_calculator: !!u.can_view_crewfit_calculator, crewfit_payments: !!u.can_view_crewfit_payments, crewfit_customers: !!u.can_view_crewfit_customers, crewfit_vendors: !!u.can_view_crewfit_vendors, crewfit_invoices: !!u.can_view_crewfit_invoices, crewfit_orders_edit: !!u.can_edit_crewfit_orders, inventory: !!u.can_view_inventory, inventory_edit: !!u.can_edit_inventory, offline_sales: !!u.can_view_offline_sales, offline_sales_edit: !!u.can_edit_offline_sales, revenue: !!u.can_view_revenue,
 })
 const buildPerms = (f) => {
   // Owner and admin both hold every page; the server short-circuits permission checks for them
   // either way, so these columns are really just kept consistent with the role.
-  if (f.role === 'admin' || f.role === 'owner') return { normless: true, crewfit: true, dashboard: true, customers: true, orders: true, scanner: true, marketing: true, marketing_dispatch: true, marketing_approve: true, invoices: true, crewfit_analytics: true, crewfit_followups: true, crewfit_orders: true, crewfit_catalog: true, crewfit_calculator: true, crewfit_payments: true, crewfit_customers: true, crewfit_vendors: true, crewfit_invoices: true, crewfit_orders_edit: true, inventory: true, inventory_edit: true, revenue: true, sync: f.role === 'owner' }
+  if (f.role === 'admin' || f.role === 'owner') return { normless: true, crewfit: true, dashboard: true, customers: true, orders: true, scanner: true, marketing: true, marketing_dispatch: true, marketing_approve: true, invoices: true, crewfit_analytics: true, crewfit_followups: true, crewfit_orders: true, crewfit_catalog: true, crewfit_calculator: true, crewfit_payments: true, crewfit_customers: true, crewfit_vendors: true, crewfit_invoices: true, crewfit_orders_edit: true, inventory: true, inventory_edit: true, offline_sales: true, offline_sales_edit: true, revenue: true, sync: f.role === 'owner' }
   return {
     normless: !!f.normless, crewfit: !!f.crewfit, sync: false,
     dashboard: !!(f.normless && f.dashboard), customers: !!(f.normless && f.customers), orders: !!(f.normless && f.orders), scanner: !!(f.normless && f.scanner), invoices: !!(f.normless && f.invoices),
@@ -50,7 +52,9 @@ const buildPerms = (f) => {
     crewfit_analytics: !!(f.crewfit && f.crewfit_analytics), crewfit_followups: !!(f.crewfit && f.crewfit_followups), crewfit_orders: !!(f.crewfit && f.crewfit_orders), crewfit_catalog: !!(f.crewfit && f.crewfit_catalog), crewfit_calculator: !!(f.crewfit && f.crewfit_calculator), crewfit_payments: !!(f.crewfit && f.crewfit_payments), crewfit_customers: !!(f.crewfit && f.crewfit_customers), crewfit_vendors: !!(f.crewfit && f.crewfit_vendors), crewfit_invoices: !!(f.crewfit && f.crewfit_invoices),
     // Editing is a sub-permission of seeing the page: it can't be held without it.
     crewfit_orders_edit: !!(f.crewfit && f.crewfit_orders && f.crewfit_orders_edit),
-    inventory: !!(f.normless && f.inventory), inventory_edit: !!(f.normless && f.inventory && f.inventory_edit), revenue: !!f.revenue,
+    inventory: !!(f.normless && f.inventory), inventory_edit: !!(f.normless && f.inventory && f.inventory_edit),
+    offline_sales: !!(f.normless && f.offline_sales), offline_sales_edit: !!(f.normless && f.offline_sales && f.offline_sales_edit),
+    revenue: !!f.revenue,
   }
 }
 
