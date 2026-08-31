@@ -587,7 +587,9 @@ function sampleLines(row) {
  */
 function sampleHoldState(row) {
     if (row.from_rto) return { hold: false };
-    return { hold: ['In Production', 'With Marketing', 'Returned'].includes(row.status || '') };
+    // 'Given as barter' holds for the same reason 'Returned' does: the garment was printed, so the
+    // blank is spent either way. What differs is only where the garment ends up.
+    return { hold: ['In Production', 'With Marketing', 'Returned', 'Given as barter'].includes(row.status || '') };
 }
 
 const sampleRef = (id) => `sample:${id}`;

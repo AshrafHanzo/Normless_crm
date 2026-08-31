@@ -30,7 +30,10 @@ const isAdmin = (req) => req.user?.role === 'owner' || req.user?.role === 'admin
 const canApprove = (req) => hasPermission(req, 'can_approve_marketing');
 
 // The pipeline, in order. A blank is held from the point the garment is actually printed.
-const STATUSES = ['Pending Approval', 'Approved', 'In Production', 'With Marketing', 'Returned', 'Cancelled'];
+// Two ways a request ends: the garment comes back and goes on the shelf, or the model keeps it as
+// the barter for the shoot. Both spend the blank; only one leaves anything behind.
+const STATUSES = ['Pending Approval', 'Approved', 'In Production', 'With Marketing', 'Returned', 'Given as barter', 'Cancelled'];
+const BARTER = 'Given as barter';
 const AWAITING = 'Pending Approval';
 
 const trim = (v) => { const t = String(v ?? '').trim(); return t || null; };
@@ -122,6 +125,7 @@ router.get('/', async (req, res) => {
         in_production: counts.find(c => c.status === 'In Production')?.n || 0,
         out: counts.find(c => c.status === 'With Marketing')?.n || 0,
         returned: counts.find(c => c.status === 'Returned')?.n || 0,
+        bartered: counts.find(c => c.status === BARTER)?.n || 0,
       },
     });
   } catch (err) {
@@ -209,6 +213,10 @@ router.post('/:id/status', async (req, res) => {
       stamps.push(`received_by = $${vals.length + 1}`); vals.push(req.user?.username || null);
       stamps.push('returned_at = CURRENT_TIMESTAMP');
     }
+    if (next === BARTER) {
+      stamps.push(`given_by = $${vals.length + 1}`); vals.push(req.user?.username || null);
+      stamps.push('given_at = CURRENT_TIMESTAMP');
+    }
     vals.push(req.params.id);
 
     const r = await db.query(
@@ -219,7 +227,8 @@ router.post('/:id/status', async (req, res) => {
     const stock = await applyStock(row);
 
     // Back from the shoot: the garments exist, are printed, and can go to a customer — which is
-    // exactly what the RTO shelf is for.
+    // exactly what the RTO shelf is for. A bartered one is deliberately not shelved: it left with
+    // the model, and putting it on the shelf would offer a customer a garment nobody has.
     let shelved = null;
     if (next === 'Returned' && current.status !== 'Returned') {
       try {

@@ -303,6 +303,15 @@ let isSyncing = false;
 function startAutoSync() {
     const intervalSeconds = 30; // Default 30 seconds
 
+    // Two servers syncing into one database is not a duplicate, it is a hazard: both read "this
+    // order has no movement yet", both deduct the blank, and the unique index keeps only one
+    // movement row — a silent double deduction. A dev machine pointed at the production database
+    // therefore needs a way to run the app without becoming a second syncer.
+    if (String(process.env.AUTO_SYNC || '').toLowerCase() === 'off') {
+        console.log('⏸  Auto-sync is OFF (AUTO_SYNC=off) — this server will not pull from Shopify.');
+        return;
+    }
+
     console.log(`⏱️  Starting auto-sync (every ${intervalSeconds} seconds)...`);
 
     autoSyncInterval = setInterval(() => {
@@ -1095,6 +1104,12 @@ async function ensureSalesSchema() {
         await db.exec(`
             ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_offline_sales BOOLEAN DEFAULT false;
             ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_edit_offline_sales BOOLEAN DEFAULT false;
+
+            -- A sample that does not come back: kept by the model as the barter for the shoot.
+            -- Recorded separately from a return because the garment is gone for good — it never
+            -- reaches the RTO shelf, and the blank behind it stays spent.
+            ALTER TABLE marketing_samples ADD COLUMN IF NOT EXISTS given_at TIMESTAMP;
+            ALTER TABLE marketing_samples ADD COLUMN IF NOT EXISTS given_by TEXT;
         `);
     } catch (err) {
         console.error('ensureSalesSchema error:', err.message);

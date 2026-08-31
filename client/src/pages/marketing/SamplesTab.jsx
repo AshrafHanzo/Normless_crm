@@ -14,10 +14,13 @@ const day = (v) => (v ? new Date(v).toLocaleDateString('en-IN', { day: '2-digit'
 const FLOW = ['Pending Approval', 'Approved', 'In Production', 'With Marketing', 'Returned']
 // The stages at which a blank is actually held, which is what decides whether cancelling gives
 // anything back.
-const HOLDS_STOCK = ['In Production', 'With Marketing', 'Returned']
+const HOLDS_STOCK = ['In Production', 'With Marketing', 'Returned', 'Given as barter']
+// A request that has finished, whichever way it finished. Nothing moves it further.
+const BARTER = 'Given as barter'
+const TERMINAL = ['Returned', BARTER, 'Cancelled']
 const STATUS_CLASS = {
   'Pending Approval': 'pending', Approved: 'info', 'In Production': 'warning',
-  'With Marketing': 'info', Returned: 'success', Cancelled: 'danger',
+  'With Marketing': 'info', Returned: 'success', [BARTER]: 'info', Cancelled: 'danger',
 }
 
 const blankItem = () => ({ product: '', variant: '', qty: 1, shopify_product_id: '', shopify_variant_id: '', blank_type: '', color: '', size: '' })
@@ -124,6 +127,13 @@ export default function SamplesTab() {
       details: x.items.map(it => ({ label: it.product, value: `${it.variant || '—'} × ${it.qty}` })),
       confirmLabel: 'Received',
     }),
+    [BARTER]: (x) => ({
+      title: `${x.ref} kept by the model?`,
+      // The whole difference from a return, stated plainly, because the two buttons sit together.
+      message: `The garment goes to ${x.requested_for || 'the model'} as the barter for the shoot and does not come back. Nothing goes onto the RTO shelf, and the blank stays spent — it was used to print this piece.`,
+      details: x.items.map(it => ({ label: it.product, value: `${it.variant || '—'} × ${it.qty}` })),
+      confirmLabel: 'Given as barter',
+    }),
     Cancelled: (x) => ({
       title: `Cancel ${x.ref}?`,
       // Whether anything comes back depends on whether anything was ever taken, so say which.
@@ -188,7 +198,10 @@ export default function SamplesTab() {
   if (!data) return <div className="empty-state"><p>Sample requests could not be loaded.</p></div>
 
   const s = data.summary || {}
-  const nextStage = (status) => FLOW[FLOW.indexOf(status) + 1]
+  // A finished request has no next stage. indexOf returns -1 for anything off the pipeline —
+  // 'Given as barter', 'Cancelled' — and -1 + 1 lands back on the first stage, which offered
+  // "→ Pending Approval" as a way to un-finish a request nobody meant to reopen.
+  const nextStage = (status) => (FLOW.includes(status) ? FLOW[FLOW.indexOf(status) + 1] : undefined)
   const product = (id) => (products || []).find(p => String(p.shopify_id) === String(id))
 
   return (
@@ -196,8 +209,9 @@ export default function SamplesTab() {
       <div className="dash-toolbar">
         <div>
           <p style={{ color: 'var(--text-muted)' }}>
-            Garments borrowed for a shoot. Approved first, then printed — and when they come back
-            they go onto the RTO shelf, because a photographed garment can still be sold.
+            Garments for a shoot. Approved first, then printed — and they end one of two ways: back
+            here, onto the RTO shelf where a customer can still buy them, or kept by the model as
+            the barter for the shoot.
           </p>
         </div>
         <button className="btn btn-primary" onClick={openForm}>
@@ -206,12 +220,15 @@ export default function SamplesTab() {
         </button>
       </div>
 
-      <div className="kpi-grid" style={{ marginBottom: 18 }}>
+      {/* Five, not the app's usual four — a fixed four-column grid would drop the fifth onto a
+          row of its own beside three empty slots. */}
+      <div className="kpi-grid" style={{ marginBottom: 18, gridTemplateColumns: 'repeat(auto-fit, minmax(min(190px, 100%), 1fr))' }}>
         {[
           { icon: 'alert', label: 'Waiting for approval', value: num(s.awaiting) },
           { icon: 'shirt', label: 'In production', value: num(s.in_production) },
           { icon: 'box', label: 'Out with marketing', value: num(s.out) },
           { icon: 'trending', label: 'Returned', value: num(s.returned) },
+          { icon: 'spark', label: 'Given as barter', value: num(s.bartered) },
         ].map(k => (
           <div className="kpi-card" key={k.label}>
             <div className="kpi-head"><div className="kpi-icon"><Icon name={k.icon} size={20} /></div></div>
@@ -265,23 +282,33 @@ export default function SamplesTab() {
                     <td data-label="Shoot">{day(x.shoot_date)}</td>
                     <td data-label="Status">
                       <span className={`status-badge ${STATUS_CLASS[x.status] || 'pending'}`}>{x.status}</span>
+                      {x.status === BARTER && x.requested_for && (
+                        <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>kept by {x.requested_for}</div>
+                      )}
                       {x.approved_by && <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>by {x.approved_by}</div>}
                     </td>
-                    <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-                      {x.status === 'Pending Approval' && data.canApprove && (
-                        <button className="mini-btn mini-btn-active" onClick={() => move(x, 'Approved')}>Approve</button>
-                      )}
-                      {x.status !== 'Pending Approval' && next && (
-                        <button className="mini-btn mini-btn-active" onClick={() => move(x, next)}>
-                          {next === 'Returned' ? 'Mark received' : `→ ${next}`}
-                        </button>
-                      )}
-                      {!['Returned', 'Cancelled'].includes(x.status) && (
-                        <button className="mini-btn" style={{ marginLeft: 6 }} onClick={() => move(x, 'Cancelled')}>Cancel</button>
-                      )}
-                      {isAdmin && (
-                        <button className="mini-btn mini-btn-danger" style={{ marginLeft: 6 }} onClick={() => remove(x)}>Delete</button>
-                      )}
+                    <td className="cell-actions" style={{ textAlign: 'right' }}>
+                      <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                        {x.status === 'Pending Approval' && data.canApprove && (
+                          <button className="mini-btn mini-btn-active" onClick={() => move(x, 'Approved')}>Approve</button>
+                        )}
+                        {x.status !== 'Pending Approval' && next && (
+                          <button className="mini-btn mini-btn-active" onClick={() => move(x, next)}>
+                            {next === 'Returned' ? 'Mark received' : `→ ${next}`}
+                          </button>
+                        )}
+                        {/* Offered beside the return, because at this point it is genuinely one or
+                            the other: the garment comes back, or the model keeps it. */}
+                        {['In Production', 'With Marketing'].includes(x.status) && (
+                          <button className="mini-btn" onClick={() => move(x, BARTER)}>Given as barter</button>
+                        )}
+                        {!TERMINAL.includes(x.status) && (
+                          <button className="mini-btn" onClick={() => move(x, 'Cancelled')}>Cancel</button>
+                        )}
+                        {isAdmin && (
+                          <button className="mini-btn mini-btn-danger" onClick={() => remove(x)}>Delete</button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 )
