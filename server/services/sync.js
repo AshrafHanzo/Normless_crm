@@ -85,7 +85,7 @@ async function syncAll() {
             item.line_items_json = mergeLineItems(item.line_items_json, storedItems.get(item.shopify_id));
             await db.query(`
                 INSERT INTO orders (shopify_id, order_number, customer_shopify_id, total_price, currency, financial_status, fulfillment_status, cancelled_at, line_items_json, created_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                 ON CONFLICT(shopify_id) DO UPDATE SET
                     order_number = excluded.order_number,
                     customer_shopify_id = excluded.customer_shopify_id,
