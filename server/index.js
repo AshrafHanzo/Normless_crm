@@ -1116,6 +1116,27 @@ async function ensureSalesSchema() {
     }
 }
 
+/**
+ * Where the sync remembers what it has already seen.
+ *
+ * One row per fact, not a log: the customer watermark is read on every cycle and only ever holds
+ * one value, so appending to sync_logs would have meant scanning a growing table to answer a
+ * question with a single answer.
+ */
+async function ensureSyncSchema() {
+    try {
+        await db.exec(`
+            CREATE TABLE IF NOT EXISTS sync_state (
+                key TEXT PRIMARY KEY,
+                value TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        `);
+    } catch (err) {
+        console.error('ensureSyncSchema error:', err.message);
+    }
+}
+
 // Start Server
 app.listen(PORT, async () => {
     console.log(`🚀 Normless CRM Backend running on http://localhost:${PORT}`);
@@ -1131,6 +1152,7 @@ app.listen(PORT, async () => {
     // Ensure influencer marketing schema
     await ensureMarketingSchema();
     await ensureSalesSchema();
+    await ensureSyncSchema();
 
     // START AUTO-SYNC IMMEDIATELY (no user action needed!)
     startAutoSync();

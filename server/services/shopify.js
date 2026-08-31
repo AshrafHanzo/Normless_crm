@@ -34,17 +34,25 @@ function sleep(ms) {
 }
 
 /**
- * Fetch all customers with cursor-based pagination
+ * Customers, newest changes first — or all of them.
+ *
+ * `since` (an ISO timestamp) narrows the fetch to customers Shopify has touched since then, which
+ * is nearly always a handful. Refetching all of them on a loop was the whole cost of the sync:
+ * ~27,000 records pulled every five minutes to notice that two had changed. Passing nothing still
+ * fetches everything, which is what the periodic full sweep wants.
  */
-async function fetchAllCustomers() {
+async function fetchAllCustomers(since = null) {
     const allCustomers = [];
     let hasNextPage = true;
     let cursor = null;
+    // Shopify's own search syntax. Inclusive on purpose: the caller overlaps the window rather
+    // than trusting two clocks to agree to the second.
+    const filter = since ? `updated_at:>='${new Date(since).toISOString()}'` : null;
 
     while (hasNextPage) {
         const query = `
-            query ($first: Int!, $after: String) {
-                customers(first: $first, after: $after) {
+            query ($first: Int!, $after: String, $query: String) {
+                customers(first: $first, after: $after, query: $query) {
                     pageInfo {
                         hasNextPage
                         endCursor
@@ -68,7 +76,9 @@ async function fetchAllCustomers() {
             }
         `;
 
-        const variables = { first: 100, after: cursor };
+        // 250 is the connection's maximum. It matters for the full sweep and costs nothing on a
+        // filtered run, which rarely fills one page.
+        const variables = { first: 250, after: cursor, query: filter };
         const data = await shopifyGraphQL(query, variables);
 
         const customers = data.customers.nodes.map(c => ({

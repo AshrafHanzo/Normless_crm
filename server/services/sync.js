@@ -32,8 +32,48 @@ function mergeLineItems(incomingJson, storedJson) {
     }
 }
 
+/* ---------------------------------------------------------------------------------------------
+ * How much of the customer list to ask for
+ *
+ * Customers are the expensive half of a sync by a wide margin — ~27,000 of them against ~2,600
+ * orders — and almost none of them change between one cycle and the next. So the list is fetched
+ * incrementally, from a watermark, and swept in full only occasionally.
+ *
+ * Two safeguards, because an incremental fetch is only as good as its watermark:
+ *  - the window overlaps, so a customer updated in the seconds around a cycle boundary is asked
+ *    for twice rather than missed once. The upsert makes a repeat free.
+ *  - a full sweep runs daily regardless, which heals anything a filter ever failed to return.
+ * ------------------------------------------------------------------------------------------- */
+const CUSTOMER_MARK = 'customers_synced_through';
+const CUSTOMER_SWEEP = 'customers_full_sweep_at';
+const OVERLAP_MS = 10 * 60 * 1000;          // 10 minutes either side of the mark
+const SWEEP_EVERY_MS = 24 * 60 * 60 * 1000; // a full pass once a day
+
+async function readState(key) {
+    try {
+        const r = await db.query('SELECT value FROM sync_state WHERE key = $1', [key]);
+        return r.rows[0]?.value || null;
+    } catch { return null; }   // table not created yet — behave like a first run
+}
+
+async function writeState(key, value) {
+    await db.query(
+        `INSERT INTO sync_state (key, value, updated_at) VALUES ($1,$2,CURRENT_TIMESTAMP)
+         ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP`,
+        [key, value]);
+}
+
+/** The timestamp to fetch customers from, or null to fetch the lot. */
+async function customerSince() {
+    const mark = await readState(CUSTOMER_MARK);
+    if (!mark) return null;                                   // never synced: take everything
+    const sweptAt = await readState(CUSTOMER_SWEEP);
+    if (!sweptAt || Date.now() - Date.parse(sweptAt) > SWEEP_EVERY_MS) return null;
+    return new Date(Date.parse(mark) - OVERLAP_MS).toISOString();
+}
+
 /**
- * Full sync - fetches ALL customers and orders from Shopify
+ * Full sync - orders every cycle, customers incrementally from a watermark
  */
 async function syncAll() {
     const startedAt = new Date().toISOString();
@@ -43,8 +83,12 @@ async function syncAll() {
         console.log('🔄 Starting full sync from Shopify...');
 
         // Sync Customers
-        console.log('📥 Fetching customers...');
-        const customers = await shopify.fetchAllCustomers();
+        const since = await customerSince();
+        // Stamped before the fetch, never after: anything changed while it runs must fall inside
+        // the next window rather than in the gap between them.
+        const customerCutoff = new Date().toISOString();
+        console.log(since ? `📥 Fetching customers changed since ${since}...` : '📥 Fetching all customers (full sweep)...');
+        const customers = await shopify.fetchAllCustomers(since);
 
         for (const item of customers) {
             await db.query(`
@@ -65,7 +109,11 @@ async function syncAll() {
             ]);
         }
 
-        console.log(`✅ Synced ${customers.length} customers`);
+        // Only now, because a fetch that threw must not move the mark past what it never wrote.
+        await writeState(CUSTOMER_MARK, customerCutoff);
+        if (!since) await writeState(CUSTOMER_SWEEP, customerCutoff);
+
+        console.log(`✅ Synced ${customers.length} customers${since ? ' (changed since the last cycle)' : ' — full sweep'}`);
         totalSynced += customers.length;
 
         // Sync Orders
@@ -160,4 +208,6 @@ function getLastSync() {
 }
 
 module.exports = {
-    mergeLineItems, syncAll, getLastSync };
+    mergeLineItems, syncAll, getLastSync,
+    // Exported so the sync's own state can be inspected without running one.
+    customerSince, readState, CUSTOMER_MARK, CUSTOMER_SWEEP };
