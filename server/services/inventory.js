@@ -1007,7 +1007,9 @@ async function openRtoAlerts() {
     const withStock = rows.map(a => {
         const hit = (a.variant_id && index.byVariant.get(String(a.variant_id)))
             || index.byText.get(`${a.shopify_product_id}|${normVariant(a.variant)}`);
-        return { ...a, available: hit ? hit.available : 0 };
+        // Two dates tell the whole story of a notice: when the garment came back, and when an
+        // order turned up that wanted it. `created_at` on the notice is the second one.
+        return { ...a, available: hit ? hit.available : 0, shelf_since: hit ? hit.oldest : null };
     });
     // Read in the order someone would work the list: what can actually be sent first, then by
     // garment so the same design's orders sit together, then oldest order first — an order placed
@@ -1026,7 +1028,8 @@ async function openRtoAlerts() {
 async function rtoSentLog(limit = 300) {
     return (await db.query(
         `SELECT e.id, e.qty, e.order_number, e.created_by, e.created_at,
-                r.product_title, r.variant, r.blank_type, r.color, r.size
+                r.product_title, r.variant, r.blank_type, r.color, r.size,
+                r.created_at AS received_at, r.source_order_number
            FROM inventory_rto_events e JOIN inventory_rto r ON r.id = e.rto_id
           WHERE e.kind = 'used' ORDER BY e.created_at DESC, e.id DESC LIMIT $1`, [limit])).rows;
 }
@@ -1110,12 +1113,16 @@ async function rtoWaiting() {
             groups.set(key, {
                 key, product_title: a.product_title, variant: a.variant, variant_id: a.variant_id,
                 shopify_product_id: a.shopify_product_id, color: a.color, size: a.size,
-                blank_type: a.blank_type, available: a.available, orders: [],
+                blank_type: a.blank_type, available: a.available,
+                shelf_since: a.shelf_since, orders: [],
             });
         }
         groups.get(key).orders.push({
             alert_id: a.id, order_ref: a.order_ref, source: a.source,
             customer: a.customer, order_date: a.order_date, qty: a.qty,
+            // When this order was matched to the shelf, which is not the same as when it was
+            // placed — a piece can come back weeks after the order that wants it.
+            matched_at: a.created_at,
         });
     }
     // Oldest order first within a garment, then the garment with the longest wait at the top.

@@ -8,6 +8,14 @@ import useLocalPager from '../../hooks/useLocalPager'
 
 const num = (v) => new Intl.NumberFormat('en-IN').format(Number(v) || 0)
 const day = (v) => (v ? new Date(v).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit' }) : '—')
+// A match happens minutes after an order lands, so the day alone does not say much about it.
+const stamp = (v) => (v ? new Date(v).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—')
+// How long ago, in the units someone would say out loud.
+const since = (v) => {
+  if (!v) return null
+  const d = Math.floor((Date.now() - new Date(v)) / 86400000)
+  return d <= 0 ? 'today' : d === 1 ? 'yesterday' : `${d} days ago`
+}
 
 const REASONS = ['Undelivered — RTO', 'Refused by customer', 'Address issue', 'Customer return', 'Other']
 
@@ -285,8 +293,9 @@ export default function RtoTab({ onChanged }) {
                 <tr>
                   <th>Design</th><th>Variant</th>
                   <th style={{ textAlign: 'right' }}>On shelf</th>
+                  <th>Back since</th>
                   <th style={{ textAlign: 'right' }}>Orders waiting</th>
-                  <th>Longest wait</th><th></th>
+                  <th>Longest wait</th><th>Matched</th><th></th>
                 </tr>
               </thead>
               <tbody>
@@ -295,6 +304,10 @@ export default function RtoTab({ onChanged }) {
                     <td className="cell-primary">{g.product_title}</td>
                     <td data-label="Variant">{g.variant || '—'}</td>
                     <td data-label="On shelf" style={{ textAlign: 'right', fontWeight: 700 }}>{g.available}</td>
+                    <td data-label="Back since" style={{ fontSize: 12 }}>
+                      {day(g.shelf_since)}
+                      <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{since(g.shelf_since)}</div>
+                    </td>
                     <td data-label="Orders waiting" style={{ textAlign: 'right' }}>
                       {g.orders.length}
                       {g.orders.length > g.available && (
@@ -304,6 +317,14 @@ export default function RtoTab({ onChanged }) {
                     <td data-label="Longest wait">
                       {day(g.orders[0]?.order_date)}
                       <div style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>{g.orders[0]?.order_ref}</div>
+                    </td>
+                    {/* When the shelf and this order were first put together — the moment the
+                        notice appeared, not the moment either of them happened. */}
+                    <td data-label="Matched" style={{ fontSize: 12 }}>
+                      {stamp(g.orders[0]?.matched_at)}
+                      {g.orders.length > 1 && (
+                        <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>first of {g.orders.length}</div>
+                      )}
                     </td>
                     <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                       {canEdit && <button className="mini-btn mini-btn-active" onClick={(e) => { e.stopPropagation(); setPick(g) }}>Choose an order</button>}
@@ -374,7 +395,7 @@ export default function RtoTab({ onChanged }) {
             <thead>
               <tr>
                 <th>Design</th><th>Variant</th><th>Blank behind it</th>
-                <th style={{ textAlign: 'right' }}>Available</th><th>Oldest</th><th></th>
+                <th style={{ textAlign: 'right' }}>Available</th><th>Back since</th><th></th>
               </tr>
             </thead>
             <tbody>
@@ -389,9 +410,11 @@ export default function RtoTab({ onChanged }) {
                       {row.blank_type ? `${row.blank_type} ${row.color} ${row.size}` : 'Not linked to a blank'}
                     </td>
                     <td data-label="Available" style={{ textAlign: 'right', fontWeight: 700 }}>{row.available}</td>
-                    <td data-label="Oldest">
+                    <td data-label="Back since">
                       {day(row.oldest)}
-                      {first?.source_order_number && <div style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>from {first.source_order_number}</div>}
+                      <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                        {since(row.oldest)}{first?.source_order_number ? ` · from ${first.source_order_number}` : ''}
+                      </div>
                     </td>
                     <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                       {canEdit && first && (
@@ -426,7 +449,7 @@ export default function RtoTab({ onChanged }) {
           <div className="data-table-wrapper">
             <table className="data-table">
               <thead>
-                <tr><th>Order</th><th>Garment</th><th>Blank credited</th><th>Sent</th><th>By</th></tr>
+                <tr><th>Order</th><th>Garment</th><th>Blank credited</th><th>Came back</th><th>Sent</th><th>By</th></tr>
               </thead>
               <tbody>
                 {sentPager.slice.map(e => (
@@ -436,7 +459,19 @@ export default function RtoTab({ onChanged }) {
                     <td data-label="Blank credited" style={{ color: 'var(--text-muted)', fontSize: 12.5 }}>
                       {e.blank_type ? `${e.blank_type} ${e.color} ${e.size} +${e.qty}` : '—'}
                     </td>
-                    <td data-label="Sent">{day(e.created_at)}</td>
+                    <td data-label="Came back" style={{ fontSize: 12 }}>
+                      {day(e.received_at)}
+                      {e.source_order_number && <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>from {e.source_order_number}</div>}
+                    </td>
+                    <td data-label="Sent" style={{ fontSize: 12 }}>
+                      {day(e.created_at)}
+                      {/* How long the piece sat on the shelf before it found an order. */}
+                      {e.received_at && (
+                        <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                          after {Math.max(0, Math.round((new Date(e.created_at) - new Date(e.received_at)) / 86400000))} days
+                        </div>
+                      )}
+                    </td>
                     <td data-label="By" style={{ color: 'var(--text-muted)', fontSize: 12 }}>{e.created_by || '—'}</td>
                   </tr>
                 ))}
@@ -460,7 +495,7 @@ export default function RtoTab({ onChanged }) {
           <div className="data-table-wrapper">
             <table className="data-table">
               <thead>
-                <tr><th>Order</th><th>Garment</th><th>Why</th><th>Answered</th><th></th></tr>
+                <tr><th>Order</th><th>Garment</th><th>Why</th><th>Matched</th><th>Answered</th><th></th></tr>
               </thead>
               <tbody>
                 {skipPager.slice.map(h => (
@@ -471,6 +506,7 @@ export default function RtoTab({ onChanged }) {
                     </td>
                     <td data-label="Garment">{h.product_title}<div style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>{h.variant}</div></td>
                     <td data-label="Why" style={{ color: 'var(--text-muted)', fontSize: 12.5 }}>{h.resolution_note || '—'}</td>
+                    <td data-label="Matched" style={{ fontSize: 12 }}>{stamp(h.created_at)}</td>
                     <td data-label="Answered" style={{ fontSize: 12 }}>
                       <div>{day(h.resolved_at)}</div>
                       {h.resolved_by && <div style={{ color: 'var(--text-muted)' }}>{h.resolved_by}</div>}
@@ -514,7 +550,7 @@ export default function RtoTab({ onChanged }) {
                   <th style={{ textAlign: 'right' }}>Out</th>
                   <th style={{ textAlign: 'right' }}>Written off</th>
                   <th style={{ textAlign: 'right' }}>Left</th>
-                  <th>Added</th><th></th>
+                  <th>Received</th><th></th>
                 </tr>
               </thead>
               <tbody>
@@ -528,9 +564,11 @@ export default function RtoTab({ onChanged }) {
                     <td data-label="Out" style={{ textAlign: 'right' }}>{e.qty_used || '—'}</td>
                     <td data-label="Written off" style={{ textAlign: 'right' }}>{e.qty_written_off || '—'}</td>
                     <td data-label="Left" style={{ textAlign: 'right', fontWeight: 700 }}>{e.available}</td>
-                    <td data-label="Added" style={{ fontSize: 12 }}>
+                    <td data-label="Received" style={{ fontSize: 12 }}>
                       <div>{day(e.created_at)}</div>
-                      {e.created_by && <div style={{ color: 'var(--text-muted)' }}>{e.created_by}</div>}
+                      <div style={{ color: 'var(--text-muted)', fontSize: 11 }}>
+                        {since(e.created_at)}{e.created_by ? ` · ${e.created_by}` : ''}
+                      </div>
                     </td>
                     <td style={{ textAlign: 'right' }}>
                       {/* Untouched entries are anyone's to tidy up; once stock has moved it takes
@@ -660,10 +698,11 @@ export default function RtoTab({ onChanged }) {
             <div className="rto-lines">
               {pick.orders.map(o => (
                 <div className="rto-line" key={o.alert_id}>
-                  <span style={{ flex: 1 }}>
+                  <span style={{ flex: 1, textAlign: 'left' }}>
                     <b>{o.order_ref}</b>
-                    <span style={{ color: 'var(--text-muted)' }}> · {day(o.order_date)}</span>
+                    <span style={{ color: 'var(--text-muted)' }}> · ordered {day(o.order_date)}</span>
                     {o.source === 'seeding' && <span className="rto-pill">seeding{o.customer ? ` · ${o.customer}` : ''}</span>}
+                    <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>matched {stamp(o.matched_at)}</div>
                   </span>
                   {canEdit && (
                     <>
