@@ -1043,6 +1043,10 @@ async function rtoSentLog(limit = 300) {
  * The shelf date is the entry the notice was actually about where that is recorded, and otherwise
  * the oldest matching piece that was already on the shelf when the notice was raised — the one it
  * would have been offered.
+ *
+ * Archived notices are left out. Clearing the list has to keep the rows: the match key is what
+ * stops a notice being raised twice, so deleting an answered one would hand the same decision back
+ * a few minutes later as if it had never been made.
  */
 async function rtoAlertHistory(limit = 100) {
     return (await db.query(
@@ -1061,7 +1065,7 @@ async function rtoAlertHistory(limit = 100) {
                 ORDER BY (a.rto_id IS NOT NULL AND r.id = a.rto_id) DESC, r.created_at ASC
                 LIMIT 1
            ) r ON true
-          WHERE a.status <> 'open'
+          WHERE a.status NOT IN ('open', 'archived')
           ORDER BY a.resolved_at DESC NULLS LAST, a.id DESC LIMIT $1`, [limit])).rows;
 }
 
