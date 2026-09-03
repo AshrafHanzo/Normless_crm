@@ -343,8 +343,11 @@ export default function RtoTab({ onChanged }) {
       {!!d.dormant_orders && (
         <p style={{ color: 'var(--text-muted)', fontSize: 12.5, marginBottom: 16 }}>
           {num(d.dormant_orders)} other order{d.dormant_orders === 1 ? '' : 's'} asked for a piece but
-          cannot take one — the garment has gone, or the order is cancelled or on hold
-          {d.parked_orders ? ` (${num(d.parked_orders)} of those)` : ''}. They come back on their own
+          cannot take one
+          {d.shipped_orders ? ` — ${num(d.shipped_orders)} already shipped` : ''}
+          {d.parked_orders ? `${d.shipped_orders ? ',' : ' —'} ${num(d.parked_orders)} cancelled or on hold` : ''}
+          {d.shipped_orders || d.parked_orders ? ', and for the rest ' : ' — '}
+          the garment has gone. A shipped order is finished with; the others come back on their own
           if that changes.
         </p>
       )}

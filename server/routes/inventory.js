@@ -336,12 +336,17 @@ router.get('/rto', async (req, res) => {
         // Nothing to offer: either the garment has gone, or the order has been cancelled or held.
         const dormant = [...new Set(alerts.filter(a => !inv.isActionable(a)).map(a => a.order_ref))]
             .filter(ref => !waitingOrders.has(ref));
+        // Split by why, because the three reasons mean different things to whoever reads the line:
+        // shipped is over and done with, cancelled or held may yet come back, and gone-from-shelf
+        // returns the moment another piece does.
+        const shipped = alerts.filter(a => a.order_shipped && !a.order_cancelled).length;
         const parked = alerts.filter(a => a.order_cancelled || a.order_on_hold).length;
 
         res.json({
             shelf, entries, waiting, history, sent,
             dormant_orders: dormant.length,
             parked_orders: parked,
+            shipped_orders: shipped,
             summary: {
                 pieces: shelf.reduce((n, r) => n + r.available, 0),
                 designs: shelf.length,

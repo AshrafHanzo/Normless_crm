@@ -882,17 +882,14 @@ function matchesForOrder(order, index) {
 /**
  * Orders still worth offering a shelf piece to.
  *
- * Not simply "unfulfilled". An order is marked fulfilled when it is handed over for delivery, and
- * printing happens around that same moment — so an order that has just flipped to fulfilled may
- * still be waiting to be printed. Dropping it from the match right then removes the prompt exactly
- * when it can still save a garment. Recent orders therefore stay in scope either way.
- *
- * Refunded and voided orders are excluded regardless: nothing is going out for those.
+ * Only live ones. A fulfilled order has been handed to the courier — the garment is printed, boxed
+ * and moving, and no piece on this shelf can be part of it any more, so offering one is noise that
+ * buries the orders where the choice is still open. Cancelled, held, refunded and voided are out
+ * for the same reason: nothing is going out for those either.
  */
-const RTO_MATCH_DAYS = 3;
+const SHIPPED = "UPPER(COALESCE(fulfillment_status,'')) IN ('FULFILLED','RESTOCKED')";
 const OPEN_ORDER_SQL = `
-    (UPPER(COALESCE(fulfillment_status,'')) NOT IN ('FULFILLED','RESTOCKED')
-     OR created_at > NOW() - INTERVAL '${RTO_MATCH_DAYS} days')
+    NOT (${SHIPPED})
     AND UPPER(COALESCE(financial_status,'')) NOT IN ('VOIDED','REFUNDED')
     AND cancelled_at IS NULL AND COALESCE(on_hold, false) = false`;
 
@@ -998,7 +995,8 @@ async function openRtoAlerts() {
     // An order can be cancelled or put on hold after its notice was raised, and a piece must not
     // go on being offered to something that is not shipping.
     const rows = (await db.query(
-        `SELECT a.*, (o.cancelled_at IS NOT NULL) AS order_cancelled, COALESCE(o.on_hold, false) AS order_on_hold
+        `SELECT a.*, (o.cancelled_at IS NOT NULL) AS order_cancelled, COALESCE(o.on_hold, false) AS order_on_hold,
+                COALESCE(${SHIPPED.replace(/fulfillment_status/g, 'o.fulfillment_status')}, false) AS order_shipped
            FROM inventory_rto_alerts a
            LEFT JOIN orders o ON a.source = 'shop' AND o.order_number = a.order_ref
           WHERE a.status = 'open' ORDER BY a.created_at DESC LIMIT 300`)).rows;
@@ -1101,7 +1099,15 @@ async function staleRtoAlertCount() {
  * out. Every count on the tab runs through this — the badge, the card and the list disagreeing
  * about the same pile is what made the page impossible to trust.
  */
-const isActionable = (a) => a.available > 0 && !a.order_cancelled && !a.order_on_hold;
+/**
+ * Whether a notice is still worth showing.
+ *
+ * A notice survives its own raising — that is the point of storing it — but only while something
+ * can still be done about it. Once the order ships, is cancelled or goes on hold, or the piece
+ * leaves the shelf, there is no decision left to make and it drops out of the list. It is not
+ * deleted: if the order comes off hold, or another piece comes back, it returns on its own.
+ */
+const isActionable = (a) => a.available > 0 && !a.order_cancelled && !a.order_on_hold && !a.order_shipped;
 
 async function rtoWaiting() {
     const open = await openRtoAlerts();
@@ -1184,7 +1190,7 @@ module.exports = {
     offlineHoldState, applyOfflineSale, releaseOfflineSale, takeRtoPiece, giveBackRtoForRef,
     crewfitHoldState, crewfitBlankFor, parseSizeBreakdown, normSize, crewfitDeductions,
     applyCrewfitOrder, releaseCrewfitOrder, applyCrewfitSince,
-    normVariant, moveBlank, rtoAvailable, rtoMatches, rtoAlertCount, rtoForOrderNumber, RTO_MATCH_DAYS,
+    normVariant, moveBlank, rtoAvailable, rtoMatches, rtoAlertCount, rtoForOrderNumber,
     seedingRtoMatches, SEEDING_OPEN,
     syncRtoAlerts, openRtoAlerts, rtoAlertHistory, resolveRtoAlert, resolveAlertsForOrder,
     staleRtoAlertCount, clearStaleRtoAlerts, rtoWaiting, markOrderNotUsed, rtoSentLog, isActionable,
