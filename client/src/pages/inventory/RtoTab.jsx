@@ -498,7 +498,13 @@ export default function RtoTab({ onChanged }) {
           <div className="data-table-wrapper">
             <table className="data-table">
               <thead>
-                <tr><th>Order</th><th>Garment</th><th>Why</th><th>Matched</th><th>Answered</th><th></th></tr>
+                {/* Read left to right, this is the whole decision: the piece came back, an order
+                    turned up, the two were matched, someone answered — and why. */}
+                <tr>
+                  <th>Order</th><th>Garment</th>
+                  <th>Piece came back</th><th>Order placed</th><th>Matched</th>
+                  <th>Answered</th><th>Why</th><th></th>
+                </tr>
               </thead>
               <tbody>
                 {skipPager.slice.map(h => (
@@ -508,12 +514,26 @@ export default function RtoTab({ onChanged }) {
                       {h.source === 'seeding' && <span className="rto-pill">seeding</span>}
                     </td>
                     <td data-label="Garment">{h.product_title}<div style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>{h.variant}</div></td>
-                    <td data-label="Why" style={{ color: 'var(--text-muted)', fontSize: 12.5 }}>{h.resolution_note || '—'}</td>
+                    <td data-label="Piece came back" style={{ fontSize: 12 }}>
+                      <div>{day(h.shelf_received_at)}</div>
+                      {/* How long it had been sitting here when the decision was made — the whole
+                          reason for showing this date beside the others. */}
+                      {h.shelf_received_at && h.resolved_at && (() => {
+                        const d = Math.max(0, Math.round((new Date(h.resolved_at) - new Date(h.shelf_received_at)) / 86400000))
+                        return (
+                          <div style={{ color: 'var(--text-muted)', fontSize: 11 }}>
+                            {d === 0 ? 'answered the same day' : `${d} day${d === 1 ? '' : 's'} on the shelf by then`}
+                          </div>
+                        )
+                      })()}
+                    </td>
+                    <td data-label="Order placed" style={{ fontSize: 12 }}>{day(h.order_date)}</td>
                     <td data-label="Matched" style={{ fontSize: 12 }}>{stamp(h.created_at)}</td>
                     <td data-label="Answered" style={{ fontSize: 12 }}>
-                      <div>{day(h.resolved_at)}</div>
-                      {h.resolved_by && <div style={{ color: 'var(--text-muted)' }}>{h.resolved_by}</div>}
+                      <div>{stamp(h.resolved_at)}</div>
+                      {h.resolved_by && <div style={{ color: 'var(--text-muted)', fontSize: 11 }}>{h.resolved_by}</div>}
                     </td>
+                    <td data-label="Why" style={{ color: 'var(--text-muted)', fontSize: 12.5 }}>{h.resolution_note || '—'}</td>
                     <td style={{ textAlign: 'right' }}>
                       {/* Only a hand-cleared notice can come back; one answered by actually sending
                           a piece is a fact, not a decision to revisit. */}

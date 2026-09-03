@@ -1033,10 +1033,31 @@ async function rtoSentLog(limit = 300) {
 }
 
 /** Answered notices — how often the shelf actually saved a garment, and how often it did not. */
+/**
+ * Answered notices, each carrying the whole story of the decision.
+ *
+ * Four moments make it readable: the piece came back, the order was placed, the two were matched,
+ * and someone answered. Without the first one, "not used" says nothing about whether a garment had
+ * been sitting here a day or a month when the order it could have filled went out freshly printed.
+ *
+ * The shelf date is the entry the notice was actually about where that is recorded, and otherwise
+ * the oldest matching piece that was already on the shelf when the notice was raised — the one it
+ * would have been offered.
+ */
 async function rtoAlertHistory(limit = 100) {
     return (await db.query(
-        `SELECT * FROM inventory_rto_alerts WHERE status <> 'open'
-          ORDER BY resolved_at DESC NULLS LAST, id DESC LIMIT $1`, [limit])).rows;
+        `SELECT a.*,
+                COALESCE(
+                    (SELECT r.created_at FROM inventory_rto r WHERE r.id = a.rto_id),
+                    (SELECT MIN(r.created_at) FROM inventory_rto r
+                      WHERE r.created_at <= a.created_at
+                        AND ((a.variant_id IS NOT NULL AND r.variant_id = a.variant_id)
+                          OR (a.variant_id IS NULL
+                              AND r.product_title = a.product_title
+                              AND COALESCE(r.variant,'') = COALESCE(a.variant,''))))
+                ) AS shelf_received_at
+           FROM inventory_rto_alerts a WHERE a.status <> 'open'
+          ORDER BY a.resolved_at DESC NULLS LAST, a.id DESC LIMIT $1`, [limit])).rows;
 }
 
 /** Record what was done about a notice. */
