@@ -1046,17 +1046,22 @@ async function rtoSentLog(limit = 300) {
  */
 async function rtoAlertHistory(limit = 100) {
     return (await db.query(
-        `SELECT a.*,
-                COALESCE(
-                    (SELECT r.created_at FROM inventory_rto r WHERE r.id = a.rto_id),
-                    (SELECT MIN(r.created_at) FROM inventory_rto r
-                      WHERE r.created_at <= a.created_at
-                        AND ((a.variant_id IS NOT NULL AND r.variant_id = a.variant_id)
-                          OR (a.variant_id IS NULL
-                              AND r.product_title = a.product_title
-                              AND COALESCE(r.variant,'') = COALESCE(a.variant,''))))
-                ) AS shelf_received_at
-           FROM inventory_rto_alerts a WHERE a.status <> 'open'
+        `SELECT a.*, r.created_at AS shelf_received_at, r.source_order_number AS shelf_from_order,
+                r.reason AS shelf_reason, r.created_by AS shelf_logged_by, r.id AS shelf_entry_id
+           FROM inventory_rto_alerts a
+           LEFT JOIN LATERAL (
+               SELECT r.* FROM inventory_rto r
+                WHERE (a.rto_id IS NOT NULL AND r.id = a.rto_id)
+                   OR (a.rto_id IS NULL AND r.created_at <= a.created_at
+                       AND ((a.variant_id IS NOT NULL AND r.variant_id = a.variant_id)
+                         OR (a.variant_id IS NULL
+                             AND r.product_title = a.product_title
+                             AND COALESCE(r.variant,'') = COALESCE(a.variant,''))))
+                -- The recorded piece wins; failing that, the oldest one that was already here.
+                ORDER BY (a.rto_id IS NOT NULL AND r.id = a.rto_id) DESC, r.created_at ASC
+                LIMIT 1
+           ) r ON true
+          WHERE a.status <> 'open'
           ORDER BY a.resolved_at DESC NULLS LAST, a.id DESC LIMIT $1`, [limit])).rows;
 }
 

@@ -42,6 +42,7 @@ export default function RtoTab({ onChanged }) {
   const [damage, setDamage] = useState(null)   // { row, qty, stage, reason, note }
   const [products, setProducts] = useState(null)
   const [history, setHistory] = useState(false)
+  const [story, setStory] = useState(null)      // the answered notice whose timeline is open
   // The garment whose waiting orders are open in the picker, and the "already shipped" box.
   const [pick, setPick] = useState(null)
   const [notUsed, setNotUsed] = useState('')
@@ -508,7 +509,7 @@ export default function RtoTab({ onChanged }) {
               </thead>
               <tbody>
                 {skipPager.slice.map(h => (
-                  <tr key={h.id}>
+                  <tr key={h.id} onClick={() => setStory(h)} style={{ cursor: 'pointer' }}>
                     <td className="cell-primary">
                       {h.order_ref}
                       {h.source === 'seeding' && <span className="rto-pill">seeding</span>}
@@ -537,7 +538,7 @@ export default function RtoTab({ onChanged }) {
                     <td style={{ textAlign: 'right' }}>
                       {/* Only a hand-cleared notice can come back; one answered by actually sending
                           a piece is a fact, not a decision to revisit. */}
-                      {canEdit && <button className="mini-btn" onClick={() => reopenAlert(h)}>Reopen</button>}
+                      {canEdit && <button className="mini-btn" onClick={(e) => { e.stopPropagation(); reopenAlert(h) }}>Reopen</button>}
                     </td>
                   </tr>
                 ))}
@@ -846,6 +847,76 @@ export default function RtoTab({ onChanged }) {
               <button className="btn btn-primary" disabled={busy === 'damage'} onClick={saveDamage}>
                 {busy === 'damage' ? 'Saving…' : 'Write off'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ---- What happened to one notice, in order ------------------------------------------
+          The table has room for the dates but not for what they mean. Here the four moments are
+          laid out in the order they happened — and since a piece can come back before or after the
+          order that wants it, they are sorted by date rather than assumed. */}
+      {story && (
+        <div className="confirm-overlay" onClick={() => setStory(null)}>
+          <div className="confirm-card" style={{ maxWidth: 580 }} onClick={e => e.stopPropagation()} role="dialog" aria-modal="true">
+            <h3 className="confirm-title">{story.order_ref} · {story.product_title}</h3>
+            <p className="confirm-message">
+              {story.variant || '—'}
+              {story.blank_type ? ` · ${story.blank_type} ${story.color || ''} ${story.size || ''}`.trimEnd() : ''}
+              {story.source === 'seeding' ? ' · seeding order' : ''}
+            </p>
+
+            <div className="timeline" style={{ textAlign: 'left', margin: '14px 0 4px' }}>
+              {[
+                story.shelf_received_at && {
+                  at: story.shelf_received_at, icon: '📦', title: 'The piece came back',
+                  meta: [story.shelf_from_order && `from order ${story.shelf_from_order}`, story.shelf_reason,
+                    story.shelf_logged_by && `logged by ${story.shelf_logged_by}`].filter(Boolean).join(' · '),
+                },
+                story.order_date && {
+                  at: story.order_date, icon: '🛒', title: `Order ${story.order_ref} was placed`,
+                  meta: story.customer || '',
+                },
+                story.created_at && {
+                  at: story.created_at, icon: '🔗', title: 'Matched — the shelf had this garment',
+                  meta: 'the notice appeared here from this moment',
+                },
+                story.resolved_at && {
+                  at: story.resolved_at,
+                  icon: story.status === 'used' ? '✅' : '✋',
+                  title: story.status === 'used' ? 'Sent from the shelf' : 'Marked not used',
+                  meta: [story.resolved_by && `by ${story.resolved_by}`, story.resolution_note].filter(Boolean).join(' · '),
+                },
+              ].filter(Boolean).sort((a, b) => new Date(a.at) - new Date(b.at)).map((e, i) => (
+                <div className="timeline-item" key={i}>
+                  <div className="timeline-type">{e.icon}</div>
+                  <div className="timeline-content">
+                    {e.title}
+                    <div className="timeline-meta">{stamp(e.at)}{e.meta ? ` — ${e.meta}` : ''}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* The one number the dates are really being read for. */}
+            {story.shelf_received_at && story.resolved_at && (() => {
+              const d = Math.max(0, Math.round((new Date(story.resolved_at) - new Date(story.shelf_received_at)) / 86400000))
+              return (
+                <p className="confirm-message" style={{ fontSize: 12.5 }}>
+                  {d === 0
+                    ? <>The garment came back and this was decided <b>the same day</b>.</>
+                    : <>The garment sat on the shelf for <b>{d} day{d === 1 ? '' : 's'}</b> before this was decided.</>}
+                </p>
+              )
+            })()}
+
+            <div className="confirm-actions">
+              <button className="btn btn-secondary" onClick={() => setStory(null)}>Close</button>
+              {canEdit && story.status !== 'used' && (
+                <button className="btn btn-primary" onClick={() => { const h = story; setStory(null); reopenAlert(h) }}>
+                  Put it back on the list
+                </button>
+              )}
             </div>
           </div>
         </div>
