@@ -508,15 +508,18 @@ router.post('/rto/:id/use', canEdit, async (req, res) => {
                     `Dispatched from RTO for ${orderNumber} — no blank was used`, req.user?.username);
                 credited = { blank_type: row.blank_type, color: row.color, size: row.size, qty };
             }
-            return { credited, rtoId: row.id };
+            // The whole row travels back, because answering the right notice needs the garment,
+            // not just the shelf id.
+            return { credited, rtoId: row.id, piece: row };
         });
         if (out.error) return res.status(out.status).json({ error: out.error });
 
         // Only once the stock move has committed: answering the notice for a send that then rolled
         // back would leave the order looking dealt with when nothing had left the shelf.
-        const answered = await inv.resolveAlertsForOrder(orderNumber, out.rtoId, req.user?.username)
+        const answered = await inv.resolveAlertsForOrder(orderNumber, out.piece, req.user?.username)
             .catch(err => { console.error('alert resolve failed:', err.message); return 0; });
-        res.json({ success: true, ...out, alerts_cleared: answered });
+        const { piece, ...rest } = out;
+        res.json({ success: true, ...rest, alerts_cleared: answered });
     } catch (err) {
         console.error('inventory rto use error:', err);
         res.status(500).json({ error: 'Failed to record the reuse' });

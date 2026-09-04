@@ -1086,16 +1086,35 @@ async function resolveRtoAlert(id, { status, note, rtoId }, user) {
  * Matched on the order reference alone: someone typing "#10634" into the send dialog has answered
  * every notice that order raised, whichever garment each was about.
  */
-async function resolveAlertsForOrder(orderRef, rtoId, user) {
+/** The same design in the same colour and size — the only thing a returned piece can fill. */
+const sameGarment = (a, b) => ((a.variant_id && b.variant_id)
+    ? String(a.variant_id) === String(b.variant_id)
+    : a.product_title === b.product_title && normVariant(a.variant) === normVariant(b.variant));
+
+/**
+ * Answer the notice that this send actually settles — and only that one.
+ *
+ * An order can be waiting on several garments at once, each with its own notice. Sending one piece
+ * settles the notice for that piece; the others are still waiting on garments nobody has sent, and
+ * closing them would tell the packer those went out too. The piece is therefore matched by design,
+ * colour and size, not merely by which order it went to.
+ */
+async function resolveAlertsForOrder(orderRef, piece, user) {
     const ref = String(orderRef || '').trim();
-    if (!ref) return 0;
+    if (!ref || !piece) return 0;
     const alt = ref.startsWith('#') ? ref.slice(1) : `#${ref}`;
+    const open = (await db.query(
+        `SELECT id, variant_id, product_title, variant FROM inventory_rto_alerts
+          WHERE status = 'open' AND (order_ref = $1 OR order_ref = $2)`, [ref, alt])).rows;
+    const ids = open.filter(a => sameGarment(a, piece)).map(a => a.id);
+    if (!ids.length) return 0;
+
     const r = await db.query(
         `UPDATE inventory_rto_alerts
             SET status = 'used', rto_id = COALESCE($1, rto_id), resolved_by = $2,
                 resolved_at = CURRENT_TIMESTAMP, resolution_note = 'Sent from the RTO shelf'
-          WHERE status = 'open' AND (order_ref = $3 OR order_ref = $4) RETURNING id`,
-        [rtoId || null, user || null, ref, alt]);
+          WHERE id = ANY($3) AND status = 'open' RETURNING id`,
+        [piece.id || null, user || null, ids]);
     return r.rowCount;
 }
 
