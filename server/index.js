@@ -842,6 +842,23 @@ async function ensureInventorySchema() {
             ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_inventory BOOLEAN DEFAULT false;
             ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_edit_inventory BOOLEAN DEFAULT false;
         `);
+
+        // When an order was fulfilled — which Shopify's payload does not say, only that it was.
+        // The sync stamps it the first time it sees the order fulfilled. The RTO shelf needs it to
+        // tell "fulfilled this morning, being packed now" from "fulfilled last week, in transit".
+        // Done in code rather than as a bare ALTER because the one-time backfill must run exactly
+        // once: on later boots the sync is the only thing allowed to set it.
+        const hasFulfilledAt = (await db.query(
+            `SELECT 1 FROM information_schema.columns WHERE table_name = 'orders' AND column_name = 'fulfilled_at'`)).rows.length;
+        if (!hasFulfilledAt) {
+            await db.exec(`ALTER TABLE orders ADD COLUMN fulfilled_at TIMESTAMP`);
+            // The order date is the best available guess for everything already fulfilled — and,
+            // more to the point, it keeps three thousand old parcels from all looking like today's.
+            await db.query(
+                `UPDATE orders SET fulfilled_at = created_at
+                  WHERE fulfilled_at IS NULL AND UPPER(COALESCE(fulfillment_status,'')) IN ('FULFILLED','RESTOCKED')`);
+            console.log('🗓  orders.fulfilled_at added and backfilled from the order date');
+        }
     } catch (e) { console.error('inventory schema ensure:', e.message); }
 }
 

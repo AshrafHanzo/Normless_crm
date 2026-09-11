@@ -152,6 +152,20 @@ async function syncAll() {
         console.log(`✅ Synced ${orders.length} orders`);
         totalSynced += orders.length;
 
+        // Shopify says whether an order is fulfilled, never when. Stamp the moment we first see it,
+        // and unstamp if it ever goes back — the shelf reads this to know which fulfilled orders
+        // are today's packing batch rather than last week's parcels.
+        try {
+            await db.query(
+                `UPDATE orders SET fulfilled_at = NOW()
+                  WHERE fulfilled_at IS NULL AND UPPER(COALESCE(fulfillment_status,'')) IN ('FULFILLED','RESTOCKED')`);
+            await db.query(
+                `UPDATE orders SET fulfilled_at = NULL
+                  WHERE fulfilled_at IS NOT NULL AND UPPER(COALESCE(fulfillment_status,'')) NOT IN ('FULFILLED','RESTOCKED')`);
+        } catch (e) {
+            console.error('fulfilled_at stamp skipped:', e.message);
+        }
+
         // On hold is not in the REST payload, so it is asked for separately and stamped on the
         // rows. Never allowed to fail the sync: not knowing which orders are held is worse than a
         // stale flag, but neither is worth losing the orders themselves over.

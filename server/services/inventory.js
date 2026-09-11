@@ -882,14 +882,19 @@ function matchesForOrder(order, index) {
 /**
  * Orders still worth offering a shelf piece to.
  *
- * Only live ones. A fulfilled order has been handed to the courier — the garment is printed, boxed
- * and moving, and no piece on this shelf can be part of it any more, so offering one is noise that
- * buries the orders where the choice is still open. Cancelled, held, refunded and voided are out
- * for the same reason: nothing is going out for those either.
+ * Unfulfilled ones, and ones fulfilled today. The second half follows the morning routine: the
+ * returns are logged, then the day's orders are fulfilled in Shopify to get the packing labels,
+ * and only then is the shelf checked against them — so at the moment the check happens, the
+ * whole batch already reads as fulfilled. Those are being packed right now; a piece can still go
+ * in the box. An order fulfilled yesterday is a parcel in transit, and gets nothing new.
+ *
+ * "Today" is the database's day, which runs on Asia/Kolkata. Cancelled, held, refunded and voided
+ * are out regardless: nothing is going out for those.
  */
 const SHIPPED = "UPPER(COALESCE(fulfillment_status,'')) IN ('FULFILLED','RESTOCKED')";
+const PACKING_TODAY = "fulfilled_at >= date_trunc('day', NOW())";
 const OPEN_ORDER_SQL = `
-    NOT (${SHIPPED})
+    (NOT (${SHIPPED}) OR ${PACKING_TODAY})
     AND UPPER(COALESCE(financial_status,'')) NOT IN ('VOIDED','REFUNDED')
     AND cancelled_at IS NULL AND COALESCE(on_hold, false) = false`;
 
