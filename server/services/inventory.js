@@ -1151,12 +1151,15 @@ async function staleRtoAlertCount() {
 /**
  * Whether a notice is still worth showing.
  *
- * A notice survives its own raising — that is the point of storing it — but only while something
- * can still be done about it. Once the order ships, is cancelled or goes on hold, or the piece
- * leaves the shelf, there is no decision left to make and it drops out of the list. It is not
- * deleted: if the order comes off hold, or another piece comes back, it returns on its own.
+ * A notice survives its own raising — that is the point of storing it — and it survives the order
+ * being fulfilled, deliberately. Fulfilment is stamped at handover, and printing happens around
+ * that same moment, so a notice that vanished on fulfilment vanished exactly when the packer was
+ * deciding whether to print. It stays until a person answers it: sent from the shelf, or not used.
+ *
+ * It does drop out while nothing can be done — the order cancelled or on hold, or the piece gone
+ * from the shelf — and comes back on its own if that changes. Nothing here deletes it.
  */
-const isActionable = (a) => a.available > 0 && !a.order_cancelled && !a.order_on_hold && !a.order_shipped;
+const isActionable = (a) => a.available > 0 && !a.order_cancelled && !a.order_on_hold;
 
 async function rtoWaiting() {
     const open = await openRtoAlerts();
@@ -1178,6 +1181,9 @@ async function rtoWaiting() {
             // When this order was matched to the shelf, which is not the same as when it was
             // placed — a piece can come back weeks after the order that wants it.
             matched_at: a.created_at,
+            // Said rather than hidden: a shipped order usually means a fresh one was printed, and
+            // the honest answer is "not used" — but that is the packer's call, not the app's.
+            shipped: !!a.order_shipped,
         });
     }
     // Oldest order first within a garment, then the garment with the longest wait at the top.
