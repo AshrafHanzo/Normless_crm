@@ -880,21 +880,20 @@ function matchesForOrder(order, index) {
 }
 
 /**
- * Orders still worth offering a shelf piece to.
+ * Orders a shelf piece can be newly offered to: live, unfulfilled ones — and only those.
  *
- * Unfulfilled ones, and ones fulfilled today. The second half follows the morning routine: the
- * returns are logged, then the day's orders are fulfilled in Shopify to get the packing labels,
- * and only then is the shelf checked against them — so at the moment the check happens, the
- * whole batch already reads as fulfilled. Those are being packed right now; a piece can still go
- * in the box. An order fulfilled yesterday is a parcel in transit, and gets nothing new.
+ * This is the rule for RAISING a notice, and it is deliberately narrower than the rule for KEEPING
+ * one (see isActionable). The morning routine is: log the returns, fulfil the day's orders in
+ * Shopify for the labels, then check the shelf. The match happens at the first step, while the
+ * orders are still unfulfilled; fulfilling them afterwards must not take the notice away, and it
+ * does not. But an order that is already fulfilled when a piece comes back gets nothing new —
+ * that garment was printed and is in a box, and offering a piece to it is noise.
  *
- * "Today" is the database's day, which runs on Asia/Kolkata. Cancelled, held, refunded and voided
- * are out regardless: nothing is going out for those.
+ * Cancelled, held, refunded and voided are out regardless: nothing is going out for those.
  */
 const SHIPPED = "UPPER(COALESCE(fulfillment_status,'')) IN ('FULFILLED','RESTOCKED')";
-const PACKING_TODAY = "fulfilled_at >= date_trunc('day', NOW())";
 const OPEN_ORDER_SQL = `
-    (NOT (${SHIPPED}) OR ${PACKING_TODAY})
+    NOT (${SHIPPED})
     AND UPPER(COALESCE(financial_status,'')) NOT IN ('VOIDED','REFUNDED')
     AND cancelled_at IS NULL AND COALESCE(on_hold, false) = false`;
 

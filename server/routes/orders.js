@@ -71,13 +71,10 @@ router.get('/', async (req, res) => {
             const shelf = await inv.rtoAvailable();
             if (shelf.length) {
                 const index = inv.availabilityIndex(shelf);
-                // Same rule as the matcher: unfulfilled, or fulfilled today and so being packed
-                // now. A parcel fulfilled yesterday is in transit, and flagging it only teaches the
-                // packer to ignore the flag.
-                const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0);
+                // Same rule as the matcher: a shipped order is past the point where a shelf piece
+                // could be part of it, so flagging one only teaches the packer to ignore the flag.
                 for (const o of ordersResult.rows) {
-                    const shipped = ['FULFILLED', 'RESTOCKED'].includes(String(o.fulfillment_status || '').toUpperCase());
-                    if (shipped && !(o.fulfilled_at && new Date(o.fulfilled_at) >= startOfToday)) continue;
+                    if (['FULFILLED', 'RESTOCKED'].includes(String(o.fulfillment_status || '').toUpperCase())) continue;
                     if (o.cancelled_at || o.on_hold) continue;
                     const lines = inv.matchesForOrder(o, index);
                     if (lines.length) rto[o.order_number] = lines;
