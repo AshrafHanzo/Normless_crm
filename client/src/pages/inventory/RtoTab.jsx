@@ -291,37 +291,41 @@ export default function RtoTab({ onChanged }) {
             design and size — and doing so puts its blank back in stock.
           </p>
         </div>
-        {canEdit && (
-          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-            <button className="btn btn-secondary" onClick={exportCsv} title="Every entry on the shelf, as a spreadsheet">
-              <Icon name="download" size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
-              Export CSV
-            </button>
-            {/* Anyone who can edit may export; importing is its own right, granted in Admin. */}
-            {canImport && (
-              <>
-                <input ref={fileRef} type="file" accept=".csv,text/csv" hidden
-                  onChange={e => { previewCsv(e.target.files?.[0]); e.target.value = '' }} />
-                <button className="btn btn-secondary" disabled={busy === 'csv'} onClick={() => fileRef.current?.click()}
-                  title="Add or correct entries from a spreadsheet — you see what will change first">
-                  {busy === 'csv' ? 'Reading…' : 'Import CSV'}
-                </button>
-                <button className="mini-btn" style={{ alignSelf: 'center' }} onClick={exportCatalogue}
-                  title="Every product and variant the import accepts — copy a line, type a count">
-                  Product list for Excel
-                </button>
-              </>
-            )}
-            <button className="btn-icon" style={{ alignSelf: 'center' }} onClick={() => setHelp(true)} title="How export and import work">
-              <Icon name="info" size={15} />
-            </button>
-            <button className="btn btn-secondary" onClick={() => openIntake('manual')}>Add by product</button>
-            <button className="btn btn-primary" onClick={() => openIntake('scan')}>
-              <Icon name="scan" size={15} style={{ marginRight: 6, verticalAlign: '-2px' }} />
-              Scan a return
-            </button>
-          </div>
-        )}
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+          {/* Reading the shelf out is never the risk, so both downloads are open to anyone who can
+              see this tab. Writing to it is gated: adding by hand needs the edit right, and
+              importing a file needs its own, granted in Admin. */}
+          <button className="btn btn-secondary" onClick={exportCsv} title="Every entry on the shelf, as a spreadsheet">
+            <Icon name="download" size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
+            Export CSV
+          </button>
+          <button className="mini-btn" onClick={exportCatalogue}
+            title="Every product and variant the shelf accepts — copy a line, type a count">
+            Product list for Excel
+          </button>
+          <button className="btn-icon" onClick={() => setHelp(true)} title="How export and import work">
+            <Icon name="info" size={15} />
+          </button>
+          {canImport && (
+            <>
+              <input ref={fileRef} type="file" accept=".csv,text/csv" hidden
+                onChange={e => { previewCsv(e.target.files?.[0]); e.target.value = '' }} />
+              <button className="btn btn-secondary" disabled={busy === 'csv'} onClick={() => fileRef.current?.click()}
+                title="Add or correct entries from a spreadsheet — you see what will change first">
+                {busy === 'csv' ? 'Reading…' : 'Import CSV'}
+              </button>
+            </>
+          )}
+          {canEdit && (
+            <>
+              <button className="btn btn-secondary" onClick={() => openIntake('manual')}>Add by product</button>
+              <button className="btn btn-primary" onClick={() => openIntake('scan')}>
+                <Icon name="scan" size={15} style={{ marginRight: 6, verticalAlign: '-2px' }} />
+                Scan a return
+              </button>
+            </>
+          )}
+        </div>
       </div>
 
       <div className="kpi-grid" style={{ marginBottom: 18 }}>
