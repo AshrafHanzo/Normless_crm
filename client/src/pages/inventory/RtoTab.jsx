@@ -44,6 +44,7 @@ export default function RtoTab({ onChanged }) {
   const [history, setHistory] = useState(false)
   const [story, setStory] = useState(null)      // the answered notice whose timeline is open
   const [csv, setCsv] = useState(null)          // { file, plan } — an import waiting to be confirmed
+  const [help, setHelp] = useState(false)       // the export/import guide
   const fileRef = useRef(null)
   // The garment whose waiting orders are open in the picker, and the "already shipped" box.
   const [pick, setPick] = useState(null)
@@ -304,6 +305,9 @@ export default function RtoTab({ onChanged }) {
             <button className="mini-btn" style={{ alignSelf: 'center' }} onClick={exportCatalogue}
               title="Every product and variant the import accepts — copy a line, type a count">
               Product list for Excel
+            </button>
+            <button className="btn-icon" style={{ alignSelf: 'center' }} onClick={() => setHelp(true)} title="How export and import work">
+              <Icon name="info" size={15} />
             </button>
             <button className="btn btn-secondary" onClick={() => openIntake('manual')}>Add by product</button>
             <button className="btn btn-primary" onClick={() => openIntake('scan')}>
@@ -908,6 +912,75 @@ export default function RtoTab({ onChanged }) {
               <button className="btn btn-primary" disabled={busy === 'damage'} onClick={saveDamage}>
                 {busy === 'damage' ? 'Saving…' : 'Write off'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ---- The guide ----------------------------------------------------------------------
+          Everything the spreadsheet round-trip can do, in the words a person at the shelf would
+          use. Kept in the app rather than a document elsewhere, because the moment anyone needs
+          it is the moment they have the file open. */}
+      {help && (
+        <div className="confirm-overlay" onClick={() => setHelp(false)}>
+          <div className="confirm-card rto-guide" style={{ maxWidth: 640 }} onClick={e => e.stopPropagation()} role="dialog" aria-modal="true">
+            <h3 className="confirm-title">The shelf in Excel</h3>
+            <p className="confirm-message">Export it, change it in a spreadsheet, import it back. You see every change before it happens.</p>
+
+            <div className="rto-guide-body">
+              <div className="form-section" style={{ marginTop: 4 }}>What the columns mean</div>
+              <dl className="rto-guide-terms">
+                <dt>received</dt><dd>How many of this garment came back in this entry. The only count you set.</dd>
+                <dt>sent_out</dt><dd>How many of those have since gone out again to a customer order. Read-only.</dd>
+                <dt>written_off</dt><dd>How many were damaged and scrapped from this entry — ruined in packing, found faulty, unsellable. Read-only.</dd>
+                <dt>on_shelf</dt><dd><b>received − sent_out − written_off.</b> What is physically here now. Read-only — it moves when the other three do.</dd>
+                <dt>from_order</dt><dd>The order it came back from, for the record.</dd>
+                <dt>reason</dt><dd>Why it came back — Undelivered, refused, wrong size…</dd>
+                <dt>id</dt><dd>The entry's number. Leave it alone: it is how the app knows which row you mean.</dd>
+                <dt>delete</dt><dd>Empty on export. Type <b>yes</b> to remove that entry on import.</dd>
+              </dl>
+
+              <div className="form-section">Change an entry</div>
+              <ol>
+                <li><b>Export CSV</b> and open it.</li>
+                <li>Edit <b>received</b>, <b>from_order</b>, <b>reason</b>, <b>note</b> or <b>location</b>. Keep the <b>id</b>.</li>
+                <li>Save as CSV, then <b>Import CSV</b>. Check the plan, then <b>Apply</b>.</li>
+              </ol>
+
+              <div className="form-section">Increase or decrease a count</div>
+              <p>
+                Change <b>received</b> on the row and import. Going from 1 to 3 puts two more on the shelf;
+                going from 3 to 2 takes one off. It cannot go below what has already gone out or been
+                written off — those pieces have left. Every correction is written to the entry's history.
+              </p>
+
+              <div className="form-section">Add a new entry</div>
+              <ol>
+                <li>Download the <b>Product list for Excel</b> — every product and size, ready to fill in.</li>
+                <li>Find the garment's row and type a number into <b>received</b>. Add <b>from_order</b> and <b>reason</b> if you know them.</li>
+                <li>Delete the rows you did not fill in, or leave them — blanks are skipped. Import.</li>
+              </ol>
+              <p>A row with no <b>id</b> is always added as new. Never type a product name from memory — copy the row.</p>
+
+              <div className="form-section">Delete an entry</div>
+              <p>
+                Type <b>yes</b> in the <b>delete</b> column of that row and import. Removing a row from the
+                spreadsheet does <b>nothing</b> — the app cannot tell a deleted row from a filtered one.
+                An entry that has already sent pieces out can only be deleted by an admin, and the
+                blank credits it earned are reversed.
+              </p>
+
+              <div className="form-section">What never happens</div>
+              <ul>
+                <li>Nothing changes until you read the plan and click <b>Apply</b>.</li>
+                <li>Rows missing from the file are left exactly as they are.</li>
+                <li>A row the app cannot understand is skipped with a reason; the rest still go through.</li>
+                <li><b>sent_out</b>, <b>written_off</b>, <b>on_shelf</b>, <b>added_by</b> and <b>added_at</b> are ignored on import.</li>
+              </ul>
+            </div>
+
+            <div className="confirm-actions">
+              <button className="btn btn-primary" onClick={() => setHelp(false)}>Got it</button>
             </div>
           </div>
         </div>

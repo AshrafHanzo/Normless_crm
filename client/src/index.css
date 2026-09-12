@@ -1959,3 +1959,16 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .os-row-link { display: flex; align-items: center; gap: 6px; margin-top: 5px; }
 .os-row-link .pay-link { font-size: 11.5px; white-space: nowrap; }
 .os-row-link .btn-icon { width: 26px; height: 26px; flex: 0 0 auto; }
+
+/* The export/import guide on the RTO tab. A confirm card centres its text; a guide is read, so
+   it runs left to right like a page, and scrolls inside itself rather than pushing the button
+   off the bottom. */
+.rto-guide-body { text-align: left; max-height: min(60vh, 520px); overflow-y: auto; padding-right: 6px; font-size: 13px; line-height: 1.5; }
+.rto-guide-body p, .rto-guide-body ol, .rto-guide-body ul { margin: 0 0 10px; color: var(--text-secondary); }
+.rto-guide-body ol, .rto-guide-body ul { padding-left: 20px; }
+.rto-guide-body li { margin-bottom: 4px; }
+.rto-guide-body .form-section { margin: 16px 0 8px; }
+.rto-guide-terms { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 0 0 6px; }
+.rto-guide-terms dt { font-family: var(--mono, ui-monospace, monospace); font-size: 12px; color: var(--primary-light); padding-top: 1px; }
+.rto-guide-terms dd { margin: 0; color: var(--text-secondary); }
+@media (max-width: 520px) { .rto-guide-terms { grid-template-columns: 1fr; gap: 2px; } .rto-guide-terms dd { margin-bottom: 8px; } }
