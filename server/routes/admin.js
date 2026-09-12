@@ -18,7 +18,7 @@ const PERM_MAP = {
   crewfit_customers: 'can_view_crewfit_customers', revenue: 'can_view_revenue',
   invoices: 'can_view_invoices', crewfit_vendors: 'can_view_crewfit_vendors',
   crewfit_invoices: 'can_view_crewfit_invoices', crewfit_orders_edit: 'can_edit_crewfit_orders',
-  inventory: 'can_view_inventory', inventory_edit: 'can_edit_inventory',
+  inventory: 'can_view_inventory', inventory_edit: 'can_edit_inventory', inventory_import: 'can_import_rto',
   marketing: 'can_view_marketing', marketing_dispatch: 'can_dispatch_marketing',
   marketing_approve: 'can_approve_marketing',
   offline_sales: 'can_view_offline_sales', offline_sales_edit: 'can_edit_offline_sales',

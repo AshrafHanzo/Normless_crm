@@ -608,7 +608,18 @@ async function planRtoImport(records, { admin = false } = {}) {
 const blankFor = (g) => ({ blank_type: g.blank_type || inv.blankTypeFor(g), color: g.color, size: g.size });
 
 // POST /api/inventory/rto/import  (multipart "file", or JSON { csv })  ?apply=1 to commit
-router.post('/rto/import', canEdit, csvUpload.single('file'), async (req, res) => {
+// Importing a file can rewrite the whole shelf in one go, so it sits behind its own flag rather
+// than the ordinary edit right. Owners and admins hold every flag.
+const canImport = async (req, res, next) => {
+    try {
+        if (!await hasPermission(req, 'can_import_rto')) {
+            return res.status(403).json({ error: 'You do not have permission to import the shelf from a file' });
+        }
+        next();
+    } catch (err) { next(err); }
+};
+
+router.post('/rto/import', canEdit, canImport, csvUpload.single('file'), async (req, res) => {
     try {
         const text = req.file ? req.file.buffer.toString('utf8') : String(req.body?.csv || '');
         if (!text.trim()) return res.status(400).json({ error: 'The file is empty' });

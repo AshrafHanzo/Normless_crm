@@ -422,7 +422,8 @@ async function ensureCrewfitSchema() {
                 can_view_crewfit_customers=true, can_view_revenue=true, can_view_invoices=true,
                 can_view_crewfit_vendors=true, can_view_crewfit_invoices=true, can_edit_crewfit_orders=true,
                 can_view_marketing=true, can_dispatch_marketing=true,
-                can_view_inventory=true, can_edit_inventory=true, can_approve_marketing=true
+                can_view_inventory=true, can_edit_inventory=true, can_approve_marketing=true,
+                can_import_rto=true
                 WHERE role IN ('owner','admin')`);
         } catch (e) { console.error('admin perms ensure:', e.message); }
 
@@ -844,6 +845,9 @@ async function ensureInventorySchema() {
         await db.exec(`
             ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_inventory BOOLEAN DEFAULT false;
             ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_edit_inventory BOOLEAN DEFAULT false;
+            -- Bulk import rewrites the shelf from a file. Editing one entry at a time is a
+            -- different level of trust from editing two hundred at once, so it is its own flag.
+            ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_import_rto BOOLEAN DEFAULT false;
         `);
 
         // When an order was fulfilled — which Shopify's payload does not say, only that it was.
