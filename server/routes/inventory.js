@@ -473,6 +473,29 @@ router.get('/rto/export.csv', async (req, res) => {
     }
 });
 
+// GET /api/inventory/rto/catalogue.csv — every product and variant the shelf will accept, so a
+// row can be added by copying a line rather than typing a name and hoping it matches.
+router.get('/rto/catalogue.csv', async (req, res) => {
+    try {
+        const rows = (await db.query(
+            `SELECT p.title AS product_title, v.variant, v.color, v.size, p.blank_type, v.variant_id, p.shopify_id AS shopify_product_id
+               FROM shopify_products p JOIN shopify_variants v ON v.shopify_product_id = p.shopify_id
+              ORDER BY p.title, v.variant`)).rows;
+        const cols = [
+            { key: 'id', label: 'id' }, { key: 'product_title', label: 'product' }, { key: 'variant', label: 'variant' },
+            { key: 'color', label: 'colour' }, { key: 'size', label: 'size' }, { key: 'blank_type', label: 'blank' },
+            { key: 'received', label: 'received' }, { key: 'from_order', label: 'from_order' }, { key: 'reason', label: 'reason' },
+            { key: 'note', label: 'note' }, { key: 'variant_id', label: 'variant_id' }, { key: 'shopify_product_id', label: 'shopify_product_id' },
+        ];
+        res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+        res.setHeader('Content-Disposition', 'attachment; filename="rto-catalogue.csv"');
+        res.send(toCsv(rows, cols));
+    } catch (err) {
+        console.error('rto catalogue export error:', err);
+        res.status(500).json({ error: 'Failed to export the catalogue' });
+    }
+});
+
 /**
  * Work out what a CSV would do to the shelf, without doing it.
  *

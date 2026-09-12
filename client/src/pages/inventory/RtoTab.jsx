@@ -158,15 +158,19 @@ export default function RtoTab({ onChanged }) {
    * person has read that plan and said so. A bulk edit that happens silently is a bulk mistake
    * that happens silently.
    */
-  const exportCsv = async () => {
-    const r = await apiFetch('/api/inventory/rto/export.csv', { responseType: 'blob' })
-    if (!r || r.error) { toast.error(r?.error || 'Export failed'); return }
+  const download = async (url, fallback) => {
+    const r = await apiFetch(url, { responseType: 'blob' })
+    if (!r || r.error) { toast.error(r?.error || 'Download failed'); return }
     const href = URL.createObjectURL(r.blob)
     const a = document.createElement('a')
-    a.href = href; a.download = r.filename || 'rto-shelf.csv'
+    a.href = href; a.download = r.filename || fallback
     document.body.appendChild(a); a.click(); a.remove()
     URL.revokeObjectURL(href)
   }
+  const exportCsv = () => download('/api/inventory/rto/export.csv', 'rto-shelf.csv')
+  // Every product and variant the import will accept, in the import's own column layout — so a
+  // new row is a copied line with a number typed into "received", never a name typed from memory.
+  const exportCatalogue = () => download('/api/inventory/rto/catalogue.csv', 'rto-catalogue.csv')
 
   const previewCsv = async (file) => {
     if (!file) return
@@ -296,6 +300,10 @@ export default function RtoTab({ onChanged }) {
             <button className="btn btn-secondary" disabled={busy === 'csv'} onClick={() => fileRef.current?.click()}
               title="Add or correct entries from a spreadsheet — you see what will change first">
               {busy === 'csv' ? 'Reading…' : 'Import CSV'}
+            </button>
+            <button className="mini-btn" style={{ alignSelf: 'center' }} onClick={exportCatalogue}
+              title="Every product and variant the import accepts — copy a line, type a count">
+              Product list for Excel
             </button>
             <button className="btn btn-secondary" onClick={() => openIntake('manual')}>Add by product</button>
             <button className="btn btn-primary" onClick={() => openIntake('scan')}>
@@ -975,7 +983,8 @@ export default function RtoTab({ onChanged }) {
 
               <p className="confirm-message" style={{ fontSize: 12.5 }}>
                 Rows missing from the file are left alone — an import never deletes. A row with an id
-                changes that entry; a row without one is added.
+                changes that entry; a row without one is added. To add, copy a line from the product
+                list and type a number into <b>received</b>.
               </p>
 
               <div className="confirm-actions">
