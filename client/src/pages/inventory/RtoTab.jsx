@@ -43,6 +43,8 @@ export default function RtoTab({ onChanged }) {
   const [products, setProducts] = useState(null)
   const [history, setHistory] = useState(false)
   const [story, setStory] = useState(null)      // the answered notice whose timeline is open
+  const [csv, setCsv] = useState(null)          // { file, plan } — an import waiting to be confirmed
+  const fileRef = useRef(null)
   // The garment whose waiting orders are open in the picker, and the "already shipped" box.
   const [pick, setPick] = useState(null)
   const [notUsed, setNotUsed] = useState('')
@@ -148,6 +150,47 @@ export default function RtoTab({ onChanged }) {
     toast.success('Notice reopened'); load()
   }
 
+  /**
+   * The shelf as a file, and a file back onto the shelf.
+   *
+   * Import is two steps on purpose. The file is read and turned into a plan — what would be added,
+   * what would change and how, what cannot be accepted and why — and nothing moves until the
+   * person has read that plan and said so. A bulk edit that happens silently is a bulk mistake
+   * that happens silently.
+   */
+  const exportCsv = async () => {
+    const r = await apiFetch('/api/inventory/rto/export.csv', { responseType: 'blob' })
+    if (!r || r.error) { toast.error(r?.error || 'Export failed'); return }
+    const href = URL.createObjectURL(r.blob)
+    const a = document.createElement('a')
+    a.href = href; a.download = r.filename || 'rto-shelf.csv'
+    document.body.appendChild(a); a.click(); a.remove()
+    URL.revokeObjectURL(href)
+  }
+
+  const previewCsv = async (file) => {
+    if (!file) return
+    const body = new FormData(); body.append('file', file)
+    setBusy('csv')
+    const r = await apiFetch('/api/inventory/rto/import', { method: 'POST', body })
+    setBusy(null)
+    if (!r || r.error) { toast.error(r?.error || 'Could not read the file'); return }
+    setCsv({ file, plan: r })
+  }
+
+  const applyCsv = async () => {
+    const body = new FormData(); body.append('file', csv.file)
+    setBusy('csv')
+    const r = await apiFetch('/api/inventory/rto/import?apply=1', { method: 'POST', body })
+    setBusy(null)
+    if (!r || r.error) { toast.error(r?.error || 'Import failed'); return }
+    const s = r.summary
+    toast.success(
+      [s.add && `${s.add} added`, s.update && `${s.update} updated`, s.reject && `${s.reject} skipped`].filter(Boolean).join(' · ') || 'Nothing to change',
+      { title: 'Shelf imported' })
+    setCsv(null); load()
+  }
+
   const removeEntry = async (row) => {
     const touched = row.qty_used || row.qty_written_off
     const details = [{ label: 'Variant', value: row.variant || '—' }, { label: 'Pieces', value: String(row.qty) }]
@@ -244,6 +287,16 @@ export default function RtoTab({ onChanged }) {
         </div>
         {canEdit && (
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            <input ref={fileRef} type="file" accept=".csv,text/csv" hidden
+              onChange={e => { previewCsv(e.target.files?.[0]); e.target.value = '' }} />
+            <button className="btn btn-secondary" onClick={exportCsv} title="Every entry on the shelf, as a spreadsheet">
+              <Icon name="download" size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
+              Export CSV
+            </button>
+            <button className="btn btn-secondary" disabled={busy === 'csv'} onClick={() => fileRef.current?.click()}
+              title="Add or correct entries from a spreadsheet — you see what will change first">
+              {busy === 'csv' ? 'Reading…' : 'Import CSV'}
+            </button>
             <button className="btn btn-secondary" onClick={() => openIntake('manual')}>Add by product</button>
             <button className="btn btn-primary" onClick={() => openIntake('scan')}>
               <Icon name="scan" size={15} style={{ marginRight: 6, verticalAlign: '-2px' }} />
@@ -851,6 +904,90 @@ export default function RtoTab({ onChanged }) {
           </div>
         </div>
       )}
+
+      {/* ---- What a CSV would do, before it does it -----------------------------------------
+          The plan the server drew up from the file, laid out so the person can read every change
+          before anything moves. Rejected rows are listed with their line number and reason, and
+          are simply skipped — the good rows still go through. */}
+      {csv && (() => {
+        const { summary: sm, add, update, reject } = csv.plan
+        const nothing = !sm.add && !sm.update
+        const CAP = 8
+        const label = { qty: 'received', source_order_number: 'from order', reason: 'reason', note: 'note', location: 'location', garment: 'garment' }
+        const one = (v) => (v == null || v === '' ? '—' : String(v))
+        const fmt = (v) => (v && typeof v === 'object' ? `${one(v.from)} → ${one(v.to)}` : one(v))
+        return (
+          <div className="confirm-overlay" onClick={() => setCsv(null)}>
+            <div className="confirm-card" style={{ maxWidth: 640 }} onClick={e => e.stopPropagation()} role="dialog" aria-modal="true">
+              <h3 className="confirm-title">Import {csv.file.name}</h3>
+              <p className="confirm-message">
+                {sm.rows} row{sm.rows === 1 ? '' : 's'} read. Nothing has changed yet — this is what applying it would do.
+              </p>
+
+              <div className="totals-bar" style={{ margin: '14px 0' }}>
+                <div><span>Add</span><strong>{sm.add}</strong></div>
+                <div><span>Change</span><strong>{sm.update}</strong></div>
+                <div><span>Unchanged</span><strong style={{ color: 'var(--text-muted)' }}>{sm.unchanged}</strong></div>
+                <div><span>Skip</span><strong style={{ color: sm.reject ? 'var(--warning)' : 'var(--text-muted)' }}>{sm.reject}</strong></div>
+              </div>
+
+              <div className="rto-lines" style={{ maxHeight: 340, textAlign: 'left' }}>
+                {add.slice(0, CAP).map(a => (
+                  <div className="rto-line" key={`a${a.line}`} style={{ cursor: 'default' }}>
+                    <span className="rto-pill" style={{ marginLeft: 0 }}>add</span>
+                    <span style={{ flex: 1 }}><b>{a.product}</b> <span style={{ color: 'var(--text-muted)' }}>{a.variant} × {a.qty}</span></span>
+                    <span style={{ color: 'var(--text-muted)', fontSize: 11.5 }}>line {a.line}</span>
+                  </div>
+                ))}
+                {add.length > CAP && <div style={{ color: 'var(--text-muted)', fontSize: 12, padding: '2px 4px' }}>+{add.length - CAP} more to add</div>}
+
+                {update.slice(0, CAP).map(u => (
+                  <div className="rto-line" key={`u${u.line}`} style={{ cursor: 'default', alignItems: 'flex-start' }}>
+                    <span className="rto-pill rto-pill-warn" style={{ marginLeft: 0 }}>change</span>
+                    <span style={{ flex: 1 }}>
+                      <b>{u.product}</b> <span style={{ color: 'var(--text-muted)' }}>{u.variant} · #{u.id}</span>
+                      <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 3 }}>
+                        {Object.entries(u.changes).map(([k, v]) => `${label[k] || k}: ${fmt(v)}`).join(' · ')}
+                      </div>
+                    </span>
+                    <span style={{ color: 'var(--text-muted)', fontSize: 11.5 }}>line {u.line}</span>
+                  </div>
+                ))}
+                {update.length > CAP && <div style={{ color: 'var(--text-muted)', fontSize: 12, padding: '2px 4px' }}>+{update.length - CAP} more to change</div>}
+
+                {reject.slice(0, CAP).map(r => (
+                  <div className="rto-line" key={`r${r.line}`} style={{ cursor: 'default', alignItems: 'flex-start', borderColor: 'color-mix(in srgb, var(--danger) 40%, var(--border))' }}>
+                    <span className="rto-pill" style={{ marginLeft: 0, background: 'color-mix(in srgb, var(--danger) 18%, transparent)', color: 'var(--danger)' }}>skip</span>
+                    <span style={{ flex: 1 }}>
+                      <span style={{ color: 'var(--text-muted)' }}>line {r.line}{r.product ? ` · ${r.product}${r.variant ? ` ${r.variant}` : ''}` : r.id ? ` · #${r.id}` : ''}</span>
+                      <div style={{ fontSize: 12, marginTop: 3 }}>{r.reason}</div>
+                    </span>
+                  </div>
+                ))}
+                {reject.length > CAP && <div style={{ color: 'var(--text-muted)', fontSize: 12, padding: '2px 4px' }}>+{reject.length - CAP} more skipped</div>}
+
+                {nothing && !reject.length && (
+                  <div style={{ color: 'var(--text-muted)', fontSize: 13, padding: 12, textAlign: 'center' }}>
+                    Every row matches what is already on the shelf. Nothing to do.
+                  </div>
+                )}
+              </div>
+
+              <p className="confirm-message" style={{ fontSize: 12.5 }}>
+                Rows missing from the file are left alone — an import never deletes. A row with an id
+                changes that entry; a row without one is added.
+              </p>
+
+              <div className="confirm-actions">
+                <button className="btn btn-secondary" onClick={() => setCsv(null)}>Cancel</button>
+                <button className="btn btn-primary" disabled={busy === 'csv' || nothing} onClick={applyCsv}>
+                  {busy === 'csv' ? 'Applying…' : nothing ? 'Nothing to apply' : `Apply ${sm.add + sm.update} change${sm.add + sm.update === 1 ? '' : 's'}`}
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
 
       {/* ---- What happened to one notice, in order ------------------------------------------
           The table has room for the dates but not for what they mean. Here the four moments are

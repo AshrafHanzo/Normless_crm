@@ -6,9 +6,14 @@
  */
 
 const express = require('express');
+const multer = require('multer');
 const db = require('../db/connection');
 const inv = require('../services/inventory');
 const { hasPermission } = require('../utils/permissions');
+const { toCsv, parseCsvObjects } = require('../utils/csv');
+
+// A CSV of the whole shelf is a few hundred KB; anything bigger is not a shelf.
+const csvUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 4 * 1024 * 1024 } });
 
 const router = express.Router();
 
@@ -420,6 +425,212 @@ router.get('/rto/order/:orderNumber', async (req, res) => {
 // POST /api/inventory/rto { items: [...] } — put returned pieces on the shelf.
 // Nothing moves in blank stock here: the blank was consumed when the garment was printed, and it
 // is still consumed — the piece is just back in the building.
+/* ---- The shelf as a spreadsheet -----------------------------------------------------------
+ *
+ * Export writes every entry, one row each, with the counts that matter alongside the fields a
+ * person is allowed to change. Import reads the same shape back: a row with an id updates that
+ * entry, a row without one adds a new entry, and a row that cannot be understood is reported with
+ * its line number and left alone. Nothing is ever deleted by an import — a row missing from the
+ * file means nothing, because the most likely reason it is missing is that someone filtered it out
+ * in Excel.
+ * -------------------------------------------------------------------------------------------- */
+
+const RTO_COLUMNS = [
+    { key: 'id', label: 'id' },
+    { key: 'product_title', label: 'product' },
+    { key: 'variant', label: 'variant' },
+    { key: 'color', label: 'colour' },
+    { key: 'size', label: 'size' },
+    { key: 'blank_type', label: 'blank' },
+    { key: 'qty', label: 'received' },
+    { key: 'qty_used', label: 'sent_out' },
+    { key: 'qty_written_off', label: 'written_off' },
+    { key: 'available', label: 'on_shelf' },
+    { key: 'source_order_number', label: 'from_order' },
+    { key: 'reason', label: 'reason' },
+    { key: 'note', label: 'note' },
+    { key: 'location', label: 'location' },
+    { key: 'variant_id', label: 'variant_id' },
+    { key: 'shopify_product_id', label: 'shopify_product_id' },
+    { key: 'created_by', label: 'added_by' },
+    { key: 'created_at', label: 'added_at' },
+];
+
+// GET /api/inventory/rto/export.csv
+router.get('/rto/export.csv', async (req, res) => {
+    try {
+        const rows = (await db.query(
+            `SELECT r.*, (r.qty - r.qty_used - r.qty_written_off) AS available
+               FROM inventory_rto r ORDER BY r.created_at DESC, r.id DESC`)).rows
+            .map(r => ({ ...r, created_at: r.created_at ? new Date(r.created_at).toISOString().slice(0, 19).replace('T', ' ') : '' }));
+        const stamp = new Date().toISOString().slice(0, 10);
+        res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+        res.setHeader('Content-Disposition', `attachment; filename="rto-shelf-${stamp}.csv"`);
+        res.send(toCsv(rows, RTO_COLUMNS));
+    } catch (err) {
+        console.error('rto export error:', err);
+        res.status(500).json({ error: 'Failed to export the shelf' });
+    }
+});
+
+/**
+ * Work out what a CSV would do to the shelf, without doing it.
+ *
+ * Returned as a plan so the person can read it before anything moves: rows to add, rows to
+ * change (with what changes), rows that would change nothing, and rows that could not be
+ * accepted, each with the line number it came from and the reason.
+ */
+async function planRtoImport(records) {
+    const products = (await db.query(
+        `SELECT p.shopify_id, p.title, p.product_type, p.sku_prefix, p.blank_type,
+                v.variant_id, v.variant, v.color, v.size
+           FROM shopify_products p LEFT JOIN shopify_variants v ON v.shopify_product_id = p.shopify_id`)).rows;
+    const byVariantId = new Map(products.filter(p => p.variant_id).map(p => [String(p.variant_id), p]));
+    const byTitleVariant = new Map(products.filter(p => p.variant_id)
+        .map(p => [`${p.title.trim().toLowerCase()}|${inv.normVariant(p.variant)}`, p]));
+
+    const ids = records.map(r => parseInt(r.id, 10)).filter(n => Number.isFinite(n) && n > 0);
+    const existing = new Map(ids.length
+        ? (await db.query('SELECT * FROM inventory_rto WHERE id = ANY($1)', [ids])).rows.map(r => [r.id, r])
+        : []);
+
+    const plan = { add: [], update: [], unchanged: [], reject: [] };
+    const seen = new Set();
+    for (const r of records) {
+        const line = r._line;
+        const reject = (reason) => plan.reject.push({ line, id: r.id || null, product: r.product || null, variant: r.variant || null, reason });
+
+        // Which garment. A variant id is exact; a title plus "Colour / Size" is looked up in the
+        // catalogue the same way the picker does. Either way it has to resolve — a piece nothing
+        // can match to is a piece no order will ever be offered.
+        let garment = null;
+        if (r.variant_id) {
+            garment = byVariantId.get(String(r.variant_id).trim());
+            if (!garment) { reject(`variant_id ${r.variant_id} is not in the Shopify catalogue`); continue; }
+        } else if (r.product || r.variant) {
+            if (!r.product || !r.variant) { reject('needs both a product and a variant like "Red / L"'); continue; }
+            garment = byTitleVariant.get(`${r.product.trim().toLowerCase()}|${inv.normVariant(r.variant)}`);
+            if (!garment) { reject(`"${r.product}" in "${r.variant}" is not in the Shopify catalogue`); continue; }
+        }
+
+        const idNum = parseInt(r.id, 10);
+        const hasId = Number.isFinite(idNum) && idNum > 0;
+        const qtyGiven = r.received !== undefined && r.received !== '';
+        const qty = qtyGiven ? parseInt(r.received, 10) : null;
+        if (qtyGiven && (!Number.isFinite(qty) || qty < 0)) { reject(`received must be a whole number, not "${r.received}"`); continue; }
+
+        const text = (k) => (r[k] === undefined ? undefined : (r[k] === '' ? null : r[k]));
+        const fields = { source_order_number: text('from_order'), reason: text('reason'), note: text('note'), location: text('location') };
+
+        if (hasId) {
+            const cur = existing.get(idNum);
+            if (!cur) { reject(`no shelf entry has id ${idNum}`); continue; }
+            if (seen.has(idNum)) { reject(`id ${idNum} appears more than once in the file`); continue; }
+            seen.add(idNum);
+
+            const changes = {};
+            const gone = cur.qty_used + cur.qty_written_off;
+            if (qtyGiven && qty !== cur.qty) {
+                if (qty < gone) { reject(`received cannot go below ${gone} — ${cur.qty_used} already sent out and ${cur.qty_written_off} written off`); continue; }
+                changes.qty = qty;
+            }
+            if (garment && String(garment.variant_id) !== String(cur.variant_id || '')) {
+                // The garment can only change while the entry is untouched: once a piece has gone
+                // out to an order as one design, the record of that must not be rewritten.
+                if (gone > 0) { reject('the garment cannot be changed once pieces have gone out or been written off'); continue; }
+                changes.garment = garment;
+            }
+            for (const [k, v] of Object.entries(fields)) {
+                if (v !== undefined && v !== (cur[k] ?? null)) changes[k] = v;
+            }
+            if (!Object.keys(changes).length) { plan.unchanged.push({ line, id: idNum }); continue; }
+            plan.update.push({
+                line, id: idNum, product: cur.product_title, variant: cur.variant,
+                changes: Object.fromEntries(Object.entries(changes).map(([k, v]) =>
+                    [k, k === 'garment' ? { from: `${cur.product_title} ${cur.variant || ''}`.trim(), to: `${v.title} ${v.variant}` }
+                        : { from: cur[k] ?? null, to: v }])),
+                _garment: changes.garment || null, _qty: changes.qty, _fields: fields,
+            });
+        } else {
+            if (!garment) { reject('a new row needs a product and a variant'); continue; }
+            if (!qtyGiven || qty < 1) { reject('a new row needs received of 1 or more'); continue; }
+            plan.add.push({ line, product: garment.title, variant: garment.variant, qty, _garment: garment, _fields: fields });
+        }
+    }
+    return plan;
+}
+
+const blankFor = (g) => ({ blank_type: g.blank_type || inv.blankTypeFor(g), color: g.color, size: g.size });
+
+// POST /api/inventory/rto/import  (multipart "file", or JSON { csv })  ?apply=1 to commit
+router.post('/rto/import', canEdit, csvUpload.single('file'), async (req, res) => {
+    try {
+        const text = req.file ? req.file.buffer.toString('utf8') : String(req.body?.csv || '');
+        if (!text.trim()) return res.status(400).json({ error: 'The file is empty' });
+        const { headers, records } = parseCsvObjects(text);
+        const known = new Set(RTO_COLUMNS.map(c => c.label));
+        if (!headers.some(h => known.has(h))) {
+            return res.status(400).json({ error: 'That does not look like a shelf export — no recognised columns. Export first and edit that file.' });
+        }
+        if (records.length > 5000) return res.status(400).json({ error: 'More than 5,000 rows — split the file' });
+
+        const plan = await planRtoImport(records);
+        const strip = (x) => { const { _garment, _qty, _fields, ...rest } = x; return rest; };
+        const summary = {
+            rows: records.length, add: plan.add.length, update: plan.update.length,
+            unchanged: plan.unchanged.length, reject: plan.reject.length,
+        };
+        if (String(req.query.apply || '') !== '1') {
+            return res.json({ applied: false, summary, add: plan.add.map(strip), update: plan.update.map(strip), reject: plan.reject });
+        }
+
+        const user = req.user?.username || null;
+        await db.transaction(async (tx) => {
+            for (const a of plan.add) {
+                const g = a._garment, b = blankFor(g), f = a._fields;
+                const r = await tx.query(
+                    `INSERT INTO inventory_rto (shopify_product_id, variant_id, product_title, variant, color, size,
+                                                blank_type, qty, source_order_number, reason, note, location, created_by)
+                     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
+                    [g.shopify_id, g.variant_id, g.title, g.variant, b.color, b.size, b.blank_type, a.qty,
+                        f.source_order_number ?? null, f.reason ?? null, f.note ?? null, f.location ?? null, user]);
+                await tx.query(
+                    `INSERT INTO inventory_rto_events (rto_id, kind, qty, order_number, note, created_by)
+                     VALUES ($1,'in',$2,$3,$4,$5)`,
+                    [r.rows[0].id, a.qty, f.source_order_number ?? null, `Imported from CSV${f.reason ? ` — ${f.reason}` : ''}`, user]);
+            }
+            for (const u of plan.update) {
+                const cur = (await tx.query('SELECT * FROM inventory_rto WHERE id = $1 FOR UPDATE', [u.id])).rows[0];
+                if (!cur) continue;
+                const sets = [], vals = [];
+                const set = (col, v) => { vals.push(v); sets.push(`${col} = $${vals.length}`); };
+                if (u._garment) {
+                    const g = u._garment, b = blankFor(g);
+                    set('shopify_product_id', g.shopify_id); set('variant_id', g.variant_id);
+                    set('product_title', g.title); set('variant', g.variant);
+                    set('color', b.color); set('size', b.size); set('blank_type', b.blank_type);
+                }
+                if (u._qty !== undefined) set('qty', u._qty);
+                for (const [k, v] of Object.entries(u._fields)) if (v !== undefined) set(k, v);
+                set('updated_at', new Date());
+                vals.push(u.id);
+                await tx.query(`UPDATE inventory_rto SET ${sets.join(', ')} WHERE id = $${vals.length}`, vals);
+                // A count that moved is a stock event, and the shelf's history has to say so.
+                if (u._qty !== undefined && u._qty !== cur.qty) {
+                    const delta = u._qty - cur.qty;
+                    await tx.query(
+                        `INSERT INTO inventory_rto_events (rto_id, kind, qty, note, created_by) VALUES ($1,$2,$3,$4,$5)`,
+                        [u.id, delta > 0 ? 'in' : 'removed', Math.abs(delta), `Count corrected by CSV import (${cur.qty} → ${u._qty})`, user]);
+                }
+            }
+        });
+        res.json({ applied: true, summary, add: plan.add.map(strip), update: plan.update.map(strip), reject: plan.reject });
+    } catch (err) {
+        console.error('rto import error:', err);
+        res.status(500).json({ error: err.message || 'Failed to import the shelf' });
+    }
+});
+
 router.post('/rto', canEdit, async (req, res) => {
     try {
         const items = req.body?.items;

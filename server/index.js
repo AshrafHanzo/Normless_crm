@@ -12,7 +12,10 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 
 // Middleware
-app.use(cors());
+// Content-Disposition is not a CORS-safelisted header, so without this a cross-origin download
+// (the Vite dev server talking to :5001) cannot read the filename we set and falls back to a
+// generic one. Same-origin in production never noticed.
+app.use(cors({ exposedHeaders: ['Content-Disposition'] }));
 // Stash the raw bytes alongside the parsed body — the Razorpay webhook needs to HMAC-verify
 // the exact raw payload against its signature header, which is lost once JSON.parse runs.
 app.use(express.json({ verify: (req, res, buf) => { req.rawBody = buf; } }));
