@@ -454,7 +454,11 @@ const RTO_COLUMNS = [
     { key: 'shopify_product_id', label: 'shopify_product_id' },
     { key: 'created_by', label: 'added_by' },
     { key: 'created_at', label: 'added_at' },
+    // Always empty on the way out. Type "yes" into it and the row is removed on the way back in —
+    // the only way an import deletes, and it has to be said row by row.
+    { key: 'delete', label: 'delete' },
 ];
+const YES = new Set(['yes', 'y', 'true', '1', 'x', 'delete', 'remove']);
 
 // GET /api/inventory/rto/export.csv
 router.get('/rto/export.csv', async (req, res) => {
@@ -503,7 +507,7 @@ router.get('/rto/catalogue.csv', async (req, res) => {
  * change (with what changes), rows that would change nothing, and rows that could not be
  * accepted, each with the line number it came from and the reason.
  */
-async function planRtoImport(records) {
+async function planRtoImport(records, { admin = false } = {}) {
     const products = (await db.query(
         `SELECT p.shopify_id, p.title, p.product_type, p.sku_prefix, p.blank_type,
                 v.variant_id, v.variant, v.color, v.size
@@ -517,11 +521,29 @@ async function planRtoImport(records) {
         ? (await db.query('SELECT * FROM inventory_rto WHERE id = ANY($1)', [ids])).rows.map(r => [r.id, r])
         : []);
 
-    const plan = { add: [], update: [], unchanged: [], reject: [] };
+    const plan = { add: [], update: [], unchanged: [], reject: [], delete: [] };
     const seen = new Set();
     for (const r of records) {
         const line = r._line;
         const reject = (reason) => plan.reject.push({ line, id: r.id || null, product: r.product || null, variant: r.variant || null, reason });
+
+        // A deletion is its own kind of row, checked before anything else about it is read.
+        if (r.delete && YES.has(String(r.delete).trim().toLowerCase())) {
+            const idNum = parseInt(r.id, 10);
+            if (!Number.isFinite(idNum) || idNum <= 0) { reject('delete needs the id of an existing entry'); continue; }
+            const cur = existing.get(idNum);
+            if (!cur) { reject(`no shelf entry has id ${idNum}`); continue; }
+            if (seen.has(idNum)) { reject(`id ${idNum} appears more than once in the file`); continue; }
+            seen.add(idNum);
+            const gone = cur.qty_used + cur.qty_written_off;
+            if (gone > 0 && !admin) { reject('pieces have already left this entry — only an admin can delete it'); continue; }
+            plan.delete.push({
+                line, id: idNum, product: cur.product_title, variant: cur.variant, qty: cur.qty,
+                // Said up front, because it is the part that surprises people.
+                warning: gone > 0 ? `${cur.qty_used} sent out and ${cur.qty_written_off} written off — those movements will be reversed` : null,
+            });
+            continue;
+        }
 
         // Which garment. A variant id is exact; a title plus "Colour / Size" is looked up in the
         // catalogue the same way the picker does. Either way it has to resolve — a piece nothing
@@ -597,15 +619,14 @@ router.post('/rto/import', canEdit, csvUpload.single('file'), async (req, res) =
         }
         if (records.length > 5000) return res.status(400).json({ error: 'More than 5,000 rows — split the file' });
 
-        const plan = await planRtoImport(records);
+        const plan = await planRtoImport(records, { admin: isAdmin(req) });
         const strip = (x) => { const { _garment, _qty, _fields, ...rest } = x; return rest; };
         const summary = {
             rows: records.length, add: plan.add.length, update: plan.update.length,
-            unchanged: plan.unchanged.length, reject: plan.reject.length,
+            unchanged: plan.unchanged.length, reject: plan.reject.length, delete: plan.delete.length,
         };
-        if (String(req.query.apply || '') !== '1') {
-            return res.json({ applied: false, summary, add: plan.add.map(strip), update: plan.update.map(strip), reject: plan.reject });
-        }
+        const out = { summary, add: plan.add.map(strip), update: plan.update.map(strip), reject: plan.reject, delete: plan.delete };
+        if (String(req.query.apply || '') !== '1') return res.json({ applied: false, ...out });
 
         const user = req.user?.username || null;
         await db.transaction(async (tx) => {
@@ -646,8 +667,12 @@ router.post('/rto/import', canEdit, csvUpload.single('file'), async (req, res) =
                         [u.id, delta > 0 ? 'in' : 'removed', Math.abs(delta), `Count corrected by CSV import (${cur.qty} → ${u._qty})`, user]);
                 }
             }
+            for (const d of plan.delete) {
+                const cur = (await tx.query('SELECT * FROM inventory_rto WHERE id = $1 FOR UPDATE', [d.id])).rows[0];
+                if (cur) await deleteRtoEntry(tx, cur, user);
+            }
         });
-        res.json({ applied: true, summary, add: plan.add.map(strip), update: plan.update.map(strip), reject: plan.reject });
+        res.json({ applied: true, ...out });
     } catch (err) {
         console.error('rto import error:', err);
         res.status(500).json({ error: err.message || 'Failed to import the shelf' });
@@ -821,46 +846,53 @@ router.post('/rto/alerts/:id/reopen', canEdit, async (req, res) => {
 // Anyone who may edit inventory can remove an entry nothing has left yet, because that is simply
 // undoing a typo. Once pieces have gone out, deleting means unwinding stock that has already moved
 // — so it is an owner/admin act, and every effect is reversed rather than orphaned.
+/**
+ * Remove a shelf entry, undoing whatever it changed elsewhere.
+ *
+ * An entry nothing has left is simply removed. One that has sent pieces out credited a blank for
+ * each reuse; deleting it says those reuses never happened, so the credits are taken off again —
+ * as their own movements, because the ledger is a history and not a mutable record of the
+ * present. Write-offs recorded against it go with it, for the same reason: a damaged row pointing
+ * at a deleted shelf entry would say a piece was ruined that officially never arrived.
+ *
+ * Runs inside the caller's transaction, so a bulk delete is all-or-nothing with the rest of it.
+ */
+async function deleteRtoEntry(tx, row, user) {
+    const touched = row.qty_used || row.qty_written_off;
+    const reversed = [];
+    if (touched) {
+        const used = (await tx.query(
+            "SELECT COALESCE(SUM(qty),0)::int AS qty FROM inventory_rto_events WHERE rto_id = $1 AND kind = 'used'",
+            [row.id])).rows[0].qty;
+        if (used > 0 && row.blank_type && row.color && row.size) {
+            await inv.moveBlank(tx, row, -used, 'adjustment',
+                `RTO entry #${row.id} deleted — reversing ${used} blank${used > 1 ? 's' : ''} credited on reuse`, user);
+            reversed.push(`${used} blank credit${used > 1 ? 's' : ''} reversed`);
+        }
+        const dmg = (await tx.query('SELECT id, qty, movement_id FROM inventory_damaged WHERE rto_id = $1', [row.id])).rows;
+        for (const d of dmg) {
+            if (d.movement_id) {
+                await inv.moveBlank(tx, row, d.qty, 'adjustment',
+                    `RTO entry #${row.id} deleted — reversing write-off #${d.id}`, user);
+            }
+            await tx.query('DELETE FROM inventory_damaged WHERE id = $1', [d.id]);
+        }
+        if (dmg.length) reversed.push(`${dmg.length} write-off${dmg.length > 1 ? 's' : ''} removed`);
+    }
+    await tx.query('DELETE FROM inventory_rto_events WHERE rto_id = $1', [row.id]);
+    await tx.query('DELETE FROM inventory_rto WHERE id = $1', [row.id]);
+    return reversed;
+}
+
 router.delete('/rto/:id', canEdit, async (req, res) => {
     try {
         const out = await db.transaction(async (tx) => {
             const row = (await tx.query('SELECT * FROM inventory_rto WHERE id = $1 FOR UPDATE', [req.params.id])).rows[0];
             if (!row) return { error: 'Not found', status: 404 };
-            const touched = row.qty_used || row.qty_written_off;
-            if (touched && !isAdmin(req)) {
+            if ((row.qty_used || row.qty_written_off) && !isAdmin(req)) {
                 return { error: 'Pieces have already left this entry — only an admin can delete it now', status: 403 };
             }
-
-            const reversed = [];
-            if (touched) {
-                // Every reuse credited a blank back. Deleting the entry says that never happened,
-                // so the credit is taken off again — as its own movement, because the ledger is a
-                // history and not a mutable record of the present.
-                const used = (await tx.query(
-                    "SELECT COALESCE(SUM(qty),0)::int AS qty FROM inventory_rto_events WHERE rto_id = $1 AND kind = 'used'",
-                    [row.id])).rows[0].qty;
-                if (used > 0 && row.blank_type && row.color && row.size) {
-                    await inv.moveBlank(tx, row, -used, 'adjustment',
-                        `RTO entry #${row.id} deleted — reversing ${used} blank${used > 1 ? 's' : ''} credited on reuse`,
-                        req.user?.username);
-                    reversed.push(`${used} blank credit${used > 1 ? 's' : ''} reversed`);
-                }
-                // Write-offs recorded against this entry go with it; a damaged row pointing at a
-                // deleted shelf entry would say a piece was ruined that officially never arrived.
-                const dmg = (await tx.query('SELECT id, qty, movement_id FROM inventory_damaged WHERE rto_id = $1', [row.id])).rows;
-                for (const d of dmg) {
-                    if (d.movement_id) {
-                        await inv.moveBlank(tx, row, d.qty, 'adjustment',
-                            `RTO entry #${row.id} deleted — reversing write-off #${d.id}`, req.user?.username);
-                    }
-                    await tx.query('DELETE FROM inventory_damaged WHERE id = $1', [d.id]);
-                }
-                if (dmg.length) reversed.push(`${dmg.length} write-off${dmg.length > 1 ? 's' : ''} removed`);
-            }
-
-            await tx.query('DELETE FROM inventory_rto_events WHERE rto_id = $1', [row.id]);
-            await tx.query('DELETE FROM inventory_rto WHERE id = $1', [row.id]);
-            return { reversed };
+            return { reversed: await deleteRtoEntry(tx, row, req.user?.username) };
         });
         if (out.error) return res.status(out.status).json({ error: out.error });
         res.json({ success: true, reversed: out.reversed });

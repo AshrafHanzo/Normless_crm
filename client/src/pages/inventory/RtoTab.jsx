@@ -190,7 +190,7 @@ export default function RtoTab({ onChanged }) {
     if (!r || r.error) { toast.error(r?.error || 'Import failed'); return }
     const s = r.summary
     toast.success(
-      [s.add && `${s.add} added`, s.update && `${s.update} updated`, s.reject && `${s.reject} skipped`].filter(Boolean).join(' · ') || 'Nothing to change',
+      [s.add && `${s.add} added`, s.update && `${s.update} updated`, s.delete && `${s.delete} deleted`, s.reject && `${s.reject} skipped`].filter(Boolean).join(' · ') || 'Nothing to change',
       { title: 'Shelf imported' })
     setCsv(null); load()
   }
@@ -918,8 +918,9 @@ export default function RtoTab({ onChanged }) {
           before anything moves. Rejected rows are listed with their line number and reason, and
           are simply skipped — the good rows still go through. */}
       {csv && (() => {
-        const { summary: sm, add, update, reject } = csv.plan
-        const nothing = !sm.add && !sm.update
+        const { summary: sm, add, update, reject, delete: del = [] } = csv.plan
+        const nothing = !sm.add && !sm.update && !(sm.delete || 0)
+        const total = sm.add + sm.update + (sm.delete || 0)
         const CAP = 8
         const label = { qty: 'received', source_order_number: 'from order', reason: 'reason', note: 'note', location: 'location', garment: 'garment' }
         const one = (v) => (v == null || v === '' ? '—' : String(v))
@@ -935,6 +936,7 @@ export default function RtoTab({ onChanged }) {
               <div className="totals-bar" style={{ margin: '14px 0' }}>
                 <div><span>Add</span><strong>{sm.add}</strong></div>
                 <div><span>Change</span><strong>{sm.update}</strong></div>
+                <div><span>Delete</span><strong style={{ color: sm.delete ? 'var(--danger)' : 'var(--text-muted)' }}>{sm.delete || 0}</strong></div>
                 <div><span>Unchanged</span><strong style={{ color: 'var(--text-muted)' }}>{sm.unchanged}</strong></div>
                 <div><span>Skip</span><strong style={{ color: sm.reject ? 'var(--warning)' : 'var(--text-muted)' }}>{sm.reject}</strong></div>
               </div>
@@ -963,6 +965,18 @@ export default function RtoTab({ onChanged }) {
                 ))}
                 {update.length > CAP && <div style={{ color: 'var(--text-muted)', fontSize: 12, padding: '2px 4px' }}>+{update.length - CAP} more to change</div>}
 
+                {del.slice(0, CAP).map(d => (
+                  <div className="rto-line" key={`d${d.line}`} style={{ cursor: 'default', alignItems: 'flex-start', borderColor: 'color-mix(in srgb, var(--danger) 55%, var(--border))' }}>
+                    <span className="rto-pill" style={{ marginLeft: 0, background: 'color-mix(in srgb, var(--danger) 18%, transparent)', color: 'var(--danger)' }}>delete</span>
+                    <span style={{ flex: 1 }}>
+                      <b>{d.product}</b> <span style={{ color: 'var(--text-muted)' }}>{d.variant} · #{d.id} · {d.qty} received</span>
+                      {d.warning && <div style={{ fontSize: 12, color: 'var(--danger)', marginTop: 3 }}>{d.warning}</div>}
+                    </span>
+                    <span style={{ color: 'var(--text-muted)', fontSize: 11.5 }}>line {d.line}</span>
+                  </div>
+                ))}
+                {del.length > CAP && <div style={{ color: 'var(--text-muted)', fontSize: 12, padding: '2px 4px' }}>+{del.length - CAP} more to delete</div>}
+
                 {reject.slice(0, CAP).map(r => (
                   <div className="rto-line" key={`r${r.line}`} style={{ cursor: 'default', alignItems: 'flex-start', borderColor: 'color-mix(in srgb, var(--danger) 40%, var(--border))' }}>
                     <span className="rto-pill" style={{ marginLeft: 0, background: 'color-mix(in srgb, var(--danger) 18%, transparent)', color: 'var(--danger)' }}>skip</span>
@@ -982,15 +996,16 @@ export default function RtoTab({ onChanged }) {
               </div>
 
               <p className="confirm-message" style={{ fontSize: 12.5 }}>
-                Rows missing from the file are left alone — an import never deletes. A row with an id
-                changes that entry; a row without one is added. To add, copy a line from the product
-                list and type a number into <b>received</b>.
+                Rows missing from the file are left alone. A row with an id changes that entry; a row
+                without one is added; a row with <b>yes</b> in the <b>delete</b> column is removed. To
+                add, copy a line from the product list and type a number into <b>received</b>.
               </p>
 
               <div className="confirm-actions">
                 <button className="btn btn-secondary" onClick={() => setCsv(null)}>Cancel</button>
-                <button className="btn btn-primary" disabled={busy === 'csv' || nothing} onClick={applyCsv}>
-                  {busy === 'csv' ? 'Applying…' : nothing ? 'Nothing to apply' : `Apply ${sm.add + sm.update} change${sm.add + sm.update === 1 ? '' : 's'}`}
+                <button className={`btn ${sm.delete ? 'btn-danger' : 'btn-primary'}`} disabled={busy === 'csv' || nothing} onClick={applyCsv}>
+                  {busy === 'csv' ? 'Applying…' : nothing ? 'Nothing to apply'
+                    : `Apply ${total} change${total === 1 ? '' : 's'}${sm.delete ? ` (${sm.delete} delete${sm.delete === 1 ? '' : 's'})` : ''}`}
                 </button>
               </div>
             </div>
