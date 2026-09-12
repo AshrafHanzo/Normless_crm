@@ -14,7 +14,9 @@ const GROUPS = [
     { key: 'invoices', label: 'Invoices', icon: 'invoice' },
     { key: 'inventory', label: 'Inventory', icon: 'box' },
     { key: 'inventory_edit', label: 'Inventory — can edit', icon: 'edit', sub: 'inventory' },
-    { key: 'inventory_import', label: 'RTO shelf — can import from CSV', icon: 'download', sub: 'inventory' },
+    // Depends on the edit right, not just the page: the box greys out until "can edit" is ticked,
+    // which is also what the save enforces — a tick that silently did not stick is worse than none.
+    { key: 'inventory_import', label: 'RTO shelf — can import from CSV', icon: 'download', sub: 'inventory_edit' },
     { key: 'offline_sales', label: 'Offline Sales', icon: 'card' },
     { key: 'offline_sales_edit', label: 'Offline Sales — can edit', icon: 'edit', sub: 'offline_sales' },
   ] },
