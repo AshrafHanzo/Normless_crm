@@ -65,7 +65,7 @@ const APPLY = process.argv.includes('--apply');
             const { seq } = numbering.parseNumber(number);
             await tx.query(
                 `UPDATE crewfit_invoices SET number = $1, series = 'NL', seq = $2,
-                        note = CONCAT_WS(E'\\n', NULLIF(note, ''), $3), updated_at = CURRENT_TIMESTAMP
+                        note = CONCAT_WS(E'\\n', NULLIF(note, ''), $3::text), updated_at = CURRENT_TIMESTAMP
                   WHERE id = $4`,
                 [number, seq, `Renumbered from ${i.number} — B2C, filed in the Normless register`, i.id]);
             console.log(`  ${`CF-${i.sl_no}`.padEnd(7)} ${i.number}  ->  ${number}`);

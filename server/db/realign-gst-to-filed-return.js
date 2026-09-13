@@ -157,7 +157,7 @@ async function readSheet(file, sheetName) {
         for (const c of cfChanges) {
             await tx.query(
                 `UPDATE crewfit_invoices SET number = $1, series = $2, seq = $3,
-                        note = CONCAT_WS(E'\\n', NULLIF(note, ''), $4), updated_at = CURRENT_TIMESTAMP
+                        note = CONCAT_WS(E'\\n', NULLIF(note, ''), $4::text), updated_at = CURRENT_TIMESTAMP
                   WHERE id = $5`,
                 [c.to, c.series, c.seq, `Renumbered from ${c.from} — ${c.why}`, c.id]);
             if (c.series === 'NL') {
