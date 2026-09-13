@@ -1,5 +1,6 @@
 const db = require('../db/connection');
 const shopify = require('./shopify');
+const numbering = require('./invoice-numbers');
 
 /**
  * Shopify's line items, with the product images we had already resolved carried across.
@@ -164,6 +165,15 @@ async function syncAll() {
                   WHERE fulfilled_at IS NOT NULL AND UPPER(COALESCE(fulfillment_status,'')) NOT IN ('FULFILLED','RESTOCKED')`);
         } catch (e) {
             console.error('fulfilled_at stamp skipped:', e.message);
+        }
+
+        // A tax invoice number is issued at supply, so the register at month-end only reads them.
+        // Kept out of the sync's own error path: a numbering hiccup must not cost the orders.
+        try {
+            const issued = await numbering.numberFulfilledOrders(db);
+            if (issued) console.log(`🧾 ${issued} invoice number(s) issued`);
+        } catch (e) {
+            console.error('invoice numbering skipped:', e.message);
         }
 
         // On hold is not in the REST payload, so it is asked for separately and stamped on the

@@ -177,7 +177,8 @@ function SalesTab({ apiFetch, toast, isAdmin, download }) {
   }
 
   const stats = preview ? [
-    { label: 'Fulfilled orders', value: num(preview.row_count), icon: 'box' },
+    { label: 'Register rows', value: num(preview.row_count), icon: 'box' },
+    { label: 'Crewfit B2C invoices', value: num(preview.crewfit_count), icon: 'invoice' },
     { label: 'Total quantity', value: num(preview.total_qty), icon: 'shirt' },
     { label: 'Taxable value', value: money(preview.taxable_value), icon: 'wallet' },
     { label: 'GST @ 5%', value: money(preview.gst_total), icon: 'trending' },
@@ -191,7 +192,7 @@ function SalesTab({ apiFetch, toast, isAdmin, download }) {
       <div className="dash-toolbar">
         <div>
           <p style={{ color: 'var(--text-muted)' }}>
-            Built from fulfilled Shopify orders — GST is divided out of the order value
+            Fulfilled Shopify orders plus Crewfit invoices to customers without a GSTIN, on the shared NL series
             {(checking || generating) && <span style={{ marginLeft: 8 }}>· reading orders from Shopify, a full month takes a few seconds…</span>}
           </p>
         </div>
@@ -220,7 +221,10 @@ function SalesTab({ apiFetch, toast, isAdmin, download }) {
               </div>
             ))}
           </div>
-          <p style={{ color: 'var(--text-muted)', fontSize: 12.5 }}>Preview only — invoice numbers are issued when you generate the file.</p>
+          <p style={{ color: 'var(--text-muted)', fontSize: 12.5 }}>
+            Preview only — nothing is filed until you generate.
+            {preview.unnumbered > 0 && ` ${num(preview.unnumbered)} order${preview.unnumbered === 1 ? '' : 's'} still without a number — the sync issues one as each order is fulfilled; generating now issues the rest.`}
+          </p>
         </div>
       )}
 

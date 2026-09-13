@@ -6,7 +6,9 @@ const multer = require('multer');
 const PDFDocument = require('pdfkit');
 const db = require('../db/connection');
 const inv = require('../services/inventory');
-const { renderInvoice, renderProforma, renderShippingLabel, LABEL_SIZE, nextInvoiceNumber, nextProformaNumber } = require('../services/invoice');
+const { renderInvoice, renderProforma, renderShippingLabel, LABEL_SIZE, nextProformaNumber } = require('../services/invoice');
+const numbering = require('../services/invoice-numbers');
+const { STATE_NAMES, derivePlaceOfSupply, normaliseState } = require('../utils/place-of-supply');
 const { historyForPhone } = require('./crewfit-customers');
 const { validatePhoneFields } = require('../utils/phone');
 const { canViewRevenue, hasPermission } = require('../utils/permissions');
@@ -60,6 +62,9 @@ const META = {
   vendors: ['Mubas Clothings', 'PTI', 'Ashna Garments', 'Print Wear', 'Dutees', 'TPR Garments'],
   mots: ['ST Courier', 'Porter', 'Self Pickup', 'DTDC', 'Professional Couriers', 'Delhivery', 'KRS Travels', 'AVK Cargo'],
   photoStatuses: ['None', 'Partial', 'Complete'],
+  // Place of supply picks the tax head on the invoice; offered as a list so it is always a
+  // spelling the register recognises.
+  states: STATE_NAMES,
 };
 const CLOSED = ['Dispatched', 'Cancelled'];
 
@@ -530,7 +535,26 @@ router.get('/orders/:id', async (req, res) => {
 
 const EXTRA = ['printing', 'delivery_location', 'billing_name', 'contact_person', 'billing_mobile', 'billing_email',
   'gst_number', 'billing_address', 'unit_price', 'product_total', 'shipping', 'gst_amount', 'grand_total', 'advance', 'balance',
-  'line_items', 'whatsapp_number', 'tracking_sent_at', 'photos_sent_at'];
+  'line_items', 'whatsapp_number', 'tracking_sent_at', 'photos_sent_at', 'place_of_supply'];
+
+// Anything a change to which can move the place of supply.
+const SUPPLY_EVIDENCE = ['gst_number', 'billing_address', 'delivery_location'];
+
+/**
+ * Settle an order's place of supply. A typed state is kept (in its canonical spelling); a blank
+ * one is read from the GSTIN, the pincode or the address, falling back to the home state, which
+ * is where nearly every Crewfit customer is. Returns an error string for a state nobody
+ * recognises rather than letting it through to the tax split.
+ */
+function settlePlaceOfSupply(order) {
+  const typed = (order.place_of_supply || '').trim();
+  if (typed) {
+    const state = normaliseState(typed);
+    if (!state) return { error: `"${typed}" is not a state the GST register recognises` };
+    return { state };
+  }
+  return { state: derivePlaceOfSupply(order).state || 'Tamil Nadu' };
+}
 const EDITABLE = ['status', 'payment_status', 'layout_status', 'customer_type', 'so', 'vendor', 'mot', 'tracking_link',
   'deadline_at', 'deadline_text', 'dispatch_date', 'order_date', 'notes', 'total_cost', 'qty', 'color', 'size_breakdown',
   'customer_name', 'contact_number', 'mock_folder', 'description', 'product', ...EXTRA];
@@ -538,7 +562,7 @@ const EDITABLE = ['status', 'payment_status', 'layout_status', 'customer_type', 
 // PUT /api/crewfit/orders/:id — inline field / dropdown updates
 router.put('/orders/:id', canEditOrders, async (req, res) => {
   try {
-    const current = (await db.query('SELECT status, payment_status, tracking_link, dispatch_date, mot, deadline_at, contact_number, whatsapp_number, billing_mobile FROM crewfit_orders WHERE id = $1', [req.params.id])).rows[0];
+    const current = (await db.query('SELECT status, payment_status, tracking_link, dispatch_date, mot, deadline_at, contact_number, whatsapp_number, billing_mobile, gst_number, billing_address, delivery_location, place_of_supply FROM crewfit_orders WHERE id = $1', [req.params.id])).rows[0];
     if (!current) return res.status(404).json({ error: 'Not found' });
 
     const body = { ...req.body };
@@ -586,6 +610,16 @@ router.put('/orders/:id', canEditOrders, async (req, res) => {
     const finalPayment = body.payment_status !== undefined ? body.payment_status : current.payment_status;
     if (finalStatus === 'Ready for Dispatch' && finalPayment === 'Fully Paid') {
       body.status = 'Dispatch Pending';
+    }
+
+    // Re-read the place of supply whenever its evidence changes or it is cleared; a state the
+    // operator picked stays put through unrelated edits.
+    if (body.place_of_supply !== undefined || SUPPLY_EVIDENCE.some(k => body[k] !== undefined)) {
+      // A GSTIN names its state outright, so a new one overrides whatever was there before.
+      const byGstin = body.gst_number !== undefined ? derivePlaceOfSupply({ gst_number: body.gst_number }).state : null;
+      const pos = byGstin ? { state: byGstin } : settlePlaceOfSupply({ ...current, ...body });
+      if (pos.error) return res.status(400).json({ error: pos.error });
+      body.place_of_supply = pos.state;
     }
 
     const fields = Object.keys(body).filter(k => EDITABLE.includes(k));
@@ -647,6 +681,9 @@ router.post('/orders', canEditOrders, async (req, res) => {
     if (body.contact_number) {
       body.customer_type = (await historyForPhone(body.contact_number)).customer_type;
     }
+    const pos = settlePlaceOfSupply(body);
+    if (pos.error) return res.status(400).json({ error: pos.error });
+    body.place_of_supply = pos.state;
     const cols = ['customer_name', 'contact_number', 'description', 'product', 'color', 'size_breakdown', 'qty', 'total_cost',
       'deadline_at', 'deadline_text', 'order_date', 'customer_type', 'so', 'vendor', 'mot', 'mock_folder', 'notes',
       'layout_status', 'payment_status', 'status', ...EXTRA];
@@ -738,6 +775,11 @@ const docRow = async (orderId, type) => (await db.query(
  * once, for the full order value, when the balance is settled. Both are issued on first request
  * and re-rendered unchanged thereafter — a number, once sent, is permanent.
  *
+ * Which series the tax invoice lands on is decided here, once, by whether the customer has a
+ * GSTIN (see services/invoice-numbers.js): B2B goes on NLCF and into the Crewfit register; B2C
+ * takes the next NL number, shared with the Shopify orders, and is filed in the Normless
+ * register. A GSTIN added after issue does not move the invoice — cancel and reissue instead.
+ *
  * 'advance' and 'balance' are accepted as aliases so older links keep working.
  */
 const DOC_ALIAS = { advance: 'proforma', balance: 'final', proforma: 'proforma', final: 'final' };
@@ -765,23 +807,42 @@ router.get('/orders/:id/invoice/:type', canEditOrders, async (req, res) => {
     let row = await docRow(order.id, type === 'proforma' ? 'proforma' : 'tax_invoice');
 
     if (!row) {
-      const number = type === 'proforma' ? await nextProformaNumber(db) : await nextInvoiceNumber(db);
-      const [series, fy, seqStr] = number.split('/');
+      const gstin = (order.gst_number || '').trim().toUpperCase() || null;
       // A proforma states only what was received; the tax invoice states the whole supply.
       const advance = order.advance != null ? Number(order.advance) : Math.round(figures.amount / 2);
       const amounts = type === 'proforma'
         ? { taxable: null, gst_amount: null, gross: advance, qty: null }
         : { taxable: figures.taxable_value, gst_amount: figures.gst_amount, gross: figures.amount, qty };
-      const ins = await db.query(
-        `INSERT INTO crewfit_invoices
-           (order_id, doc_type, number, series, fy, seq, issue_date, status, qty,
-            taxable, gst_pct, gst_amount, gross, place_of_supply, gstin)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,'issued',$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
-        [order.id, type === 'proforma' ? 'proforma' : 'tax_invoice', number, series, fy,
-          parseInt(seqStr, 10) || null, todayStr(), amounts.qty, amounts.taxable, figures.gst_pct,
-          amounts.gst_amount, amounts.gross, order.place_of_supply || null, order.gst_number || null]
-      );
-      row = ins.rows[0];
+      const today = todayStr();
+      const insert = (tx, number) => {
+        const { series, fy, seq } = numbering.parseNumber(number);
+        return tx.query(
+          `INSERT INTO crewfit_invoices
+             (order_id, doc_type, number, series, fy, seq, issue_date, status, qty,
+              taxable, gst_pct, gst_amount, gross, place_of_supply, gstin)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,'issued',$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
+          [order.id, type === 'proforma' ? 'proforma' : 'tax_invoice', number, series, fy, seq, today,
+            amounts.qty, amounts.taxable, figures.gst_pct, amounts.gst_amount, amounts.gross,
+            order.place_of_supply || null, gstin]);
+      };
+
+      if (type === 'proforma') {
+        row = (await insert(db, await nextProformaNumber(db))).rows[0];
+      } else if (gstin) {
+        row = (await insert(db, await numbering.nextCrewfitB2bNumber(db))).rows[0];
+      } else {
+        // The NL number and the row that carries it are one unit of work: issued under the
+        // shared lock so a sync batch numbering fulfilments can't be handed the same number.
+        row = await db.transaction(async (tx) => {
+          // A cancelled tax invoice keeps its number, so a reissue is a new line in the series —
+          // keyed CF-12/2, not CF-12, or the counter would hand the old number straight back.
+          const prior = (await tx.query(
+            `SELECT COUNT(*)::int AS n FROM crewfit_invoices WHERE order_id = $1 AND doc_type = 'tax_invoice'`, [order.id])).rows[0].n;
+          const item = { order_name: `CF-${order.sl_no}${prior ? `/${prior + 1}` : ''}`, date: today, kind: 'crewfit', tiebreak: order.id };
+          const numbers = await numbering.issueNormlessNumbers(tx, [item]);
+          return (await insert(tx, numbers.get(item.order_name))).rows[0];
+        });
+      }
     } else if (type === 'final' && Number(row.gross) !== figures.amount) {
       // The order was edited after the invoice was issued. Refresh the figures but keep the number
       // and date: re-issuing would burn a number and leave a gap in the tax series.

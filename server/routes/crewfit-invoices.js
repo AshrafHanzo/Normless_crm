@@ -5,8 +5,10 @@
  * workbook, keep a download history. The figures come from issued tax invoices — see
  * services/crewfit-gst.js for why proformas are excluded and why rows split by HSN.
  *
- * Deliberately a separate register from Normless: the two brands number their invoices on
- * separate series under the one GSTIN, which Rule 46(b) allows ("one or multiple series").
+ * A separate register from Normless, but only for B2B: invoices to customers with a GSTIN, on
+ * the NLCF series. B2C Crewfit invoices share the NL series with the Shopify orders and are filed
+ * in the Normless register — see services/invoice-numbers.js. Multiple series under one GSTIN is
+ * what Rule 46(b) allows ("one or multiple series").
  */
 
 const express = require('express');

@@ -1297,7 +1297,10 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
                   lockedLabel="Awaiting advance payment" onGenerate={() => downloadInvoice('proforma')}
                 />
                 <InvoiceCard
-                  title="Tax Invoice — Full Amount" subtitle="Issued on full payment" icon="🧾"
+                  title="Tax Invoice — Full Amount" icon="🧾"
+                  subtitle={taxInvoice
+                    ? (taxInvoice.number.startsWith('NLCF/') ? 'B2B · Crewfit register' : 'B2C · Normless register')
+                    : ((form.gst_number || '').trim() ? 'B2B — NLCF series, Crewfit register' : 'B2C — NL series, Normless register')}
                   amount={form.grand_total} invoice={taxInvoice}
                   busy={invoiceBusy === 'final'} locked={form.payment_status !== 'Fully Paid'}
                   lockedLabel="Awaiting full payment" onGenerate={() => downloadInvoice('final')}
@@ -1306,7 +1309,9 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
               </div>
               <div className="invoice-note">
                 An advance is acknowledged with a proforma, which carries no GST. The tax invoice is
-                issued once, for the full order value, when the balance is settled.
+                issued once, for the full order value, when the balance is settled — on the NLCF series
+                if the customer has a GSTIN, otherwise on the NL series shared with the Shopify orders.
+                Which one is fixed at issue: a GSTIN added afterwards does not move it.
               </div>
             </>
           )}
@@ -1323,6 +1328,14 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
             </div>
             <div className="input-group"><label>Email</label><input value={form.billing_email || ''} onChange={e => setF({ billing_email: e.target.value })} /></div>
             <div className="input-group"><label>GST Number</label><input value={form.gst_number || ''} onChange={e => setF({ gst_number: e.target.value })} /></div>
+            <div className="input-group">
+              <label>Place of supply</label>
+              <select value={form.place_of_supply || ''} onChange={e => setF({ place_of_supply: e.target.value })}>
+                <option value="">Derive from GSTIN / address</option>
+                {(meta?.states || []).map(v => <option key={v}>{v}</option>)}
+              </select>
+              <div className="field-hint">Decides CGST+SGST or IGST on the invoice.</div>
+            </div>
           </div>
           <div className="input-group"><label>Complete Billing Address *</label><input required value={form.billing_address || ''} onChange={e => setF({ billing_address: e.target.value })} /></div>
 

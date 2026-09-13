@@ -54,11 +54,6 @@ function fyLabel(d) {
   return `${String(y).slice(2)}-${String(y + 1).slice(2)}`;
 }
 
-async function nextInvoiceNumber(db) {
-  const r = await db.query("SELECT nextval('crewfit_invoice_seq') AS n");
-  return `CREWFIT/${fyLabel(new Date())}/${String(r.rows[0].n).padStart(4, '0')}`;
-}
-
 /**
  * Proformas run on their own sequence. An advance on goods carries no GST liability
  * (Notification 66/2017 — tax falls due at supply), so acknowledging one must never consume a
@@ -569,5 +564,5 @@ function renderShippingLabel(doc, order) {
 
 module.exports = {
   renderInvoice, renderProforma, renderQuote, renderShippingLabel, LABEL_SIZE,
-  nextInvoiceNumber, nextProformaNumber, taxSplit, SELLER,
+  nextProformaNumber, taxSplit, SELLER,
 };

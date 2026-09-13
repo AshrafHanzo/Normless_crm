@@ -70,7 +70,11 @@ export default function CrewfitInvoices() {
     if (!r) return
     if (r.error) { setPreview(null); setWarning(r.error); return }
     setPreview(r); setGaps(r.gaps || [])
-    if (!r.row_count) toast.error('No tax invoices were issued in this period')
+    if (!r.row_count) {
+      toast.error(r.b2c_count
+        ? `No B2B tax invoices in this period — the ${r.b2c_count} B2C one${r.b2c_count === 1 ? '' : 's'} are in the Normless register`
+        : 'No tax invoices were issued in this period')
+    }
   }
 
   const generate = async (ignoreGaps = false) => {
@@ -120,8 +124,8 @@ export default function CrewfitInvoices() {
         <div>
           <h1>Crewfit · Invoices</h1>
           <p style={{ color: 'var(--text-muted)' }}>
-            GST sales register for bulk orders, on its own invoice series.
-            Built from issued tax invoices — proformas carry no GST.
+            B2B register — tax invoices to customers with a GSTIN, on the NLCF series.
+            Invoices to customers without one are filed in the Normless register.
           </p>
         </div>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
@@ -172,8 +176,8 @@ export default function CrewfitInvoices() {
             ))}
           </div>
           <p style={{ color: 'var(--text-muted)', fontSize: 12.5 }}>
-            Preview only — nothing is filed until you generate. An invoice covering more than one HSN
-            contributes a row per HSN, so rows can exceed invoices.
+            Preview only — nothing is filed until you generate.
+            {preview.b2c_count > 0 && ` ${num(preview.b2c_count)} B2C invoice${preview.b2c_count === 1 ? '' : 's'} (${money(preview.b2c_gross)}) in this period sit${preview.b2c_count === 1 ? 's' : ''} in the Normless register, not here.`}
           </p>
         </div>
       )}

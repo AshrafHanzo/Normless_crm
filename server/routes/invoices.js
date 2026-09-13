@@ -85,7 +85,7 @@ router.get('/preview', async (req, res) => {
     if (bad) return res.status(400).json({ error: bad });
 
     try {
-        res.json(await gst.previewPeriod(from, to));
+        res.json(await gst.previewPeriod(db, from, to));
     } catch (err) {
         sendError(res, err, 'Failed to preview GST report');
     }
@@ -106,7 +106,7 @@ router.post('/generate', async (req, res) => {
     try {
         const rows = await db.transaction((client) => gst.buildRows(client, from, to));
         if (!rows.length) {
-            return res.status(422).json({ error: 'No fulfilled orders found in this period.' });
+            return res.status(422).json({ error: 'No fulfilled orders or Crewfit B2C invoices found in this period.' });
         }
 
         const label = gst.periodLabel(from, to);
