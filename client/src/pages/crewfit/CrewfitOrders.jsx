@@ -17,6 +17,15 @@ const photoClass = (s) => (s === 'Complete' ? 'fulfilled' : s === 'Partial' ? 'p
 
 const emptyFilters = { search: '', status: '', payment_status: '', layout_status: '', so: '', vendor: '', mock_status: '', prod_status: '' }
 
+// The tabs. Which orders each holds is decided on the server (VIEWS in routes/crewfit.js) so the
+// list and the counts can never disagree; "Active" is paid or half paid and not yet out the door.
+const VIEWS = [
+  { key: 'all', label: 'All' },
+  { key: 'active', label: 'Active' },
+  { key: 'awaiting', label: 'Awaiting Payment', short: 'Awaiting' },
+  { key: 'dispatched', label: 'Dispatched' },
+]
+
 export default function CrewfitOrders() {
   const apiFetch = useApi()
   const toast = useToast()
@@ -27,6 +36,8 @@ export default function CrewfitOrders() {
   const [orders, setOrders] = useState([])
   const [loading, setLoading] = useState(true)
   const [filters, setFilters] = useState(emptyFilters)
+  const [view, setView] = useState(() => (VIEWS.some(v => v.key === params.get('view')) ? params.get('view') : 'all'))
+  const [counts, setCounts] = useState(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [startDate, setStartDate] = useState('')
   const [endDate, setEndDate] = useState('')
@@ -46,13 +57,14 @@ export default function CrewfitOrders() {
   }, [searchTerm])
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { load() }, [filters, startDate, endDate, t.key])
+  useEffect(() => { load() }, [filters, startDate, endDate, view, t.key])
 
   const load = async () => {
     setLoading(true)
-    const res = await apiFetch('/api/crewfit/orders?' + t.query({ ...filters, startDate, endDate }))
+    const res = await apiFetch('/api/crewfit/orders?' + t.query({ ...filters, startDate, endDate, view }))
     const list = res?.orders || []
     setOrders(list)
+    if (res?.counts) setCounts(res.counts)
     if (res?.pagination) t.setPagination(res.pagination)
     setLoading(false)
     const focus = params.get('focus')
@@ -60,6 +72,8 @@ export default function CrewfitOrders() {
   }
 
   const setFilter = (k, v) => { setFilters(f => ({ ...f, [k]: v })); t.resetPage() }
+  // Kept in the URL so a tab survives a refresh and can be linked to from the dashboard.
+  const chooseView = (k) => { setView(k); t.resetPage(); if (k === 'all') params.delete('view'); else params.set('view', k); setParams(params, { replace: true }) }
   const applyDateFilter = (s, e) => { setStartDate(s); setEndDate(e); t.resetPage() }
   const clearDateFilter = () => { setStartDate(''); setEndDate(''); t.resetPage() }
 
@@ -74,6 +88,17 @@ export default function CrewfitOrders() {
           <DateRangeFilter startDate={startDate} endDate={endDate} onApply={applyDateFilter} onClear={clearDateFilter} />
           {canEdit && <button className="btn btn-primary" onClick={() => setTarget('new')}>+ New Order</button>}
         </div>
+      </div>
+
+      <div className="scan-tabs" style={{ marginBottom: 14 }}>
+        {VIEWS.map(v => (
+          <button key={v.key} className={view === v.key ? 'active' : ''} onClick={() => chooseView(v.key)}>
+            {v.short
+              ? <><span className="tab-label-full">{v.label}</span><span className="tab-label-short">{v.short}</span></>
+              : v.label}
+            {counts && <span className="tab-count">{counts[v.key] ?? 0}</span>}
+          </button>
+        ))}
       </div>
 
       <div className="filters-row filters-row-search">
@@ -93,7 +118,7 @@ export default function CrewfitOrders() {
 
       <div className="data-table-wrapper">
         {loading ? <div className="loader"><div className="spinner" /></div> : orders.length === 0 ? (
-          <div className="empty-state"><div className="empty-icon">📦</div><p>No orders match these filters.</p></div>
+          <div className="empty-state"><div className="empty-icon">📦</div><p>{view === 'all' ? 'No orders match these filters.' : `Nothing under ${VIEWS.find(v => v.key === view).label} matches these filters.`}</p></div>
         ) : (
           <div style={{ overflowX: 'auto' }}>
             <table className="data-table">

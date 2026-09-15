@@ -477,12 +477,21 @@ router.get('/reminders', async (req, res) => {
   }
 });
 
+// The tabs on the orders list. "Active" is what the floor is working on: money has come in and
+// the goods have not left. Cancelled orders only ever show under All.
+const VIEWS = {
+  all: () => true,
+  active: (o) => ['50% Paid', 'Fully Paid'].includes(o.payment_status) && !CLOSED.includes(o.status),
+  awaiting: (o) => o.payment_status === 'Pending' && !CLOSED.includes(o.status),
+  dispatched: (o) => o.status === 'Dispatched',
+};
+
 // GET /api/crewfit/orders — list with filters + pagination
 router.get('/orders', async (req, res) => {
   try {
     const {
       status, payment_status, layout_status, so, vendor, search,
-      mock_status, prod_status, startDate, endDate,
+      mock_status, prod_status, startDate, endDate, view,
     } = req.query;
     const t = tableParams(req.query, { sortable: ORDER_SORTS, defaultSort: 'sl_no' });
     let orders = await fetchAll();
@@ -515,10 +524,15 @@ router.get('/orders', async (req, res) => {
       }
     }
 
+    // The tabs. Counted over everything the other filters let through, so each tab says how many
+    // it holds before it is picked; then the chosen one narrows the list.
+    const counts = Object.fromEntries(Object.entries(VIEWS).map(([k, fn]) => [k, orders.filter(fn).length]));
+    if (VIEWS[view]) orders = orders.filter(VIEWS[view]);
+
     // Sorted across the whole filtered set before slicing, so "highest value first" means highest
     // of everything rather than highest of the page you happen to be on.
     const { rows, total } = sortAndPage(orders, t, ORDER_ACCESSORS);
-    res.json({ orders: rows, pagination: pagination(total, t) });
+    res.json({ orders: rows, counts, pagination: pagination(total, t) });
   } catch (err) {
     console.error('crewfit orders error:', err); res.status(500).json({ error: 'Failed to load orders' });
   }
