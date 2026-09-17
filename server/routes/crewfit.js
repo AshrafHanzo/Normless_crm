@@ -554,6 +554,10 @@ const EXTRA = ['printing', 'delivery_location', 'billing_name', 'contact_person'
 // Anything a change to which can move the place of supply.
 const SUPPLY_EVIDENCE = ['gst_number', 'billing_address', 'delivery_location'];
 
+// A GSTIN is stored the way the portal prints it: no stray spaces, upper case. The tax split
+// reads its first two digits, and " 33…" is not "33".
+const cleanGstin = (v) => (v == null ? v : String(v).replace(/\s+/g, '').toUpperCase());
+
 /**
  * Settle an order's place of supply. A typed state is kept (in its canonical spelling); a blank
  * one is read from the GSTIN, the pincode or the address, falling back to the home state, which
@@ -628,6 +632,7 @@ router.put('/orders/:id', canEditOrders, async (req, res) => {
 
     // Re-read the place of supply whenever its evidence changes or it is cleared; a state the
     // operator picked stays put through unrelated edits.
+    if (body.gst_number !== undefined) body.gst_number = cleanGstin(body.gst_number);
     if (body.place_of_supply !== undefined || SUPPLY_EVIDENCE.some(k => body[k] !== undefined)) {
       // A GSTIN names its state outright, so a new one overrides whatever was there before.
       const byGstin = body.gst_number !== undefined ? derivePlaceOfSupply({ gst_number: body.gst_number }).state : null;
@@ -695,6 +700,7 @@ router.post('/orders', canEditOrders, async (req, res) => {
     if (body.contact_number) {
       body.customer_type = (await historyForPhone(body.contact_number)).customer_type;
     }
+    if (body.gst_number !== undefined) body.gst_number = cleanGstin(body.gst_number);
     const pos = settlePlaceOfSupply(body);
     if (pos.error) return res.status(400).json({ error: pos.error });
     body.place_of_supply = pos.state;

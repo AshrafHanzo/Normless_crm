@@ -69,8 +69,10 @@ async function nextProformaNumber(db) {
  * registered customers, and an out-of-state consumer sale is still IGST.
  */
 function taxSplit(order) {
-  const byGstin = (order.gst_number || '').slice(0, 2);
-  if (byGstin) return { interState: byGstin !== SELLER.stateCode };
+  // Trimmed: a GSTIN keyed in with a leading space (" 33AAL…") read as state " 3" and put a
+  // Tamil Nadu customer on IGST.
+  const byGstin = (order.gst_number || '').trim().slice(0, 2);
+  if (/^\d{2}$/.test(byGstin)) return { interState: byGstin !== SELLER.stateCode };
   const pos = (order.place_of_supply || '').trim().toLowerCase();
   return { interState: !!pos && pos !== SELLER.state.toLowerCase() };
 }
