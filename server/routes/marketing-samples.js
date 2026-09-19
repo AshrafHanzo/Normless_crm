@@ -73,6 +73,19 @@ async function applyStock(row) {
   }
 }
 
+// GET /api/marketing/samples/products — the designs a request can ask for.
+// Served here, under the marketing permission, because the same list on /api/inventory/products
+// needs inventory access, which the marketing team doesn't have: their request form came up with
+// an empty design dropdown.
+router.get('/products', async (req, res) => {
+  try {
+    res.json({ products: await inv.catalogue() });
+  } catch (err) {
+    console.error('marketing samples products error:', err);
+    res.status(500).json({ error: 'Failed to load products' });
+  }
+});
+
 // GET /api/marketing/samples
 router.get('/', async (req, res) => {
   try {

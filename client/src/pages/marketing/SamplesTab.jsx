@@ -59,7 +59,7 @@ export default function SamplesTab() {
   const openForm = async () => {
     setForm(blankForm())
     if (!products) {
-      const r = await apiFetch('/api/inventory/products')
+      const r = await apiFetch('/api/marketing/samples/products')
       if (r && !r.error) setProducts(r.products.filter(p => p.variants.length))
     }
   }

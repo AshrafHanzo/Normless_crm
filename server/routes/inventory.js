@@ -299,23 +299,7 @@ async function resolveBlank(shopify_product_id, variant) {
 // GET /api/inventory/products — the cached catalogue, for putting a piece on the shelf by hand
 router.get('/products', async (req, res) => {
     try {
-        const r = await db.query(
-            `SELECT p.shopify_id, p.title, p.product_type, p.blank_type,
-                    v.variant_id, v.variant, v.color, v.size
-               FROM shopify_products p
-               LEFT JOIN shopify_variants v ON v.shopify_product_id = p.shopify_id
-              ORDER BY p.title, v.variant`);
-        const byId = new Map();
-        for (const row of r.rows) {
-            if (!byId.has(row.shopify_id)) {
-                byId.set(row.shopify_id, { shopify_id: row.shopify_id, title: row.title,
-                    product_type: row.product_type, blank_type: row.blank_type, variants: [] });
-            }
-            if (row.variant_id) {
-                byId.get(row.shopify_id).variants.push({ variant_id: row.variant_id, variant: row.variant, color: row.color, size: row.size });
-            }
-        }
-        res.json({ products: [...byId.values()] });
+        res.json({ products: await inv.catalogue() });
     } catch (err) {
         console.error('inventory products error:', err);
         res.status(500).json({ error: 'Failed to load products' });

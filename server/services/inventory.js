@@ -1240,8 +1240,33 @@ async function rtoForOrderNumber(orderNumber) {
     return matchesForOrder(o, availabilityIndex(rows));
 }
 
+/**
+ * The cached Shopify catalogue as products with their variants, for any form that picks a design
+ * by hand — the shelf, a sample request, an offline sale. Served by more than one route, each
+ * behind its own permission, so the shape lives here rather than in one of them.
+ */
+async function catalogue() {
+    const r = await db.query(
+        `SELECT p.shopify_id, p.title, p.product_type, p.blank_type,
+                v.variant_id, v.variant, v.color, v.size
+           FROM shopify_products p
+           LEFT JOIN shopify_variants v ON v.shopify_product_id = p.shopify_id
+          ORDER BY p.title, v.variant`);
+    const byId = new Map();
+    for (const row of r.rows) {
+        if (!byId.has(row.shopify_id)) {
+            byId.set(row.shopify_id, { shopify_id: row.shopify_id, title: row.title,
+                product_type: row.product_type, blank_type: row.blank_type, variants: [] });
+        }
+        if (row.variant_id) {
+            byId.get(row.shopify_id).variants.push({ variant_id: row.variant_id, variant: row.variant, color: row.color, size: row.size });
+        }
+    }
+    return [...byId.values()];
+}
+
 module.exports = {
-    BLANK_TYPES, SIZE_ORDER, TYPE_TO_BLANK, SKU_TO_BLANK,
+    BLANK_TYPES, SIZE_ORDER, TYPE_TO_BLANK, SKU_TO_BLANK, catalogue,
     refreshProductCache, productIndex, blankTypeFor, splitVariant, safeItems,
     deductionsFor, holdState, applyOrder, applyOrders, applySince, setStock,
     marketingHoldState, applyMarketingOrder, releaseMarketingOrder, applyMarketingSince,
