@@ -344,6 +344,13 @@ router.post('/:id/take-from-rto', canEdit, async (req, res) => {
 });
 
 /**
+ * Money arriving is what confirms a sale. A draft that has been paid for is no longer a draft —
+ * it used to stay one, which also meant its blanks never came off the shelf, since a draft holds
+ * nothing. Any later status is left alone.
+ */
+const confirmedBy = (sale) => (sale.status === 'Draft' ? 'Confirmed' : sale.status);
+
+/**
  * POST /api/offline-sales/:id/payment — record what was taken, or raise a link to send.
  *
  * Both, because both happen: cash over the counter and a link on WhatsApp are equally normal here,
@@ -389,9 +396,9 @@ router.post('/:id/payment', canEdit, async (req, res) => {
 
     const r = await db.query(
       `UPDATE offline_sales SET payment_status=$1, payment_method=$2, payment_ref=$3, paid_amount=$4,
-              paid_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=$5 RETURNING *`,
-      [state, method, trim(req.body?.reference), paid, sale.id]);
-    res.json(hydrate(r.rows[0]));
+              paid_at=CURRENT_TIMESTAMP, status=$5, updated_at=CURRENT_TIMESTAMP WHERE id=$6 RETURNING *`,
+      [state, method, trim(req.body?.reference), paid, confirmedBy(sale), sale.id]);
+    res.json({ ...hydrate(r.rows[0]), inventory: await applyStock(r.rows[0]) });
   } catch (err) {
     console.error('offline sale payment error:', err);
     res.status(500).json({ error: err?.error?.description || err.message || 'Failed to record the payment' });
@@ -412,9 +419,9 @@ router.post('/:id/payment/sync', canEdit, async (req, res) => {
     const r = await db.query(
       `UPDATE offline_sales SET payment_status='Paid', payment_method='Payment link',
               paid_amount=$1, paid_at=COALESCE(paid_at, CURRENT_TIMESTAMP), payment_ref=COALESCE(payment_ref,$2),
-              updated_at=CURRENT_TIMESTAMP WHERE id=$3 RETURNING *`,
-      [paid, link.id, sale.id]);
-    res.json({ ...hydrate(r.rows[0]), settled: true });
+              status=$3, updated_at=CURRENT_TIMESTAMP WHERE id=$4 RETURNING *`,
+      [paid, link.id, confirmedBy(sale), sale.id]);
+    res.json({ ...hydrate(r.rows[0]), settled: true, inventory: await applyStock(r.rows[0]) });
   } catch (err) {
     console.error('offline sale payment sync error:', err);
     res.status(500).json({ error: err?.error?.description || 'Failed to check the payment link' });

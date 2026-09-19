@@ -183,8 +183,20 @@ export default function OfflineSales() {
       payment_status: row.payment_status, payment_method: row.payment_method,
       payment_ref: row.payment_ref, paid_amount: row.paid_amount,
       razorpay_short_url: row.razorpay_short_url,
+      // A payment confirms a draft on the server; the drawer must not save "Draft" back over it.
+      status: row.status ?? f.status,
     }
   })
+
+  // Blanks come off the shelf the moment a draft is confirmed, which a payment now does.
+  const stockToast = (res) => {
+    const moved = (res.inventory?.deducted || []).map(d => `${d.color} ${d.size} −${d.qty}`).join(', ')
+    if (moved) toast.info(`Blanks: ${moved}`)
+    if (res.inventory?.unmapped?.length) {
+      toast.error(res.inventory.unmapped.map(u => `${u.product} — ${u.reason}`).join(' · '),
+        { title: 'Not deducted from blank stock', duration: 0 })
+    }
+  }
 
   const openPayment = (sale, mode) => {
     setCopied(false)
@@ -219,7 +231,8 @@ export default function OfflineSales() {
       load()
       return
     }
-    toast.success(`${res.ref} marked ${res.payment_status.toLowerCase()}`)
+    toast.success(`${res.ref} marked ${res.payment_status.toLowerCase()}${res.status === 'Confirmed' ? ' · confirmed' : ''}`)
+    stockToast(res)
     patchOpenForm(res)
     setPay(null); load()
   }
@@ -272,7 +285,8 @@ export default function OfflineSales() {
   const syncPayment = async (sale) => {
     const res = await apiFetch(`/api/offline-sales/${sale.id}/payment/sync`, { method: 'POST', body: JSON.stringify({}) })
     if (!res || res.error) { toast.error(res?.error || 'Failed'); return }
-    toast[res.settled ? 'success' : 'info'](res.settled ? `${res.ref} is paid` : `Link is still ${res.link_status}`)
+    toast[res.settled ? 'success' : 'info'](res.settled ? `${res.ref} is paid${res.status === 'Confirmed' ? ' · confirmed' : ''}` : `Link is still ${res.link_status}`)
+    if (res.settled) stockToast(res)
     patchOpenForm(res)
     load()
   }
