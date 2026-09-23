@@ -290,7 +290,8 @@ export default function StockTab({ onCounts }) {
               <table className="data-table inventory-grid">
                 <thead>
                   <tr>
-                    <th style={{ textAlign: 'left' }}>Colour</th>
+                    {/* An accessory has no colour — the row names the item itself. */}
+                    <th style={{ textAlign: 'left' }}>{type === 'Accessories' ? 'Item' : 'Colour'}</th>
                     {sizes.map(sz => <th key={sz} style={{ textAlign: 'center' }}>{sz}</th>)}
                     <th style={{ textAlign: 'right' }}>Total</th>
                   </tr>

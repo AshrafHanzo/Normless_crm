@@ -5,6 +5,10 @@
  * store sells 78 Oversize designs that are all printed on the same blank, so a sale of any of them
  * in Black / L draws from the single "Oversized Tee / Black / L" pool.
  *
+ * Accessories are the exception: a mask is not printed on anything, so there is no blank behind
+ * it and the finished item IS the stock. Each one is counted in its own pool under the
+ * "Accessories" heading, by name, in one size — see stockKeyFor().
+ *
  * A line item is resolved through the product it belongs to, not its title: titles are design
  * names ("Natty Forever") and say nothing about the garment. SKUs are not used as the key either —
  * 22 variants across 8 products have none — so the chain is
@@ -18,24 +22,53 @@
 
 const db = require('../db/connection');
 
-// Shopify product_type → the blank it is printed on.
+// Shopify product_type → the blank it is printed on. "Accessories" names no blank — the item is
+// stocked as itself — but it belongs here so the chain from an order line to a count is the same
+// one for every product.
 const TYPE_TO_BLANK = {
     Oversize: 'Oversized Tee',
     Tanks: 'Tank',
     Joggers: 'Track Pant',
+    Accessories: 'Accessories',
 };
 // SKU prefixes that override the product type. HDE products are typed "Oversize" in Shopify but
 // are hoodies; without this they would eat oversized-tee stock.
 const SKU_TO_BLANK = { HDE: 'Hoodie' };
 
-const BLANK_TYPES = ['Oversized Tee', 'Tank', 'Track Pant', 'Hoodie'];
-const SIZE_ORDER = ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL'];
+// Stocked as itself rather than as a blank: one pool per accessory, no colour or size to split by.
+const ACCESSORY = 'Accessories';
+const ONE_SIZE = 'One size';
+
+const BLANK_TYPES = ['Oversized Tee', 'Tank', 'Track Pant', 'Hoodie', ACCESSORY];
+const SIZE_ORDER = ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', ONE_SIZE];
 
 /** Blank type for a cached product row, or null if we can't tell. */
 function blankTypeFor(product) {
     if (!product) return null;
     if (product.sku_prefix && SKU_TO_BLANK[product.sku_prefix]) return SKU_TO_BLANK[product.sku_prefix];
     return TYPE_TO_BLANK[product.product_type] || null;
+}
+
+/**
+ * What an accessory is counted under: the product name, short enough to read in the grid.
+ * "Doomsday Mask - 3D-Printed Armor Mask | Normless" → "Doomsday Mask", which is also what the
+ * order line calls it. Two accessories would have to share a short name to share a pool.
+ */
+function accessoryName(product) {
+    const title = String(product?.title || '').split('|')[0];
+    return title.split(/[–—]| - /)[0].trim() || 'Accessory';
+}
+
+/**
+ * Which stock row a line comes out of: the blank behind a printed garment, or the accessory
+ * itself. Null when the product names no stock at all, or a garment's variant cannot be read.
+ */
+function stockKeyFor(product, variant) {
+    const blank = blankTypeFor(product);
+    if (!blank) return null;
+    if (blank === ACCESSORY) return { blank_type: blank, color: accessoryName(product), size: ONE_SIZE };
+    const parts = splitVariant(variant);
+    return parts ? { blank_type: blank, color: parts.color, size: parts.size } : null;
 }
 
 /** "Black / L" → { color: 'Black', size: 'L' }. Anything else is unusable. */
@@ -63,7 +96,7 @@ async function refreshProductCache() {
         // The prefix of whichever variant actually has a SKU — they agree within a product.
         const sku = (p.variants || []).map(v => v.sku).find(Boolean) || '';
         const prefix = sku.split('/')[0] || null;
-        const row = { product_type: p.product_type, sku_prefix: prefix };
+        const row = { title: p.title, product_type: p.product_type, sku_prefix: prefix };
         await db.query(
             `INSERT INTO shopify_products (shopify_id, title, product_type, sku_prefix, blank_type, updated_at)
              VALUES ($1,$2,$3,$4,$5,CURRENT_TIMESTAMP)
@@ -88,11 +121,12 @@ async function refreshProductCache() {
                 [v.id, p.id, v.title, parts?.color || null, parts?.size || null,
                     v.price != null ? Number(v.price) : null]);
             // Record every colour/size this blank is sold in, so the grid can show a cell to count
-            // into before any stock exists.
-            if (blank && parts) {
+            // into before any stock exists. An accessory contributes the one cell it is counted in.
+            const key = stockKeyFor(row, v.title);
+            if (key) {
                 await db.query(
                     `INSERT INTO inventory_catalog (blank_type, color, size) VALUES ($1,$2,$3)
-                     ON CONFLICT DO NOTHING`, [blank, parts.color, parts.size]);
+                     ON CONFLICT DO NOTHING`, [key.blank_type, key.color, key.size]);
             }
         }
     }
@@ -124,12 +158,11 @@ function deductionsFor(order, index) {
         if (qty <= 0) continue;
         const ref = `${order.shopify_id}:${it.shopify_variant_id || it.title}`;
         const product = index.get(String(it.shopify_product_id));
-        const blank = blankTypeFor(product);
-        const parts = splitVariant(it.variant);
+        const key = stockKeyFor(product, it.variant);
 
-        if (!blank || !parts) {
+        if (!key) {
             const reason = !product ? 'Product not in the local catalog cache'
-                : !blank ? `Product type "${product.product_type || '—'}" is not linked to a blank`
+                : !blankTypeFor(product) ? `Product type "${product.product_type || '—'}" is not linked to a blank`
                     : `Variant "${it.variant || '—'}" is not in "Colour / Size" form`;
             const prev = unmapped.get(ref);
             unmapped.set(ref, { ref, order_number: order.order_number, title: it.title,
@@ -138,8 +171,7 @@ function deductionsFor(order, index) {
             continue;
         }
         const prev = wanted.get(ref);
-        wanted.set(ref, { blank_type: blank, color: parts.color, size: parts.size,
-            qty: (prev?.qty || 0) + qty, title: it.title });
+        wanted.set(ref, { ...key, qty: (prev?.qty || 0) + qty, title: it.title });
     }
     return { wanted, unmapped };
 }
@@ -238,6 +270,12 @@ async function applyOrder(tx, order, index, state = holdState(order), resolved =
             changed++;
         }
         await tx.query('DELETE FROM inventory_movements WHERE id = $1', [stale.id]);
+    }
+
+    // A line that used to be unresolvable and now isn't — a product newly typed, an accessory
+    // given a pool — must stop being reported, or the list keeps asking about a solved problem.
+    if (wanted.size) {
+        await tx.query('DELETE FROM inventory_unmapped WHERE source_ref = ANY($1)', [[...wanted.keys()]]);
     }
 
     for (const [ref, u] of unmapped) {
@@ -1266,7 +1304,8 @@ async function catalogue() {
 }
 
 module.exports = {
-    BLANK_TYPES, SIZE_ORDER, TYPE_TO_BLANK, SKU_TO_BLANK, catalogue,
+    BLANK_TYPES, SIZE_ORDER, TYPE_TO_BLANK, SKU_TO_BLANK, ACCESSORY, ONE_SIZE, catalogue,
+    accessoryName, stockKeyFor,
     refreshProductCache, productIndex, blankTypeFor, splitVariant, safeItems,
     deductionsFor, holdState, applyOrder, applyOrders, applySince, setStock,
     marketingHoldState, applyMarketingOrder, releaseMarketingOrder, applyMarketingSince,

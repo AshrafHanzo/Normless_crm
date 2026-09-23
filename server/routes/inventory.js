@@ -38,7 +38,9 @@ const isAdmin = (req) => req.user?.role === 'owner' || req.user?.role === 'admin
 
 /** Sizes sort by garment order, not alphabetically — 2XL after XL, never between 2 and L. */
 const sizeRank = (s) => {
-    const i = inv.SIZE_ORDER.indexOf(String(s).toUpperCase());
+    // Case-insensitively: "One size" is a size like any other and would otherwise rank last.
+    const want = String(s).toUpperCase();
+    const i = inv.SIZE_ORDER.findIndex(x => x.toUpperCase() === want);
     return i === -1 ? 99 : i;
 };
 
@@ -288,12 +290,19 @@ router.post('/review/:id/clear', canEdit, async (req, res) => {
  * RTO — printed garments that came back
  * ========================================================================================== */
 
-/** Resolve a product + variant to the blank behind it, so a reuse knows what to credit. */
+/**
+ * Resolve a product + variant to the stock behind it, so a reuse knows what to credit — the blank
+ * a garment was printed on, or the accessory itself. Falls back to the variant's own colour and
+ * size when the product is unknown, so a shelf row still says what it is holding.
+ */
 async function resolveBlank(shopify_product_id, variant) {
+    const p = shopify_product_id
+        ? (await db.query('SELECT title, product_type, sku_prefix FROM shopify_products WHERE shopify_id = $1', [shopify_product_id])).rows[0]
+        : null;
+    const key = inv.stockKeyFor(p, variant);
+    if (key) return key;
     const parts = inv.splitVariant(variant);
-    if (!parts || !shopify_product_id) return { blank_type: null, color: parts?.color || null, size: parts?.size || null };
-    const p = (await db.query('SELECT product_type, sku_prefix FROM shopify_products WHERE shopify_id = $1', [shopify_product_id])).rows[0];
-    return { blank_type: inv.blankTypeFor(p), color: parts.color, size: parts.size };
+    return { blank_type: null, color: parts?.color || null, size: parts?.size || null };
 }
 
 // GET /api/inventory/products — the cached catalogue, for putting a piece on the shelf by hand
