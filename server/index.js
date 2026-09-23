@@ -16,6 +16,10 @@ const PORT = process.env.PORT || 5000;
 // (the Vite dev server talking to :5001) cannot read the filename we set and falls back to a
 // generic one. Same-origin in production never noticed.
 app.use(cors({ exposedHeaders: ['Content-Disposition'] }));
+// The scheduled Claude run posts each morning's marketing report here with a shared key. It is
+// mounted ahead of express.json below because it brings its own, larger body limit — the app-wide
+// parser would otherwise refuse a report over 100kb before the route ever saw it.
+app.use('/api/marketing/reports/ingest', require('./routes/marketing-reports').ingest);
 // Stash the raw bytes alongside the parsed body — the Razorpay webhook needs to HMAC-verify
 // the exact raw payload against its signature header, which is lost once JSON.parse runs.
 app.use(express.json({ verify: (req, res, buf) => { req.rawBody = buf; } }));
@@ -266,6 +270,7 @@ app.use('/api/crewfit', authMiddleware, crewfitRoutes);
 // Mounted before the marketing router: that one owns '/api/marketing/*' and would answer for
 // /samples itself, with a 404 from inside its own route table.
 app.use('/api/marketing/samples', authMiddleware, marketingSampleRoutes);
+app.use('/api/marketing/reports', authMiddleware, require('./routes/marketing-reports'));
 app.use('/api/marketing', authMiddleware, marketingRoutes);
 app.use('/api/offline-sales', authMiddleware, offlineSalesRoutes);
 
@@ -1047,6 +1052,21 @@ async function ensureMarketingSchema() {
             CREATE UNIQUE INDEX IF NOT EXISTS marketing_orders_ref_idx ON marketing_orders (ref_no);
             CREATE INDEX IF NOT EXISTS marketing_orders_date_idx ON marketing_orders (order_date DESC);
             CREATE INDEX IF NOT EXISTS marketing_orders_influencer_idx ON marketing_orders (influencer_id);
+
+            -- The daily HTML report a scheduled Claude run builds from Meta Ads and Shopify.
+            -- content_hash lets a retried upload land once instead of twice.
+            CREATE TABLE IF NOT EXISTS marketing_reports (
+                id SERIAL PRIMARY KEY,
+                title TEXT NOT NULL,
+                report_date DATE NOT NULL,
+                source TEXT,
+                html TEXT NOT NULL,
+                size_bytes INTEGER,
+                content_hash TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS marketing_reports_hash_idx ON marketing_reports (content_hash);
+            CREATE INDEX IF NOT EXISTS marketing_reports_date_idx ON marketing_reports (report_date DESC);
         `);
     } catch (err) {
         console.error('ensureMarketingSchema error:', err.message);

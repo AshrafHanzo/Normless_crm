@@ -1103,6 +1103,10 @@ select { cursor: pointer; appearance: none;
 /* The order drawer carries ~35 fields across 9 sections; at 680px that was 4.5–5 screens of
    scrolling. Wider lets .form-row lay out 3 fields per row instead of 2. */
 .drawer-wide { width: min(1080px, 96vw); }
+/* A marketing report is a whole page of its own, so it gets the full drawer and a white canvas
+   whatever the CRM theme — the report brings its own colours. */
+.report-drawer { width: min(1280px, 100vw); }
+.report-frame { flex: 1; width: 100%; border: 0; background: #fff; }
 .form-section { font-size: 12px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; color: var(--primary-light); margin: 20px 0 12px; padding-bottom: 6px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
 .unit-hint { font-size: 11px; font-weight: 500; color: var(--text-muted); text-transform: none; letter-spacing: 0; }
 .totals-bar { display: flex; gap: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 14px 16px; }

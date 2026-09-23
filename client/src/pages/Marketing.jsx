@@ -3,6 +3,7 @@ import { useApi, useAuth } from '../App'
 import { useToast } from '../components/Toast'
 import Icon from '../components/Icon'
 import SamplesTab from './marketing/SamplesTab'
+import ReportsTab from './marketing/ReportsTab'
 import ComboInput from '../components/ComboInput'
 import AutoTextarea from '../components/AutoTextarea'
 import useDirtyGuard from '../hooks/useDirtyGuard'
@@ -576,7 +577,7 @@ export default function Marketing() {
           <h1>Marketing</h1>
           <p style={{ color: 'var(--text-muted)' }}>Influencer collabs and the product seeding behind them</p>
         </div>
-        <button className="btn btn-primary" style={{ display: tab === 'samples' ? 'none' : undefined }}
+        <button className="btn btn-primary" style={{ display: ['samples', 'reports'].includes(tab) ? 'none' : undefined }}
           onClick={() => (tab === 'orders' ? setOrderTarget('new') : setInfluencerTarget('new'))}>
           <Icon name="plus" size={15} /> {tab === 'orders' ? 'New order' : 'New influencer'}
         </button>
@@ -586,10 +587,11 @@ export default function Marketing() {
         <button className={tab === 'orders' ? 'active' : ''} onClick={() => setTab('orders')}>📦 Orders</button>
         <button className={tab === 'influencers' ? 'active' : ''} onClick={() => setTab('influencers')}>⭐ Influencers</button>
         <button className={tab === 'samples' ? 'active' : ''} onClick={() => setTab('samples')}>📸 Shoot samples</button>
+        <button className={tab === 'reports' ? 'active' : ''} onClick={() => setTab('reports')}>📊 Daily reports</button>
       </div>
 
       {/* Influencer figures, which say nothing about a shoot sample — that tab brings its own. */}
-      <div className="kpi-grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)', display: tab === 'samples' ? 'none' : undefined }}>
+      <div className="kpi-grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)', display: ['samples', 'reports'].includes(tab) ? 'none' : undefined }}>
         <div className="kpi-card">
           <div className="kpi-head"><div className="kpi-icon">⭐</div></div>
           <div className="kpi-value">{activeCount}</div><div className="kpi-label">Active influencers</div>
@@ -610,7 +612,7 @@ export default function Marketing() {
 
       {/* Samples are their own thing entirely — their own filters, table and actions —
           so the shared search and list below are skipped rather than left empty. */}
-      {tab === 'samples' ? <SamplesTab /> : (
+      {tab === 'samples' ? <SamplesTab /> : tab === 'reports' ? <ReportsTab /> : (
         <>
         <div className="filters-row filters-row-search">
           <div className="search-bar"><span className="search-icon" />
