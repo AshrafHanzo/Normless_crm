@@ -412,7 +412,8 @@ export default function StockTab({ onCounts }) {
         <div className="confirm-overlay" onClick={() => setEdit(null)}>
           <div className="confirm-card" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true">
             <h3 className="confirm-title">{edit.blank_type}</h3>
-            <p className="confirm-message">{edit.color} · Size {edit.size}</p>
+            {/* An accessory is one pool with no colour or size — naming them would be noise. */}
+            <p className="confirm-message">{edit.blank_type === 'Accessories' ? edit.color : `${edit.color} · Size ${edit.size}`}</p>
             <dl className="confirm-details">
               <div className="confirm-detail"><dt>In stock now</dt><dd>{edit.item ? edit.item.qty : 'Not counted'}</dd></div>
               {!!edit.item && <div className="confirm-detail"><dt>Sold in 30 days</dt><dd>{edit.item.sold_30d}</dd></div>}
@@ -427,7 +428,7 @@ export default function StockTab({ onCounts }) {
                 onKeyDown={e => { if (e.key === 'Enter') saveCount() }} />
             </div>
             <div className="input-group">
-              <label>Reorder level — flag this blank at or below</label>
+              <label>Reorder level — flag this {edit.blank_type === 'Accessories' ? 'item' : 'blank'} at or below</label>
               <input type="number" min="0" value={reorder} onChange={e => setReorder(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter') saveCount() }} />
             </div>
