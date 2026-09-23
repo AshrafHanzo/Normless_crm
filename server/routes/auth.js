@@ -34,6 +34,23 @@ const transporter = nodemailer.createTransport({
     }
 });
 
+/**
+ * How long a session lasts, and how it stays alive.
+ *
+ * A month rather than a week, renewed whenever /verify sees a token past its halfway mark — so
+ * anyone who opens the CRM at least once a fortnight is never asked to sign in again. It used to
+ * be a flat seven days with no renewal, which signed people out mid-week for no reason they could
+ * see.
+ */
+const TOKEN_LIFE_DAYS = 30;
+const RENEW_AFTER_MS = (TOKEN_LIFE_DAYS / 2) * 86400 * 1000;
+
+const signToken = (user) => jwt.sign(
+    { id: user.id, username: user.username, role: user.role },
+    process.env.JWT_SECRET,
+    { expiresIn: `${TOKEN_LIFE_DAYS}d` }
+);
+
 // POST /api/auth/init-db - Reinitialize database (for recovery)
 router.post('/init-db', async (req, res) => {
     try {
@@ -84,11 +101,7 @@ router.post('/login', async (req, res) => {
             return res.status(401).json({ error: 'Invalid credentials' });
         }
 
-        const token = jwt.sign(
-            { id: user.id, username: user.username, role: user.role },
-            process.env.JWT_SECRET,
-            { expiresIn: '7d' }
-        );
+        const token = signToken(user);
 
         res.json({ 
             token, 
@@ -100,31 +113,49 @@ router.post('/login', async (req, res) => {
     }
 });
 
-// GET /api/auth/verify
+/**
+ * GET /api/auth/verify — who this token belongs to, and a fresh one if it is getting old.
+ *
+ * 401 means, and only ever means, that the token itself is no good: the client throws the session
+ * away on one. A database that is momentarily unreachable says 503 instead — it is not evidence
+ * about the token, and answering 401 signed every open tab out over a blip.
+ */
 router.get('/verify', async (req, res) => {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
         return res.status(401).json({ valid: false });
     }
 
+    const token = authHeader.split(' ')[1];
+    let decoded;
     try {
-        const token = authHeader.split(' ')[1];
-        const decoded = jwt.verify(token, process.env.JWT_SECRET);
-        
+        decoded = jwt.verify(token, process.env.JWT_SECRET);
+    } catch {
+        return res.status(401).json({ valid: false });
+    }
+
+    try {
         // Fetch full user data to get permissions
         const result = await db.query('SELECT * FROM admin_users WHERE id = $1', [decoded.id]);
         const user = result.rows[0];
 
-        if (!user) {
+        // The account is gone or switched off — a real reason to stop the session.
+        if (!user || user.is_active === false) {
             return res.status(401).json({ valid: false });
         }
 
-        res.json({ 
-            valid: true, 
-            user: publicUser(user)
+        // Past halfway, hand back a new token: sessions then last as long as they are used.
+        const expiresInMs = (decoded.exp || 0) * 1000 - Date.now();
+        const renewed = expiresInMs < RENEW_AFTER_MS ? signToken(user) : null;
+
+        res.json({
+            valid: true,
+            user: publicUser(user),
+            ...(renewed ? { token: renewed } : {}),
         });
-    } catch {
-        res.status(401).json({ valid: false });
+    } catch (err) {
+        console.error('verify lookup failed:', err.message);
+        res.status(503).json({ error: 'Could not reach the database — try again in a moment' });
     }
 });
 

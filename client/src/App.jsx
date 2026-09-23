@@ -126,13 +126,39 @@ function App() {
 
   const setBrand = (b) => { localStorage.setItem('crm_brand', b); setBrandState(b) }
 
+  /**
+   * Who the stored token belongs to.
+   *
+   * Only the server saying the token is no good (401) ends the session. Anything else — the
+   * connection dropping, a phone waking up, the backend restarting mid-deploy — is not evidence
+   * about the token, so the session is kept and the check retried with a widening gap. It used to
+   * sign the user out on any failure at all, which is why a blink of the network meant logging
+   * back in.
+   */
   useEffect(() => {
-    if (token) {
-      fetch(`${API_URL}/api/auth/verify`, { headers: { 'Authorization': `Bearer ${token}` } })
-        .then(r => r.json())
-        .then(data => { data.valid ? setUser(data.user) : logout() })
-        .catch(() => logout())
+    if (!token) return
+    let cancelled = false
+    let timer
+    const attempt = async (wait = 2000) => {
+      try {
+        const res = await fetch(`${API_URL}/api/auth/verify`, { headers: { Authorization: `Bearer ${token}` } })
+        if (cancelled) return
+        if (res.status === 401) { logout(); return }
+        if (!res.ok) throw new Error(`verify failed (${res.status})`)
+        const data = await res.json()
+        if (cancelled) return
+        if (!data.valid) { logout(); return }
+        setUser(data.user)
+        // Past halfway through its life, the server hands back a fresh one — so a session that
+        // keeps being used never reaches its expiry.
+        if (data.token && data.token !== token) { localStorage.setItem('crm_token', data.token); setToken(data.token) }
+      } catch {
+        if (cancelled) return
+        timer = setTimeout(() => attempt(Math.min(wait * 2, 30000)), wait)
+      }
     }
+    attempt()
+    return () => { cancelled = true; clearTimeout(timer) }
   }, [token])
 
   // When the user loads, make sure the active brand is one they can access.

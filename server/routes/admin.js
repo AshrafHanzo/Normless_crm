@@ -204,7 +204,9 @@ router.post('/change-password', async (req, res) => {
     const validPassword = bcrypt.compareSync(currentPassword, user.password_hash);
 
     if (!validPassword) {
-      return res.status(401).json({ error: 'Current password incorrect' });
+      // 400, not 401: a mistyped current password says nothing about the session, and a 401 had
+      // the client throw the token away and reload — typing it wrong signed you out.
+      return res.status(400).json({ error: 'Current password incorrect' });
     }
 
     const salt = bcrypt.genSaltSync(10);
