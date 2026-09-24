@@ -120,7 +120,10 @@ router.get('/:id', async (req, res) => {
   }
 });
 
+// Deleting removes the report for everyone and there is no bin, so only an owner can do it —
+// the reports permission lets people read and download, not clear the archive.
 router.delete('/:id', async (req, res) => {
+  if (req.user?.role !== 'owner') return res.status(403).json({ error: 'Only an owner can delete marketing reports' });
   try {
     const r = await db.query('DELETE FROM marketing_reports WHERE id = $1 RETURNING id', [req.params.id]);
     if (!r.rows[0]) return res.status(404).json({ error: 'Report not found' });

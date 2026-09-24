@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useApi } from '../../App'
+import { useApi, useAuth } from '../../App'
 import { useToast } from '../../components/Toast'
 import Icon from '../../components/Icon'
 import Pagination from '../../components/Pagination'
@@ -18,6 +18,9 @@ const size = (b) => (b >= 1024 * 1024 ? `${(b / 1024 / 1024).toFixed(1)} MB` : `
 export default function ReportsTab() {
   const apiFetch = useApi()
   const toast = useToast()
+  const { user } = useAuth()
+  // The server refuses anyone else; the button is hidden so nobody is offered it.
+  const canDelete = user?.role === 'owner'
 
   const [reports, setReports] = useState([])
   const [loading, setLoading] = useState(true)
@@ -90,7 +93,7 @@ export default function ReportsTab() {
                       <Icon name="eye" size={14} /> Preview</button>{' '}
                     <button className="btn btn-secondary btn-sm" onClick={() => download(row)} disabled={busyId === row.id}>
                       <Icon name="download" size={14} /> Download</button>{' '}
-                    <button className="btn-icon" title="Delete" onClick={() => remove(row)}><Icon name="trash" size={15} /></button>
+                    {canDelete && <button className="btn-icon" title="Delete" onClick={() => remove(row)}><Icon name="trash" size={15} /></button>}
                   </td>
                 </tr>
               ))}

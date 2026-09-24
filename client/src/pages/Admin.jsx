@@ -199,7 +199,7 @@ export default function AdminManagement() {
                   <Icon name="trending" size={15} />
                   <span>
                     <b>View daily marketing reports</b>
-                    <em>See the Daily reports tab — the Meta Ads + Shopify report posted each morning — and preview, download or delete it. It shows ad spend and store revenue.</em>
+                    <em>See the Daily reports tab — the Meta Ads + Shopify report posted each morning — and preview or download it. It shows ad spend and store revenue. Only an owner can delete a report.</em>
                   </span>
                 </label>
               </div>
