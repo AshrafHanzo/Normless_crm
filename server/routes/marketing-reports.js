@@ -4,7 +4,8 @@
  *
  * Two doors in. The scheduled run is not a logged-in user, so it posts through `ingest` with a
  * shared key (MARKETING_REPORT_API_KEY), the same way Razorpay posts its webhook. Everything else —
- * listing, opening, downloading, deleting — is behind the normal login and the marketing permission.
+ * listing, opening, downloading, deleting — is behind the normal login and its own permission,
+ * can_view_marketing_reports, on top of the Marketing page: the report shows ad spend and revenue.
  *
  * The HTML lives in the database rather than on disk: a report is a few hundred KB at most, and
  * keeping it in Postgres means it is covered by the same backups as everything else.
@@ -82,7 +83,8 @@ const router = express.Router();
 
 router.use(async (req, res, next) => {
   try {
-    if (!await hasPermission(req, 'can_view_marketing')) return res.status(403).json({ error: 'Access denied' });
+    const ok = await hasPermission(req, 'can_view_marketing') && await hasPermission(req, 'can_view_marketing_reports');
+    if (!ok) return res.status(403).json({ error: 'You do not have access to marketing reports' });
     next();
   } catch (err) { next(err); }
 });

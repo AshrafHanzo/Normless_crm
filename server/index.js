@@ -420,13 +420,16 @@ async function ensureCrewfitSchema() {
                 -- Separate from the page itself: only production fills in AWB/tracking and marks
                 -- an influencer order dispatched. Marketing sees those fields but can't edit them.
                 ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_dispatch_marketing BOOLEAN DEFAULT false;
+                -- The daily Meta Ads + Shopify report carries spend and revenue, so being on the
+                -- Marketing page does not by itself mean seeing it.
+                ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_marketing_reports BOOLEAN DEFAULT false;
             `);
             await db.query(`UPDATE admin_users SET can_access_normless=true, can_access_crewfit=true,
                 can_view_crewfit_followups=true, can_view_crewfit_orders=true, can_view_crewfit_catalog=true,
                 can_view_crewfit_analytics=true, can_view_crewfit_calculator=true, can_view_crewfit_payments=true,
                 can_view_crewfit_customers=true, can_view_revenue=true, can_view_invoices=true,
                 can_view_crewfit_vendors=true, can_view_crewfit_invoices=true, can_edit_crewfit_orders=true,
-                can_view_marketing=true, can_dispatch_marketing=true,
+                can_view_marketing=true, can_dispatch_marketing=true, can_view_marketing_reports=true,
                 can_view_inventory=true, can_edit_inventory=true, can_approve_marketing=true,
                 can_import_rto=true
                 WHERE role IN ('owner','admin')`);

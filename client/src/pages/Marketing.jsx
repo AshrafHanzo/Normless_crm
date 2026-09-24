@@ -470,6 +470,7 @@ export default function Marketing() {
   const isAdmin = user?.role === 'owner' || user?.role === 'admin'
   const canDispatch = isAdmin || !!user?.can_dispatch_marketing
   const canApprove = isAdmin || !!user?.can_approve_marketing
+  const canSeeReports = isAdmin || !!user?.can_view_marketing_reports
   // Sorting and paging are done by the server, so a column header changes the query rather than
   // reordering the 25 rows already on screen.
   const infTable = useServerTable({ sort: 'name', dir: 'asc' })
@@ -608,7 +609,7 @@ export default function Marketing() {
         <button className={tab === 'orders' ? 'active' : ''} onClick={() => setTab('orders')}>📦 Orders</button>
         <button className={tab === 'influencers' ? 'active' : ''} onClick={() => setTab('influencers')}>⭐ Influencers</button>
         <button className={tab === 'samples' ? 'active' : ''} onClick={() => setTab('samples')}>📸 Shoot samples</button>
-        <button className={tab === 'reports' ? 'active' : ''} onClick={() => setTab('reports')}>📊 Daily reports</button>
+        {canSeeReports && <button className={tab === 'reports' ? 'active' : ''} onClick={() => setTab('reports')}>📊 Daily reports</button>}
       </div>
 
       {/* Influencer figures, which say nothing about a shoot sample — that tab brings its own. */}
@@ -633,7 +634,7 @@ export default function Marketing() {
 
       {/* Samples are their own thing entirely — their own filters, table and actions —
           so the shared search and list below are skipped rather than left empty. */}
-      {tab === 'samples' ? <SamplesTab /> : tab === 'reports' ? <ReportsTab /> : (
+      {tab === 'samples' ? <SamplesTab /> : tab === 'reports' && canSeeReports ? <ReportsTab /> : (
         <>
         <div className="filters-row filters-row-search">
           <div className="search-bar"><span className="search-icon" />
