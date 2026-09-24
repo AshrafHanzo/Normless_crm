@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { useApi, useAuth } from '../App'
 import { useToast } from '../components/Toast'
 import Icon from '../components/Icon'
@@ -240,14 +240,18 @@ function OrderDrawer({ target, meta, influencers, products, productsError, onClo
     items: (target.items || []).length ? target.items : [blankItem()],
   }))
   // The production half is saved by its own endpoint, so it gets its own state and button.
-  const [dispatch, setDispatch] = useState(() => ({
-    status: target?.status || 'Requested',
+  const loadedDispatch = () => ({
+    status: target?.status || 'Pending Approval',
     fulfilled_date: target?.fulfilled_date || '',
     shopify_order_number: target?.shopify_order_number || '',
     shipping_partner: target?.shipping_partner || '',
     awb: target?.awb || '',
     tracking_link: target?.tracking_link || '',
-  }))
+  })
+  const [dispatch, setDispatch] = useState(loadedDispatch)
+  const [savedDispatch, setSavedDispatch] = useState(loadedDispatch)
+  const dispatchChanged = JSON.stringify(dispatch) !== JSON.stringify(savedDispatch)
+  const errorRef = useRef(null)
   const [saving, setSaving] = useState(false)
   const [dispatching, setDispatching] = useState(false)
   const [error, setError] = useState('')
@@ -255,7 +259,8 @@ function OrderDrawer({ target, meta, influencers, products, productsError, onClo
   const setD = (patch) => setDispatch(d => ({ ...d, ...patch }))
 
   const guard = useDirtyGuard({
-    snapshot: form, identity: isNew ? 'new' : target.id,
+    // Both halves, so closing with an unsaved status change asks first rather than dropping it.
+    snapshot: { form, dispatch }, identity: isNew ? 'new' : target.id,
     onDiscard: onClose, confirm: toast.confirm,
     title: 'Discard this order?',
     message: 'The details you have filled in will be lost.',
@@ -276,24 +281,40 @@ function OrderDrawer({ target, meta, influencers, products, productsError, onClo
     })
   }
 
+  // The error sits at the top of a long drawer, above where the save buttons are.
+  const fail = (msg) => { setError(msg); setTimeout(() => errorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 0) }
+
+  // One Save saves the whole drawer. The two halves still go to their own endpoints — the
+  // marketing edit and the dispatch update are separate permissions — but people changed the
+  // status, pressed Save order, and saw it silently not stick.
   const save = async (e) => {
     e.preventDefault()
     setSaving(true); setError('')
     const path = isNew ? '/api/marketing/orders' : `/api/marketing/orders/${target.id}`
     const res = await apiFetch(path, { method: isNew ? 'POST' : 'PUT', body: JSON.stringify(form) })
-    setSaving(false)
-    if (!res || res.error) { setError(res?.error || 'Failed to save'); return }
+    if (!res || res.error) { setSaving(false); fail(res?.error || 'Failed to save'); return }
+    // The list shows whatever comes back last, so it is the dispatch reply when there is one —
+    // the marketing reply still carries the old status.
+    let saved = res.order
+    if (!isNew && canDispatch && dispatchChanged) {
+      saved = await saveDispatch()
+      setSaving(false)
+      if (!saved) return
+    } else {
+      setSaving(false)
+      toast.success(`${res.order.ref} saved`, { title: 'Influencer order' })
+    }
     guard.reset()
-    toast.success(`${res.order.ref} saved`, { title: 'Influencer order' })
-    onSaved(res.order, isNew)
+    onSaved(saved, isNew)
   }
 
   const saveDispatch = async () => {
     setDispatching(true); setError('')
     const res = await apiFetch(`/api/marketing/orders/${target.id}/dispatch`, { method: 'POST', body: JSON.stringify(dispatch) })
     setDispatching(false)
-    if (!res || res.error) { setError(res?.error || 'Failed to update dispatch'); return }
-    setDispatch(d => ({ ...d, status: res.order.status, fulfilled_date: res.order.fulfilled_date || '', tracking_link: res.order.tracking_link || '' }))
+    if (!res || res.error) { fail(res?.error || 'Failed to update dispatch'); return null }
+    const next = { ...dispatch, status: res.order.status, fulfilled_date: res.order.fulfilled_date || '', tracking_link: res.order.tracking_link || '' }
+    setDispatch(next); setSavedDispatch(next)
 
     // Say what it did to blank stock. A silent deduction is the kind of thing people only notice
     // when the count is already wrong, and an item that resolved to no blank is worth naming.
@@ -305,7 +326,7 @@ function OrderDrawer({ target, meta, influencers, products, productsError, onClo
     if (stock.unmapped?.length) {
       toast.error(`${stock.unmapped.map(u => u.product).join(', ')} — no blank is linked, so nothing was deducted for it`)
     }
-    onSaved(res.order, false, true)
+    return res.order
   }
 
   const noAwbNeeded = (meta?.noAwbPartners || ['Offline']).includes(dispatch.shipping_partner)
@@ -319,7 +340,7 @@ function OrderDrawer({ target, meta, influencers, products, productsError, onClo
         </div>
 
         <div className="drawer-body">
-          {error && <div className="scan-error-msg" style={{ marginBottom: 14 }}>{error}</div>}
+          {error && <div ref={errorRef} className="scan-error-msg" style={{ marginBottom: 14 }}>{error}</div>}
 
           <form id="mk-order-form" onSubmit={save}>
             <div className="form-section" style={{ marginTop: 0 }}>Marketing</div>
@@ -377,7 +398,9 @@ function OrderDrawer({ target, meta, influencers, products, productsError, onClo
               <div className="form-row">
                 <div className="input-group"><label>Status</label>
                   <select value={dispatch.status} disabled={!canDispatch} onChange={e => setD({ status: e.target.value })}>
-                    {(meta?.statuses || []).map(s => <option key={s}>{s}</option>)}
+                    {(meta?.statuses || [])
+                      .filter(s => s !== 'Pending Approval' || dispatch.status === 'Pending Approval')
+                      .map(s => <option key={s}>{s}</option>)}
                   </select></div>
                 <div className="input-group"><label>Fulfilled date</label>
                   <input type="date" disabled={!canDispatch} value={dispatch.fulfilled_date || ''} onChange={e => setD({ fulfilled_date: e.target.value })} /></div>
@@ -400,10 +423,8 @@ function OrderDrawer({ target, meta, influencers, products, productsError, onClo
                     <a className="track-link" href={dispatch.tracking_link} target="_blank" rel="noreferrer">🔗 Open tracking</a>
                   )}</div>
               </div>
-              {canDispatch && (
-                <button type="button" className="btn btn-secondary" onClick={saveDispatch} disabled={dispatching}>
-                  {dispatching ? 'Saving…' : 'Save dispatch details'}
-                </button>
+              {canDispatch && dispatchChanged && (
+                <p className="img-upload-hint" style={{ marginTop: 4 }}>Unsaved dispatch changes — Save order saves them.</p>
               )}
             </>
           )}
@@ -411,7 +432,7 @@ function OrderDrawer({ target, meta, influencers, products, productsError, onClo
 
         <div className="drawer-footer">
           <button type="button" className="btn btn-secondary" onClick={guard.requestClose}>Cancel</button>
-          <button type="submit" form="mk-order-form" className="btn btn-primary" disabled={saving}>
+          <button type="submit" form="mk-order-form" className="btn btn-primary" disabled={saving || dispatching}>
             {saving ? 'Saving…' : isNew ? 'Create order' : 'Save order'}
           </button>
         </div>
