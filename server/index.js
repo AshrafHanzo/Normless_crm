@@ -40,6 +40,32 @@ app.use((req, res, next) => {
 // Auth middleware
 const authMiddleware = require('./middleware/auth');
 
+/**
+ * What the packer has to read off the screen to pull the right garment: the colour and the size.
+ *
+ * Both live in the variant Shopify sends ("Green / 2XL"). `options` carries the line's custom
+ * properties instead, which for most orders is an empty array — and an empty array is truthy, so
+ * the old "fill these in if there are no options" test never fired and every scanned order showed
+ * its specs blank. Properties whose name starts with an underscore are apps talking to themselves
+ * (the upsell funnel writes two per line) and are not for the bench.
+ */
+function specsFor(item) {
+    const parts = String(item.variant || '').split('/').map(p => p.trim()).filter(Boolean);
+    const specs = [];
+    if (parts.length >= 2) {
+        specs.push({ name: 'Color', value: parts[0] }, { name: 'Size', value: parts.slice(1).join(' / ') });
+    } else if (parts.length === 1 && parts[0].toLowerCase() !== 'default') {
+        // One-part variants are accessories and the like — "Default" says nothing worth printing.
+        specs.push({ name: 'Variant', value: parts[0] });
+    }
+    for (const opt of item.options || []) {
+        if (!opt?.name || String(opt.name).startsWith('_')) continue;
+        if (opt.value == null || opt.value === '' || opt.value === 'N/A') continue;
+        specs.push({ name: opt.name, value: String(opt.value) });
+    }
+    return specs;
+}
+
 // --- THE VIP SCANNER ROUTE (HARDCODED HERE FOR MAX RELIABILITY) ---
 app.get('/api/scanner/lookup/:id', authMiddleware, async (req, res) => {
     const id = req.params.id;
@@ -137,17 +163,7 @@ app.get('/api/scanner/lookup/:id', authMiddleware, async (req, res) => {
             if (order.line_items_json) {
                 try {
                     const rawItems = JSON.parse(order.line_items_json);
-                    order.line_items = rawItems.map(item => {
-                        // If we have a variant like "Black / XS", split it for the UI specs
-                        if (item.variant && !item.options) {
-                            const parts = item.variant.split(' / ');
-                            item.options = [
-                                { name: 'Color', value: parts[0] || 'N/A' },
-                                { name: 'Size', value: parts[1] || 'N/A' }
-                            ];
-                        }
-                        return item;
-                    });
+                    order.line_items = rawItems.map(item => ({ ...item, options: specsFor(item) }));
                 } catch (e) {
                     order.line_items = [];
                 }

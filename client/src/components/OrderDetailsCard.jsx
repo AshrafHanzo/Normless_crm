@@ -87,7 +87,13 @@ const OrderDetailsCard = ({ order }) => {
         <div className="scan-items">
           {items.map((item, itemIdx) => {
             const images = getItemImages(item);
-            const options = (item.options || []).filter(o => o?.value && o.value !== 'N/A');
+            // The server derives Color and Size from the variant; fall back to the raw variant so an
+            // order cached before that still tells the packer what to pull. Underscore-prefixed
+            // properties are apps talking to each other, never the bench.
+            let options = (item.options || []).filter(o => o?.value && o.value !== 'N/A' && !String(o.name || '').startsWith('_'));
+            if (!options.length && item.variant && item.variant.toLowerCase() !== 'default') {
+              options = [{ name: 'Variant', value: item.variant }];
+            }
 
             return (
               <div className="scan-item" key={item.id ?? `${item.title}-${itemIdx}`}>
