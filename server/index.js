@@ -163,6 +163,15 @@ app.get('/api/scanner/lookup/:id', authMiddleware, async (req, res) => {
                 order.rto_matches = [];
             }
 
+            // Has this parcel already gone out? Said on the lookup so a second scan of the same
+            // label shows who packed it instead of quietly logging a dispatch twice.
+            try {
+                order.packed = await require('./routes/packing').packedRow(order.order_number);
+            } catch (packErr) {
+                console.error('packed lookup failed:', packErr.message);
+                order.packed = null;
+            }
+
             console.log(`✅ [FOUND] Order ${order.order_number} with ${order.line_items.length} items`);
             return res.json(order);
         } else {
@@ -273,6 +282,8 @@ app.use('/api/marketing/samples', authMiddleware, marketingSampleRoutes);
 app.use('/api/marketing/reports', authMiddleware, require('./routes/marketing-reports'));
 app.use('/api/marketing', authMiddleware, marketingRoutes);
 app.use('/api/offline-sales', authMiddleware, offlineSalesRoutes);
+// The packing bench: confirming an order packed, and the dispatch log that comes out of it.
+app.use('/api/scanner', authMiddleware, require('./routes/packing'));
 
 // Health check
 app.get('/api/health', (req, res) => {
@@ -652,6 +663,38 @@ async function ensureOrderAuditSchema() {
 async function ensureInventorySchema() {
     try {
         await db.exec(`
+            -- Orders the packing bench has confirmed as packed and handed to the courier.
+            --
+            -- A snapshot, not a join: the courier's AWB, who the parcel went to and what was in it
+            -- are the facts of a dispatch, and they have to stay readable even after the order is
+            -- edited, the customer changes their address, or Shopify stops serving an order older
+            -- than sixty days. One row per order — a second scan of the same label is the same
+            -- parcel, not a second one.
+            CREATE TABLE IF NOT EXISTS packed_orders (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                order_number TEXT NOT NULL,
+                shopify_order_id TEXT,
+                awb TEXT,
+                courier TEXT,
+                tracking_url TEXT,
+                customer_name TEXT,
+                customer_phone TEXT,
+                customer_email TEXT,
+                ship_address TEXT,
+                ship_city TEXT,
+                ship_state TEXT,
+                ship_pincode TEXT,
+                total_price NUMERIC,
+                total_qty INTEGER,
+                items_json TEXT,
+                note TEXT,
+                packed_by TEXT,
+                packed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS packed_orders_order_idx ON packed_orders (order_number);
+            CREATE INDEX IF NOT EXISTS packed_orders_at_idx ON packed_orders (packed_at DESC);
+
             CREATE TABLE IF NOT EXISTS inventory_items (
                 id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
                 blank_type TEXT NOT NULL,

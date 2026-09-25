@@ -610,6 +610,47 @@ select { cursor: pointer; appearance: none;
   font-size: 11px; font-weight: 700; line-height: 1;
 }
 .scan-tabs button.active .tab-count { background: rgba(0,0,0,0.28); color: #fff; }
+
+/* ---- Packing bench: confirming a parcel, and the log of what went out -------------------- */
+/* The last action on a scanned order, so it is the width of the card and hard to miss —
+   a packer reaches for it with a parcel in the other hand. */
+.pack-confirm { margin-top: 14px; }
+.pack-confirm-btn { width: 100%; padding: 15px; font-size: 15.5px; font-weight: 700; }
+.pack-done {
+  display: flex; align-items: center; gap: 12px; padding: 14px 16px;
+  background: var(--surface); border: 1px solid var(--success, #16a34a); border-radius: var(--radius-md);
+  font-size: 13.5px; line-height: 1.45;
+}
+.pack-done-icon {
+  display: grid; place-items: center; width: 28px; height: 28px; flex: none; border-radius: 50%;
+  background: var(--success, #16a34a); color: #fff; font-weight: 800;
+}
+.pack-done-sub { color: var(--text-muted); font-size: 12.5px; margin-top: 2px; }
+.pack-done > button { margin-left: auto; }
+
+.packed-tab { margin-top: 4px; }
+.packed-toolbar { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.packed-stats { display: flex; flex-wrap: wrap; gap: 8px; }
+.packed-stat {
+  padding: 7px 12px; border-radius: 999px; background: var(--surface); border: 1px solid var(--border);
+  font-size: 12.5px; color: var(--text-secondary);
+}
+.packed-stat b { color: var(--text-primary); font-size: 14px; margin-right: 4px; }
+.packed-stat-muted { opacity: 0.75; }
+.packed-stat-warn { border-color: var(--warning, #d97706); }
+.packed-filters { display: flex; gap: 8px; align-items: center; flex: 1 1 320px; justify-content: flex-end; }
+.packed-filters .search-bar { flex: 1 1 240px; max-width: 420px; }
+.packed-awb { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; font-weight: 600; }
+.packed-sub { color: var(--text-muted); font-size: 11.5px; margin-top: 2px; max-width: 320px; }
+.packed-qty { font-weight: 700; }
+
+@media (max-width: 768px) {
+  .packed-toolbar { flex-direction: column; align-items: stretch; }
+  /* flex-basis follows the parent's axis: stacked, the row's 320px basis became 320px of HEIGHT. */
+  .packed-filters { flex: none; justify-content: stretch; }
+  .packed-filters .search-bar { max-width: none; }
+  .packed-sub { max-width: none; }
+}
 /* A tab label that would wrap on a phone gets a shorter spelling there. */
 .tab-label-short { display: none; }
 .nav-badge {

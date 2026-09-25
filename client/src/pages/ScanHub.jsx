@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useApi } from '../App';
+import { useToast } from '../components/Toast';
 import OrderDetailsCard from '../components/OrderDetailsCard';
+import PackedTab from './scan/PackedTab';
 
 const ScanHub = () => {
   const [activeTab, setActiveTab] = useState('scan');
@@ -9,8 +11,14 @@ const ScanHub = () => {
   const [order, setOrder] = useState(null);
   const [error, setError] = useState('');
   
+  // The parcel this order has already been logged as, if it has — set by the lookup and by
+  // confirming, so the button can say what happened rather than logging a dispatch twice.
+  const [packed, setPacked] = useState(null);
+  const [packing, setPacking] = useState(false);
+
   const inputRef = useRef(null);
   const apiFetch = useApi();
+  const toast = useToast();
   const executeSearchRef = useRef();
 
   // Always keep the ref perfectly synced with the latest version of the function
@@ -33,6 +41,7 @@ const ScanHub = () => {
 
       if (data && !data.error) {
         setOrder(data);
+        setPacked(data.packed || null);
       } else {
         setError(data?.error || `Order not found. (Scanned: "${currentScan}", isolated ID: "${cleanValue}")`);
         setOrder(null);
@@ -88,6 +97,34 @@ const ScanHub = () => {
     executeSearchRef.current(scanValue);
   };
 
+  const clearOrder = () => { setOrder(null); setPacked(null); setError(''); setScanValue(''); };
+
+  /**
+   * Confirm the parcel packed.
+   *
+   * Clears the screen afterwards, because the next thing that happens at the bench is the next
+   * label — leaving the finished order up is how the wrong one gets confirmed twice. The tracking
+   * number is read off the Shopify fulfilment by the server; nobody types an AWB.
+   */
+  const confirmPacked = async () => {
+    if (!order || packing) return;
+    setPacking(true);
+    const res = await apiFetch('/api/scanner/packed', {
+      method: 'POST',
+      body: JSON.stringify({ order_number: order.order_number }),
+    });
+    setPacking(false);
+    if (!res || res.error) { toast.error(res?.error || 'Could not record this parcel'); return; }
+    if (res.already) {
+      setPacked(res.packed);
+      toast.info(`${res.packed.order_number} was already packed by ${res.packed.packed_by || 'someone'}`);
+      return;
+    }
+    toast.success(`${res.packed.order_number} packed${res.packed.awb ? ` · AWB ${res.packed.awb}` : ''}`,
+      { title: 'Logged for dispatch' });
+    clearOrder();
+  };
+
   // Once an order is on screen the packer needs the garments, not the instructions — the header
   // and the scanner panel collapse into a single slim bar so the items start near the top.
   const compact = !!order;
@@ -103,15 +140,23 @@ const ScanHub = () => {
           <div className="scan-tabs">
             <button
               className={`scan-tab ${activeTab === 'scan' ? 'active' : ''}`}
-              onClick={() => { setActiveTab('scan'); setOrder(null); setError(''); setScanValue(''); }}
+              onClick={() => { setActiveTab('scan'); clearOrder(); }}
             >
               🎯 Scan
             </button>
             <button
               className={`scan-tab ${activeTab === 'manual' ? 'active' : ''}`}
-              onClick={() => { setActiveTab('manual'); setOrder(null); setError(''); setScanValue(''); }}
+              onClick={() => { setActiveTab('manual'); clearOrder(); }}
             >
               ⌨️ Manual
+            </button>
+            {/* What has gone out. Beside the scanner rather than on a page of its own: the person
+                asking "did that one ship?" is standing at the packing bench. */}
+            <button
+              className={`scan-tab ${activeTab === 'packed' ? 'active' : ''}`}
+              onClick={() => { setActiveTab('packed'); clearOrder(); }}
+            >
+              📦 Packed
             </button>
           </div>
         </div>
@@ -121,7 +166,7 @@ const ScanHub = () => {
             <span className="scan-listen-dot" />
             <span className="scan-listen-text">{loading ? 'Reading…' : 'Listening for scan'}</span>
             {!compact && <span className="scan-listen-hint">Use your barcode gun to scan the order now.</span>}
-            {compact && <button type="button" className="mini-btn" onClick={() => { setOrder(null); setError(''); setScanValue(''); }}>Clear</button>}
+            {compact && <button type="button" className="mini-btn" onClick={clearOrder}>Clear</button>}
             {/* Native DOM input, kept focused for hardware-level scanning protection */}
             <input
               ref={inputRef}
@@ -133,6 +178,8 @@ const ScanHub = () => {
               autoComplete="off"
             />
           </div>
+        ) : activeTab === 'packed' ? (
+          <PackedTab />
         ) : (
           <form onSubmit={handleManualSubmit} className="manual-lookup-form">
             <input
@@ -170,8 +217,26 @@ const ScanHub = () => {
         )}
 
         {order ? (
-          <OrderDetailsCard order={order} />
-        ) : !loading && !error && (
+          <>
+            <OrderDetailsCard order={order} />
+            <div className="pack-confirm">
+              {packed ? (
+                <div className="pack-done">
+                  <span className="pack-done-icon">✓</span>
+                  <div>
+                    <b>Already packed</b> by {packed.packed_by || 'someone'} · {new Date(packed.packed_at).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                    <div className="pack-done-sub">{packed.awb ? `AWB ${packed.awb}${packed.courier ? ` · ${packed.courier}` : ''}` : 'No tracking number recorded yet'}</div>
+                  </div>
+                  <button type="button" className="mini-btn" onClick={clearOrder}>Next order</button>
+                </div>
+              ) : (
+                <button type="button" className="btn btn-primary pack-confirm-btn" onClick={confirmPacked} disabled={packing}>
+                  {packing ? 'Recording…' : '📦 Confirm packed'}
+                </button>
+              )}
+            </div>
+          </>
+        ) : activeTab === 'packed' ? null : !loading && !error && (
           <div className="empty-state">
             <div className="empty-icon">📦</div>
             <h3>No Scan Detected</h3>
