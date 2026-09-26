@@ -547,7 +547,7 @@ router.get('/orders/:id', async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'Failed' }); }
 });
 
-const EXTRA = ['printing', 'delivery_location', 'billing_name', 'contact_person', 'billing_mobile', 'billing_email',
+const EXTRA = ['printing', 'printing_type', 'delivery_location', 'billing_name', 'contact_person', 'billing_mobile', 'billing_email',
   'gst_number', 'billing_address', 'unit_price', 'product_total', 'shipping', 'gst_amount', 'grand_total', 'advance', 'balance',
   'line_items', 'whatsapp_number', 'tracking_sent_at', 'photos_sent_at', 'place_of_supply'];
 
@@ -1012,7 +1012,8 @@ function ensureLineItems(order) {
   return [{
     product: order.product || '',
     color: order.color || '',
-    printing: order.printing || 'Front & Back',
+    printing_placement: order.printing || 'Front & Back',
+    printing_type: order.printing_type || '',
     qty: order.qty || '',
     unit_price: order.unit_price ?? (order.product_total && order.qty ? Math.round((order.product_total / order.qty) * 100) / 100 : ''),
     product_total: order.product_total ?? '',

@@ -1989,6 +1989,15 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .item-cols-4 > .form-row { grid-template-columns: minmax(0, 2.2fr) minmax(0, 1.6fr) minmax(0, 0.6fr) minmax(0, 0.9fr); }
 /* design · colour/size · qty */
 .item-cols-3 > .form-row { grid-template-columns: minmax(0, 2.4fr) minmax(0, 1.8fr) minmax(0, 0.6fr); }
+/* A Crewfit line: product · colour · qty · where the artwork goes · how it is applied. Five
+   named columns rather than the auto-fit grid, which fits four and drops the fifth onto a line
+   of its own beside three empty columns. */
+.crewfit-line-row {
+  grid-template-columns: minmax(0, 1.9fr) minmax(0, 1.2fr) minmax(0, 0.7fr) minmax(0, 1.3fr) minmax(0, 1.1fr);
+}
+@media (max-width: 1100px) {
+  .crewfit-line-row { grid-template-columns: repeat(auto-fit, minmax(min(190px, 100%), 1fr)); }
+}
 /* The row above already carries the spacing; the button only needs to clear the last one. */
 .form-item-add { margin-top: 2px; }
 

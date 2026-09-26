@@ -466,6 +466,10 @@ async function ensureCrewfitSchema() {
             await db.exec(`
                 ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS product TEXT;
                 ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS printing TEXT;
+                -- How the artwork is applied (DTF or embroidery), beside where it goes. Both are
+                -- summaries of the line items, kept flat for orders keyed in before line items
+                -- existed and for anything reading the row rather than the JSON.
+                ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS printing_type TEXT;
                 ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS delivery_location TEXT;
                 ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS billing_name TEXT;
                 ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS contact_person TEXT;

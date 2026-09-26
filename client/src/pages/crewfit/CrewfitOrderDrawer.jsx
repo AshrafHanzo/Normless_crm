@@ -6,7 +6,14 @@ import { useToast } from '../../components/Toast'
 import { cleanMobile, mobileError, isValidMobile, mobileInputProps } from '../../utils/phone'
 
 const fmt = (v) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(v || 0)
-const PRINTING = ['Front', 'Back', 'Front & Back', 'Front Chest & Back', 'No Print']
+// Where the artwork goes, and how it is applied. Two questions the floor asks separately: the
+// same placement is printed on one order and embroidered on the next.
+const PRINTING_PLACEMENTS = ['Front', 'Back', 'Front & Back', 'Front Chest & Back', 'No Print']
+const PRINTING_TYPES = ['DTF', 'Embroidery']
+
+/** Orders raised before placement and type were separate fields kept it all under `printing`. */
+const placementOf = (it) => it.printing_placement ?? it.printing ?? ''
+const printSpec = (it) => [placementOf(it), it.printing_type].filter(Boolean).join(' · ')
 const STANDARD_SIZES = ['XS', 'S', 'M', 'L', 'XL', 'XXL', '3XL', '4XL', '5XL']
 const MAX_IMAGE_MB = 10 // mirrors MAX_UPLOAD_MB in server/routes/crewfit.js
 
@@ -80,7 +87,7 @@ function dirtySnapshot(f) {
 
 function blankItem() {
   return {
-    product: '', color: '', printing: 'Front & Back', qty: '', unit_price: '', product_total: '', size_breakdown: '',
+    product: '', color: '', printing_placement: 'Front & Back', printing_type: '', qty: '', unit_price: '', product_total: '', size_breakdown: '',
     _sizeMode: 'standard', _sizes: {}, _pendingMock: [], _pendingProd: [],
   }
 }
@@ -127,7 +134,7 @@ function buildDescription(f) {
     L.push(`📦 *Product:* ${dash(it.product)}${it.color ? ` (${it.color})` : ''}`)
     L.push(`👕 *Quantity:* ${dash(it.qty)}`)
     L.push(`💵 *Price Per Piece:* ₹${it.unit_price || 0}`)
-    L.push(`🎨 *Printing:* ${dash(it.printing)}`)
+    L.push(`🎨 *Printing:* ${dash(printSpec(it))}`)
     L.push(`📏 *Size Breakdown:* ${dash(it.size_breakdown)}`)
     L.push('')
   })
@@ -171,7 +178,7 @@ function buildBalanceMessage(f, payment) {
     if (items.length > 1) L.push(`*Product ${i + 1}*`)
     L.push(`📦 *Product:* ${dash(it.product)}${it.color ? ` (${it.color})` : ''}`)
     L.push(`👕 *Quantity:* ${dash(it.qty)}`)
-    L.push(`🎨 *Printing:* ${dash(it.printing)}`)
+    L.push(`🎨 *Printing:* ${dash(printSpec(it))}`)
     L.push(`📏 *Size Breakdown:* ${dash(it.size_breakdown)}`)
     L.push('')
   })
@@ -620,7 +627,7 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
     if (!items) {
       // legacy single-product order — synthesize one line item from the flat fields
       items = (o.product || o.qty || o.product_total) ? [{
-        product: o.product || '', color: o.color || '', printing: o.printing || 'Front & Back', qty: o.qty || '',
+        product: o.product || '', color: o.color || '', printing_placement: o.printing || 'Front & Back', printing_type: o.printing_type || '', qty: o.qty || '',
         unit_price: o.unit_price ?? (o.product_total && o.qty ? Math.round((o.product_total / o.qty) * 100) / 100 : ''),
         product_total: o.product_total ?? '', size_breakdown: o.size_breakdown || ''
       }] : [blankItem()]
@@ -1033,7 +1040,8 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
       ...merged,
       product: items.map(i => i.product).filter(Boolean).join(', '),
       color: items.map(i => i.color).filter(Boolean).join(', '),
-      printing: items.length === 1 ? items[0].printing : items.map(i => i.printing).filter(Boolean).join(', '),
+      printing: items.length === 1 ? placementOf(items[0]) : items.map(placementOf).filter(Boolean).join(', '),
+      printing_type: items.length === 1 ? (items[0].printing_type || '') : [...new Set(items.map(i => i.printing_type).filter(Boolean))].join(', '),
       size_breakdown: items.map(i => `${i.product || 'Item'}: ${i.size_breakdown}`).join(' | '),
       unit_price: items.length === 1 ? items[0].unit_price : null,
     }
@@ -1169,7 +1177,7 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
                   <span>Product {idx + 1}</span>
                   {form.line_items.length > 1 && <button type="button" className="btn-icon" onClick={() => removeItem(idx)}>✕</button>}
                 </div>
-                <div className="form-row">
+                <div className="form-row crewfit-line-row">
                   <div className="input-group"><label>Product *</label>
                     <select required value={item.product || ''} onChange={e => onItemProduct(idx, e.target.value)}>
                       <option value="">— Select from catalog —</option>
@@ -1182,7 +1190,16 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
                       : <input required value={item.color || ''} onChange={e => updateItem(idx, { color: e.target.value })} placeholder="Color" />}
                   </div>
                   <div className="input-group"><label>Qty *</label><input required type="number" readOnly={item._sizeMode !== 'manual'} value={item.qty || ''} onChange={e => onItemQty(idx, e.target.value)} title={item._sizeMode !== 'manual' ? 'Derived from the size breakdown below' : ''} /></div>
-                  <div className="input-group"><label>Printing *</label><select required value={item.printing || ''} onChange={e => updateItem(idx, { printing: e.target.value })}><option value="">—</option>{PRINTING.map(v => <option key={v}>{v}</option>)}</select></div>
+                  <div className="input-group"><label>Printing placement *</label>
+                    <select required value={placementOf(item)} onChange={e => updateItem(idx, { printing_placement: e.target.value, printing: undefined })}>
+                      <option value="">—</option>{PRINTING_PLACEMENTS.map(v => <option key={v}>{v}</option>)}
+                    </select>
+                  </div>
+                  <div className="input-group"><label>Printing type *</label>
+                    <select required value={item.printing_type || ''} onChange={e => updateItem(idx, { printing_type: e.target.value })}>
+                      <option value="">—</option>{PRINTING_TYPES.map(v => <option key={v}>{v}</option>)}
+                    </select>
+                  </div>
                 </div>
                 <div className="input-group">
                   <label>Size breakdown *

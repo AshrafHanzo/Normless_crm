@@ -43,8 +43,12 @@ const prefillOrderFromQuote = (quote) => ({
   ship_region: quote.zone_label || 'Tamil Nadu',
   shipping: quote.shipping_charge,
   notes: quote.notes ? `${quote.notes} (from quote #${quote.id})` : `From quote #${quote.id}`,
+  // The quote already asked where the artwork goes and how it is applied — carrying them over
+  // saves the SO re-entering what the customer was quoted, and keeps the two documents agreeing.
   line_items: (quote.line_items || []).map(li => ({
-    product: li.product_name, color: '', printing: 'Front & Back',
+    product: li.product_name, color: '',
+    printing_placement: li.printing_placement || 'Front & Back',
+    printing_type: li.printing_type || '',
     qty: li.qty, unit_price: li.price_per_piece, product_total: li.line_total, size_breakdown: '',
   })),
 })
