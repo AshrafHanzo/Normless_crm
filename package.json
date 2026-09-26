@@ -4,10 +4,16 @@
   "description": "",
   "main": "server/index.js",
   "nodemonConfig": {
-    "watch": ["server"],
+    "watch": [
+      "server"
+    ],
     "ext": "js,json",
     "//": "Runtime-written files live under server/ but are not source. Without these ignores, saving an uploaded photo or a generated GST workbook restarts the dev server mid-request and the browser sees a connection reset.",
-    "ignore": ["server/storage/**", "server/uploads/**", "server/debug.log"]
+    "ignore": [
+      "server/storage/**",
+      "server/uploads/**",
+      "server/debug.log"
+    ]
   },
   "scripts": {
     "start": "node server/index.js",
@@ -33,7 +39,8 @@
     "nodemailer": "^6.9.7",
     "pdfkit": "^0.19.1",
     "pg": "^8.11.3",
-    "razorpay": "^2.9.8"
+    "razorpay": "^2.9.8",
+    "sharp": "^0.35.4"
   },
   "devDependencies": {
     "nodemon": "^3.1.14"

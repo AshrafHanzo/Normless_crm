@@ -298,6 +298,12 @@ app.use('/api/marketing/samples', authMiddleware, marketingSampleRoutes);
 app.use('/api/marketing/reports', authMiddleware, require('./routes/marketing-reports'));
 app.use('/api/marketing', authMiddleware, marketingRoutes);
 app.use('/api/offline-sales', authMiddleware, offlineSalesRoutes);
+// Resized copies of the uploaded images. Deliberately without authMiddleware, for the same reason
+// /uploads is public: an <img> tag cannot carry a bearer token, so a thumbnail behind auth is a
+// thumbnail that never loads. Nothing new is exposed — every path it serves, /uploads already
+// serves in full. Mounted here rather than beside the static handler because that sits below the
+// "API route not found" catch-all, which would swallow it.
+app.use('/api/thumb', require('./routes/thumbs'));
 // The packing bench: confirming an order packed, and the dispatch log that comes out of it.
 app.use('/api/scanner', authMiddleware, require('./routes/packing'));
 // Your own inbox: mentions and replies. Scoped to the caller inside the route.

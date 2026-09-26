@@ -29,7 +29,7 @@ const VIEWS = [
 export default function CrewfitOrders() {
   const apiFetch = useApi()
   const toast = useToast()
-  const { user } = useAuth()
+  const { user, API_URL } = useAuth()
   const canEdit = ['owner', 'admin'].includes(user?.role) || !!user?.can_edit_crewfit_orders
   const [params, setParams] = useSearchParams()
   const [meta, setMeta] = useState(null)
@@ -45,6 +45,9 @@ export default function CrewfitOrders() {
   const t = useServerTable({ sort: 'sl_no', dir: 'desc' })
   const [labelBusy, setLabelBusy] = useState(null)
   const [target, setTarget] = useState(null) // null | 'new' | order object
+  // { shots, index, ref } — the design mocks being looked at from the list, without opening
+  // the order. Glancing at what is being printed is most of why anyone opens these rows.
+  const [lightbox, setLightbox] = useState(null)
 
   useEffect(() => {
     apiFetch('/api/crewfit/meta').then(m => setMeta(m && m.statuses ? m : null))
@@ -78,6 +81,37 @@ export default function CrewfitOrders() {
   const clearDateFilter = () => { setStartDate(''); setEndDate(''); t.resetPage() }
 
   const printLabel = async (o) => { setLabelBusy(o.id); await openShippingLabel(apiFetch, o, toast); setLabelBusy(null) }
+
+  /**
+   * Every design mock on an order, flattened across its products.
+   *
+   * The row shows a resized copy and the lightbox the original: these are phone photos, a few
+   * megabytes each, and twenty-five rows of them would be ninety megabytes to draw postage stamps.
+   */
+  const mockShots = (o) => (o.line_items || []).flatMap(it =>
+    (it.mockImages || []).map(url => ({
+      thumb: `${API_URL}/api/thumb?src=${encodeURIComponent(url)}&w=96`,
+      src: `${API_URL}${url}`,
+      product: it.product || '',
+    })))
+
+  // The list has no other keyboard handler, so these only exist while an image is open.
+  useEffect(() => {
+    if (!lightbox) return
+    const onKey = (e) => {
+      if (e.key === 'Escape') setLightbox(null)
+      else if (e.key === 'ArrowLeft') step(-1)
+      else if (e.key === 'ArrowRight') step(1)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [lightbox])
+
+  const step = (delta) => setLightbox(lb => {
+    if (!lb) return lb
+    const n = lb.shots.length
+    return n < 2 ? lb : { ...lb, index: (lb.index + delta + n) % n }
+  })
 
 
   return (
@@ -127,6 +161,7 @@ export default function CrewfitOrders() {
                 <SortTh label="Date" col="order_date" sort={t.sort} onSort={t.toggle} />
                 <SortTh label="Customer" col="customer_name" sort={t.sort} onSort={t.toggle} />
                 <SortTh label="Product" col="product" sort={t.sort} onSort={t.toggle} />
+                <SortTh label="Mock" align="center" />
                 <SortTh label="Qty" col="qty" sort={t.sort} onSort={t.toggle} align="center" />
                 <SortTh label="Total" col="total_cost" sort={t.sort} onSort={t.toggle} align="right" />
                 <SortTh label="Deadline" col="deadline_at" sort={t.sort} onSort={t.toggle} />
@@ -161,6 +196,32 @@ export default function CrewfitOrders() {
                       )}
                     </td>
                     <td data-label="Product" style={{ fontSize: 12.5, maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.product || '—'}</td>
+                    {/* Shown here rather than only in the drawer: "which one is this again?" is the
+                        question the list is scanned for, and it has a picture as an answer. */}
+                    <td data-label="Mock" onClick={e => e.stopPropagation()}>
+                      {(() => {
+                        const shots = mockShots(o)
+                        if (!shots.length) return <span className="row-mock-none" title="No design mock uploaded yet">—</span>
+                        return (
+                          <div className="row-mocks">
+                            {shots.slice(0, 3).map((shot, i) => (
+                              <button type="button" key={i} className="row-mock"
+                                title={shot.product ? `${shot.product} — click to enlarge` : 'Click to enlarge'}
+                                onClick={() => setLightbox({ shots, index: i, ref: o.ref || `CF-${o.sl_no}` })}>
+                                <img src={shot.thumb} alt={shot.product || 'Design mock'} loading="lazy" decoding="async" />
+                              </button>
+                            ))}
+                            {shots.length > 3 && (
+                              <button type="button" className="row-mock row-mock-more"
+                                title={`${shots.length - 3} more`}
+                                onClick={() => setLightbox({ shots, index: 3, ref: o.ref || `CF-${o.sl_no}` })}>
+                                +{shots.length - 3}
+                              </button>
+                            )}
+                          </div>
+                        )
+                      })()}
+                    </td>
                     <td data-label="Qty" style={{ textAlign: 'center' }}>{o.qty || '—'}</td>
                     <td data-label="Total" style={{ textAlign: 'right', fontWeight: 700 }}>{o.total_cost ? fmt(o.total_cost) : '—'}</td>
                     <td data-label="Deadline" style={{ fontSize: 12.5 }}>{(o.deadline_at || '').slice(0, 10) || <span style={{ color: 'var(--text-muted)' }}>{o.deadline_text || '—'}</span>}</td>
@@ -192,6 +253,27 @@ export default function CrewfitOrders() {
       </div>
 
       <CrewfitOrderDrawer target={target} onClose={() => setTarget(null)} onSaved={() => { setTarget(null); load() }} />
+
+      {/* Full size, without leaving the list — the same overlay the drawer's gallery uses. */}
+      {lightbox && (
+        <div className="image-modal-overlay" onClick={() => setLightbox(null)}>
+          <div className="image-modal-content" onClick={e => e.stopPropagation()}>
+            <button className="image-modal-close" onClick={() => setLightbox(null)}>✕</button>
+            <img src={lightbox.shots[lightbox.index].src}
+              alt={lightbox.shots[lightbox.index].product || 'Design mock'} className="full-image" />
+            <div className="row-mock-caption">
+              {lightbox.ref}{lightbox.shots[lightbox.index].product ? ` · ${lightbox.shots[lightbox.index].product}` : ''}
+            </div>
+            {lightbox.shots.length > 1 && (
+              <>
+                <button className="modal-carousel-nav-btn modal-carousel-prev" onClick={() => step(-1)}>‹</button>
+                <button className="modal-carousel-nav-btn modal-carousel-next" onClick={() => step(1)}>›</button>
+                <div className="modal-carousel-counter">{lightbox.index + 1} / {lightbox.shots.length}</div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
