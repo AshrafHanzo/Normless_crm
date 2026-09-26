@@ -4,6 +4,7 @@ const { tableParams, pagination } = require('../utils/table');
 const inv = require('../services/inventory');
 const PDFDocument = require('pdfkit');
 const pickList = require('../services/pick-list');
+const renderPickListPdf = require('../services/pick-list-pdf');
 const { toCsv } = require('../utils/csv');
 
 const router = express.Router();
@@ -176,64 +177,15 @@ router.get('/pick-list.csv', async (req, res) => {
 /**
  * GET /api/orders/pick-list.pdf?from=&to=
  *
- * Printed the way it is read: a heading per garment type, then a block per design, with its
- * colours and sizes under it. A flat table of 300 rows is a worse piece of paper than the same
- * rows with their headings.
+ * The drawing lives in services/pick-list-pdf.js so it can be rendered from made-up rows in a
+ * test — page breaks are the part of a printed document that only shows up on the second page.
  */
 router.get('/pick-list.pdf', async (req, res) => {
     try {
         const { rows, summary, period } = await pickList.build(range(req.query));
-        const doc = new PDFDocument({ size: 'A4', margin: 40 });
         res.setHeader('Content-Type', 'application/pdf');
         res.setHeader('Content-Disposition', contentDisposition(fileName('pdf', period)));
-        doc.pipe(res);
-
-        const L = 40, R = 555, W = R - L;
-        const span = period.from && period.to
-            ? (period.from === period.to ? period.from : `${period.from} → ${period.to}`)
-            : 'All open orders';
-
-        doc.font('Helvetica-Bold').fontSize(18).fillColor('#1a1a1a').text('Pick list', L, 40);
-        doc.font('Helvetica').fontSize(9.5).fillColor('#666')
-            .text(`${span} · ${summary.units} units · ${summary.lines} lines · ${summary.orders} orders`, L, 63);
-        doc.font('Helvetica-Oblique').fontSize(8.5).fillColor('#888')
-            .text('Unfulfilled orders only — held, cancelled and refunded orders are left out.', L, 77);
-        doc.moveTo(L, 92).lineTo(R, 92).strokeColor('#ddd').lineWidth(1).stroke();
-
-        let y = 104;
-        const room = (need) => { if (y + need > 780) { doc.addPage(); y = 50; } };
-        const COL = { colour: L + 14, size: 300, qty: 360, orders: 405 };
-
-        let type = null, edition = null;
-        for (const r of rows) {
-            if (r.type !== type) {
-                room(40); type = r.type; edition = null;
-                doc.font('Helvetica-Bold').fontSize(12).fillColor('#1a1a1a').text(r.type, L, y);
-                y += 18;
-            }
-            if (r.edition !== edition) {
-                room(30); edition = r.edition;
-                doc.font('Helvetica-Bold').fontSize(9.5).fillColor('#444').text(edition, L + 6, y, { width: W - 12 });
-                y += 14;
-                doc.font('Helvetica').fontSize(7.5).fillColor('#999')
-                    .text('COLOUR', COL.colour, y).text('SIZE', COL.size, y)
-                    .text('QTY', COL.qty, y, { width: 30, align: 'right' }).text('ORDERS', COL.orders, y);
-                y += 11;
-            }
-            room(16);
-            doc.font('Helvetica').fontSize(9).fillColor('#1a1a1a')
-                .text(r.color, COL.colour, y, { width: 180, ellipsis: true })
-                .text(r.size, COL.size, y, { width: 55 });
-            doc.font('Helvetica-Bold').text(String(r.qty), COL.qty, y, { width: 30, align: 'right' });
-            doc.font('Helvetica').fontSize(7.5).fillColor('#777')
-                .text(r.orders.join(' '), COL.orders, y + 1, { width: R - COL.orders, ellipsis: true });
-            y += 14;
-        }
-
-        if (!rows.length) {
-            doc.font('Helvetica').fontSize(11).fillColor('#666').text('Nothing waiting to go out in this period.', L, y);
-        }
-        doc.end();
+        renderPickListPdf({ rows, summary, period }).pipe(res);
     } catch (err) {
         console.error('pick list pdf error:', err);
         if (!res.headersSent) res.status(500).json({ error: 'Failed to export the pick list' });
