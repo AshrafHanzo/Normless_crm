@@ -91,9 +91,6 @@ const ownerOnly = (req, res, next) => {
   next();
 };
 
-/** Owners and admins: they can remove anyone's comment, not only their own. */
-const isAdmin = (req) => req.user?.role === 'owner' || req.user?.role === 'admin';
-
 /** Trimmed text, or null — a box someone tabbed through is empty, not a value. */
 const trimmed = (v) => { const t = String(v ?? '').trim(); return t || null; };
 
@@ -985,16 +982,17 @@ router.post('/orders/:id/comments', canEditOrders, async (req, res) => {
 });
 
 /**
- * DELETE /api/crewfit/comments/:id — your own, or anyone's if you are an owner or admin.
- * Deliberately not editable: a comment someone else has already read and acted on should be
- * answered, not rewritten.
+ * DELETE /api/crewfit/comments/:id — the owner's alone.
+ *
+ * A comment is a record of what the team knew and when, so removing one is not tidying up after
+ * yourself: the person who wrote it is often exactly the person who would want it gone. Nobody
+ * can edit one either — a comment someone has already read and acted on is answered, not
+ * rewritten.
  */
-router.delete('/comments/:id', canEditOrders, async (req, res) => {
+router.delete('/comments/:id', ownerOnly, async (req, res) => {
   try {
-    const row = (await db.query('SELECT * FROM crewfit_order_comments WHERE id = $1', [req.params.id])).rows[0];
+    const row = (await db.query('SELECT id FROM crewfit_order_comments WHERE id = $1', [req.params.id])).rows[0];
     if (!row) return res.status(404).json({ error: 'That comment is already gone' });
-    const mine = row.created_by && row.created_by === req.user?.username;
-    if (!mine && !isAdmin(req)) return res.status(403).json({ error: 'You can only delete your own comments' });
     await db.query('DELETE FROM crewfit_order_comments WHERE id = $1', [req.params.id]);
     res.json({ success: true });
   } catch (err) {

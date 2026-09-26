@@ -32,7 +32,9 @@ export default function OrderComments({ orderId, draft, onDraft }) {
   const apiFetch = useApi()
   const toast = useToast()
   const { user } = useAuth()
-  const isAdmin = ['owner', 'admin'].includes(user?.role)
+  // Removing a comment is the owner's alone — it is a record of what the team knew and when, and
+  // the author is usually the one who would most want it gone.
+  const canDelete = user?.role === 'owner'
 
   const [comments, setComments] = useState([])
   const [loading, setLoading] = useState(!!orderId)
@@ -98,7 +100,7 @@ export default function OrderComments({ orderId, draft, onDraft }) {
                   <div className="comment-head">
                     <b>{who(c.created_by)}</b>
                     <span className="comment-when">{when(c.created_at)}</span>
-                    {(mine || isAdmin) && (
+                    {canDelete && (
                       <button type="button" className="comment-del" onClick={() => remove(c)} title="Delete this comment">✕</button>
                     )}
                   </div>
