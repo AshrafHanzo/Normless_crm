@@ -198,7 +198,9 @@ export default function CrewfitOrders() {
                     <td data-label="Product" style={{ fontSize: 12.5, maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.product || '—'}</td>
                     {/* Shown here rather than only in the drawer: "which one is this again?" is the
                         question the list is scanned for, and it has a picture as an answer. */}
-                    <td data-label="Mock" onClick={e => e.stopPropagation()}>
+                    {/* Only the thumbnails swallow the click, not the whole cell: clicking the
+                        empty part of this column should open the order like any other cell. */}
+                    <td data-label="Mock">
                       {(() => {
                         const shots = mockShots(o)
                         if (!shots.length) return <span className="row-mock-none" title="No design mock uploaded yet">—</span>
@@ -207,14 +209,14 @@ export default function CrewfitOrders() {
                             {shots.slice(0, 3).map((shot, i) => (
                               <button type="button" key={i} className="row-mock"
                                 title={shot.product ? `${shot.product} — click to enlarge` : 'Click to enlarge'}
-                                onClick={() => setLightbox({ shots, index: i, ref: o.ref || `CF-${o.sl_no}` })}>
+                                onClick={e => { e.stopPropagation(); setLightbox({ shots, index: i, ref: o.ref || `CF-${o.sl_no}` }) }}>
                                 <img src={shot.thumb} alt={shot.product || 'Design mock'} loading="lazy" decoding="async" />
                               </button>
                             ))}
                             {shots.length > 3 && (
                               <button type="button" className="row-mock row-mock-more"
                                 title={`${shots.length - 3} more`}
-                                onClick={() => setLightbox({ shots, index: 3, ref: o.ref || `CF-${o.sl_no}` })}>
+                                onClick={e => { e.stopPropagation(); setLightbox({ shots, index: 3, ref: o.ref || `CF-${o.sl_no}` }) }}>
                                 +{shots.length - 3}
                               </button>
                             )}
