@@ -1,3 +1,4 @@
+import { useSearchParams } from 'react-router-dom'
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { useApi, useAuth } from '../App'
 import { useToast } from '../components/Toast'
@@ -6,6 +7,7 @@ import SamplesTab from './marketing/SamplesTab'
 import ReportsTab from './marketing/ReportsTab'
 import ComboInput from '../components/ComboInput'
 import AutoTextarea from '../components/AutoTextarea'
+import OrderComments from '../components/OrderComments'
 import useDirtyGuard from '../hooks/useDirtyGuard'
 import useServerTable from '../hooks/useServerTable'
 import SortTh from '../components/SortTh'
@@ -230,6 +232,48 @@ function ItemRows({ items, products, onChange }) {
 
 /* ─────────────────────────────── order drawer ─────────────────────────────── */
 
+/**
+ * Marking the content live.
+ *
+ * Its own little form with its own save, because it is answered days after the order is otherwise
+ * finished — making someone press "Save order" to record a link they were handed on WhatsApp is
+ * how it ends up not being recorded at all. A link is required: "Posted" with nothing to show is
+ * a claim nobody can check.
+ */
+function PostStatus({ order, apiFetch, toast, onChanged }) {
+  const [link, setLink] = useState(order.video_link || '')
+  const [busy, setBusy] = useState(false)
+  const posted = order.post_status === 'Posted'
+
+  const set = async (post_status) => {
+    setBusy(true)
+    const res = await apiFetch(`/api/marketing/orders/${order.id}/post`, {
+      method: 'POST', body: JSON.stringify({ post_status, video_link: link.trim() }),
+    })
+    setBusy(false)
+    if (!res || res.error) { toast.error(res?.error || 'Failed to update'); return }
+    toast.success(post_status === 'Posted' ? `${res.order.ref} marked posted` : `${res.order.ref} back to pending`)
+    onChanged(res.order)
+  }
+
+  // A flex row rather than .form-row: that is a grid of equal columns, which made the button as
+  // wide as the field beside it.
+  return (
+    <div className="post-status-row">
+      <div className="input-group"><label>Link to the post</label>
+        <input value={link} onChange={e => setLink(e.target.value)} placeholder="https://instagram.com/reel/…" />
+        {posted && order.posted_by && (
+          <div className="field-hint">Marked posted by {String(order.posted_by).split('@')[0]}
+            {order.posted_at ? ` · ${new Date(order.posted_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}` : ''}</div>
+        )}
+      </div>
+      {posted
+        ? <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => set('Pending')}>{busy ? 'Saving…' : '↩ Back to pending'}</button>
+        : <button type="button" className="btn btn-primary" disabled={busy || !link.trim()} onClick={() => set('Posted')}>{busy ? 'Saving…' : '✓ Mark posted'}</button>}
+    </div>
+  )
+}
+
 function OrderDrawer({ target, meta, influencers, products, productsError, onClose, onSaved, apiFetch, toast, canDispatch }) {
   // "Send products" on an influencer row opens this prefilled but unsaved, so a missing id — not
   // the literal 'new' — is what actually distinguishes a draft from a stored order.
@@ -426,6 +470,18 @@ function OrderDrawer({ target, meta, influencers, products, productsError, onClo
               {canDispatch && dispatchChanged && (
                 <p className="img-upload-hint" style={{ marginTop: 4 }}>Unsaved dispatch changes — Save order saves them.</p>
               )}
+
+              {/* The point of the parcel. Saved on its own rather than with the order: it is
+                  answered days later, by whoever happens to see the post go up. */}
+              <div className="form-section">
+                Content
+                <span className={`status-badge ${form.post_status === 'Posted' ? 'fulfilled' : 'pending'}`}>{form.post_status || 'Pending'}</span>
+              </div>
+              <PostStatus order={target} apiFetch={apiFetch} toast={toast}
+                onChanged={(o) => { setF({ post_status: o.post_status, video_link: o.video_link }); onSaved(o, false, true) }} />
+
+              <div className="form-section">Comments</div>
+              <OrderComments entity="marketing_order" orderId={target.id} />
             </>
           )}
         </div>
@@ -447,6 +503,7 @@ export default function Marketing() {
   const apiFetch = useApi()
   const { user } = useAuth()
   const toast = useToast()
+  const [params, setParams] = useSearchParams()
   const [tab, setTab] = useState('orders')
   const [meta, setMeta] = useState(null)
   const [influencers, setInfluencers] = useState([])
@@ -532,6 +589,22 @@ export default function Marketing() {
     setInfluencerTarget(null)
     loadPicker()
   }
+  // A notification about a seeding order links straight at it. The order may not be on the page
+  // in view — or on any page under the current filters — so it is fetched by id rather than
+  // looked for in the list.
+  useEffect(() => {
+    const focus = params.get('focus')
+    if (!focus) return
+    let live = true
+    apiFetch(`/api/marketing/orders/${focus}`).then(r => {
+      if (!live) return
+      if (r && !r.error && r.order) { setTab('orders'); setOrderTarget(r.order) }
+      params.delete('focus'); setParams(params, { replace: true })
+    })
+    return () => { live = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params])
+
   const onOrderSaved = (saved, isNew, keepOpen) => {
     setOrders(list => (isNew ? [saved, ...list] : list.map(o => (o.id === saved.id ? saved : o))))
     if (!keepOpen) setOrderTarget(null)
@@ -670,11 +743,12 @@ export default function Marketing() {
                   <SortTh label="Date" col="order_date" sort={orderSort} onSort={toggleOrder} />
                   <SortTh label="Status" col="status" sort={orderSort} onSort={toggleOrder} />
                   <SortTh label="Dispatch" col="awb" sort={orderSort} onSort={toggleOrder} />
+                  <SortTh label="Posted" col="post_status" sort={orderSort} onSort={toggleOrder} />
                   <SortTh label="" />
                 </tr></thead>
                 <tbody>
                   {sortedOrders.map(o => (
-                    <tr key={o.id} onClick={() => setOrderTarget(o)} style={{ cursor: 'pointer' }}>
+                    <tr key={o.id} onClick={() => setOrderTarget(o)} style={{ cursor: 'pointer' }} className={o.comment_count ? 'has-note' : ''}>
                       <td className="cell-primary">
                         <span className="badge-primary">{o.ref}</span>
                         {/* Already printed and sitting on the shelf — send that one instead. */}
@@ -722,6 +796,13 @@ export default function Marketing() {
                           ? <a className="track-link" href={o.tracking_link} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()}>{o.awb}</a>
                           : <div style={{ color: 'var(--text-muted)' }}>{o.awb}</div>)}
                         {o.shopify_order_number && <div style={{ color: 'var(--text-muted)' }}>{o.shopify_order_number}</div>}
+                      </td>
+                      <td data-label="Posted" style={{ fontSize: 12 }}>
+                        <span className={`status-badge ${o.post_status === 'Posted' ? 'fulfilled' : 'pending'}`}>{o.post_status || 'Pending'}</span>
+                        {o.post_status === 'Posted' && o.video_link && (
+                          <a className="track-link" href={o.video_link} target="_blank" rel="noreferrer"
+                            onClick={e => e.stopPropagation()} title="Open the post">↗ View post</a>
+                        )}
                       </td>
                       <td className="cell-actions" onClick={e => e.stopPropagation()}>
                         <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>

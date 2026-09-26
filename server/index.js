@@ -302,6 +302,8 @@ app.use('/api/offline-sales', authMiddleware, offlineSalesRoutes);
 app.use('/api/scanner', authMiddleware, require('./routes/packing'));
 // Your own inbox: mentions and replies. Scoped to the caller inside the route.
 app.use('/api/notifications', authMiddleware, require('./routes/notifications'));
+// One comment thread implementation for every kind of thing that has one.
+app.use('/api/comments', authMiddleware, require('./routes/comments'));
 
 // Health check
 app.get('/api/health', (req, res) => {
@@ -657,24 +659,41 @@ async function ensureCrewfitSchema() {
 async function ensureOrderAuditSchema() {
     try {
         await db.exec(`
-            -- What the team says to each other about an order. Replaces the single shared "internal
-            -- notes" box, which had no author and no date: the second person to write in it either
-            -- overwrote the first or left a wall of text nobody could attribute.
-            CREATE TABLE IF NOT EXISTS crewfit_order_comments (
+            -- What the team says to each other about one thing — a bulk order, a seeding order.
+            -- Replaces the single shared "internal notes" box, which had no author and no date:
+            -- the second person to write in it either overwrote the first or left a wall of text
+            -- nobody could attribute.
+            --
+            -- It began as crewfit_order_comments and is renamed in place rather than copied, so
+            -- there is one table and one truth. The rename runs once; after it, the CREATE below
+            -- is the no-op it looks like.
+            DO $$
+            BEGIN
+                IF to_regclass('public.comments') IS NULL
+                   AND to_regclass('public.crewfit_order_comments') IS NOT NULL THEN
+                    ALTER TABLE crewfit_order_comments RENAME TO comments;
+                    ALTER TABLE comments RENAME COLUMN order_id TO entity_id;
+                END IF;
+            END $$;
+
+            CREATE TABLE IF NOT EXISTS comments (
                 id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
-                order_id INTEGER NOT NULL,
+                entity_id INTEGER NOT NULL,
                 body TEXT NOT NULL,
                 created_by TEXT,                 -- NULL for the notes imported from the old box
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
-            CREATE INDEX IF NOT EXISTS crewfit_comments_order_idx ON crewfit_order_comments (order_id, created_at);
+            -- What the comment is about. Defaulted, because every row that existed before this
+            -- column did was about a Crewfit order.
+            ALTER TABLE comments ADD COLUMN IF NOT EXISTS entity TEXT NOT NULL DEFAULT 'crewfit_order';
             -- A reply hangs off the comment it answers; one level deep, because a thread that
             -- nests further stops being readable in a drawer.
-            ALTER TABLE crewfit_order_comments ADD COLUMN IF NOT EXISTS parent_id INTEGER;
+            ALTER TABLE comments ADD COLUMN IF NOT EXISTS parent_id INTEGER;
             -- Who was named in it, resolved when it was posted rather than re-parsed on every
             -- read: usernames can change, and what matters is who was meant at the time.
-            ALTER TABLE crewfit_order_comments ADD COLUMN IF NOT EXISTS mentions TEXT;
-            CREATE INDEX IF NOT EXISTS crewfit_comments_parent_idx ON crewfit_order_comments (parent_id);
+            ALTER TABLE comments ADD COLUMN IF NOT EXISTS mentions TEXT;
+            CREATE INDEX IF NOT EXISTS comments_entity_idx ON comments (entity, entity_id, created_at);
+            CREATE INDEX IF NOT EXISTS comments_parent_idx ON comments (parent_id);
 
             -- Told to one person: you were named in a comment, or someone answered yours. Kept as
             -- rows rather than derived on read, because "have I seen this" is a fact about the
@@ -1148,6 +1167,14 @@ async function ensureMarketingSchema() {
             -- than inferred from its status.
             ALTER TABLE marketing_orders ADD COLUMN IF NOT EXISTS approved_by TEXT;
             ALTER TABLE marketing_orders ADD COLUMN IF NOT EXISTS approved_at TIMESTAMP;
+            -- Did the creator actually post? Separate from the dispatch status on purpose: a
+            -- parcel is Delivered long before the video goes up, and the whole point of seeding
+            -- is the content. 'Pending' until someone marks it posted with the link.
+            ALTER TABLE marketing_orders ADD COLUMN IF NOT EXISTS post_status TEXT DEFAULT 'Pending';
+            ALTER TABLE marketing_orders ADD COLUMN IF NOT EXISTS video_link TEXT;
+            ALTER TABLE marketing_orders ADD COLUMN IF NOT EXISTS posted_at TIMESTAMP;
+            ALTER TABLE marketing_orders ADD COLUMN IF NOT EXISTS posted_by TEXT;
+            UPDATE marketing_orders SET post_status = 'Pending' WHERE post_status IS NULL;
             -- The sheet's original vocabulary predates the approval step; these are the same two
             -- stages named for what they are now waiting on.
             UPDATE marketing_orders SET status = 'Pending Approval' WHERE status = 'Requested';

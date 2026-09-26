@@ -53,7 +53,8 @@ function CommentText({ body, handles, meHandle }) {
  * On a brand-new order there is nothing to attach to yet, so what is typed is handed to the
  * parent, which posts it once the order has an id.
  */
-export default function OrderComments({ orderId, draft, onDraft }) {
+export default function OrderComments({ entity = 'crewfit_order', orderId, draft, onDraft }) {
+  const base = orderId ? `/api/comments/${entity}/${orderId}` : null
   const apiFetch = useApi()
   const toast = useToast()
   const { user } = useAuth()
@@ -72,16 +73,17 @@ export default function OrderComments({ orderId, draft, onDraft }) {
 
   useEffect(() => {
     let cancelled = false
-    apiFetch('/api/crewfit/team').then(r => { if (!cancelled && r && !r.error) setTeam(r.team || []) })
+    if (!base) { setTeam([]); return () => { cancelled = true } }
+    apiFetch(`${base}/team`).then(r => { if (!cancelled && r && !r.error) setTeam(r.team || []) })
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [base])
 
   useEffect(() => {
     let cancelled = false
     if (!orderId) { setComments([]); setLoading(false); return () => { cancelled = true } }
     setLoading(true)
-    apiFetch(`/api/crewfit/orders/${orderId}/comments`).then(res => {
+    apiFetch(base).then(res => {
       if (cancelled) return
       if (res && !res.error) setComments(res.comments || [])
       setLoading(false)
@@ -103,7 +105,7 @@ export default function OrderComments({ orderId, draft, onDraft }) {
 
   const post = async (body, parentId) => {
     if (!orderId) { onDraft?.(body); return true }
-    const res = await apiFetch(`/api/crewfit/orders/${orderId}/comments`, {
+    const res = await apiFetch(base, {
       method: 'POST', body: JSON.stringify({ body, ...(parentId ? { parent_id: parentId } : {}) }),
     })
     if (!res || res.error) { toast.error(res?.error || 'Could not post that'); return false }
@@ -123,7 +125,7 @@ export default function OrderComments({ orderId, draft, onDraft }) {
       message: replies ? `${c.body.slice(0, 120)}\n\nIts ${replies} ${replies === 1 ? 'reply goes' : 'replies go'} too.` : c.body.slice(0, 160),
       confirmLabel: 'Delete', cancelLabel: 'Keep it', danger: true,
     })) return
-    const res = await apiFetch(`/api/crewfit/comments/${c.id}`, { method: 'DELETE' })
+    const res = await apiFetch(`${base}/${c.id}`, { method: 'DELETE' })
     if (!res || res.error) { toast.error(res?.error || 'Failed'); return }
     setComments(list => list.filter(x => x.id !== c.id && x.parent_id !== c.id))
   }

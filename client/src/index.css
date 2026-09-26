@@ -2000,6 +2000,11 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .chip:hover { border-color: var(--primary); color: var(--text-primary); }
 .chip-on { background: var(--primary); border-color: var(--primary); color: #fff; }
 
+/* Marking a seeding order posted: one field and one button, not a grid of equal columns. */
+.post-status-row { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+.post-status-row .input-group { flex: 1 1 260px; margin-bottom: 0; }
+.post-status-row .btn { flex: none; }
+
 /* ---- Notifications ------------------------------------------------------------------------ */
 .notif { position: relative; }
 .notif-btn {

@@ -10,6 +10,7 @@
 const express = require('express');
 const db = require('../db/connection');
 const { hasPermission } = require('../utils/permissions');
+const comments = require('./comments');
 const inv = require('../services/inventory');
 const { fetchProducts } = require('../services/shopify');
 const { validatePhoneFields } = require('../utils/phone');
@@ -40,7 +41,12 @@ const INFLUENCER_SORTS = {
 const MK_ORDER_SORTS = {
   ref_no: 'ref_no', name: 'LOWER(name)', total_qty: 'total_qty', order_date: 'order_date',
   status: 'status', shipping_partner: 'shipping_partner', awb: 'awb', fulfilled_date: 'fulfilled_date',
+  post_status: 'post_status',
 };
+
+// Did the creator post the video? Its own field, not a value of `status`: a parcel reaches
+// Delivered long before the content goes up, and seeding exists for the content.
+const POST_STATUSES = ['Pending', 'Posted'];
 
 router.use(async (req, res, next) => {
   try {
@@ -243,7 +249,8 @@ router.delete('/influencers/:id', async (req, res) => {
 const ORDER_COLUMNS = `id, ref_no, influencer_id, name, email, contact_number, address, collab_type,
   items, total_qty, TO_CHAR(order_date, 'YYYY-MM-DD') AS order_date, status, notes,
   TO_CHAR(fulfilled_date, 'YYYY-MM-DD') AS fulfilled_date, shopify_order_number,
-  shipping_partner, awb, tracking_link, created_by, created_at, approved_by, approved_at`;
+  shipping_partner, awb, tracking_link, created_by, created_at, approved_by, approved_at,
+  post_status, video_link, posted_at, posted_by`;
 
 const hydrateOrder = (row) => ({ ...row, items: parseJson(row.items, []), ref: refLabel(row) });
 
@@ -310,6 +317,7 @@ router.get('/orders', async (req, res) => {
     if (status) { vals.push(status); where.push(`status = $${vals.length}`); }
     if (influencerId) { vals.push(influencerId); where.push(`influencer_id = $${vals.length}`); }
     if (open === 'true') where.push(`status NOT IN ('Delivered','Cancelled')`);
+    if (req.query.post_status) { vals.push(req.query.post_status); where.push(`COALESCE(post_status,'Pending') = $${vals.length}`); }
     if (search) {
       vals.push(`%${search}%`);
       where.push(`(name ILIKE $${vals.length} OR email ILIKE $${vals.length} OR items ILIKE $${vals.length}
@@ -333,13 +341,17 @@ router.get('/orders', async (req, res) => {
         'SELECT id, profile_url FROM marketing_influencers WHERE id = ANY($1)', [ids])).rows.map(i => [i.id, i.profile_url]));
       orders.forEach(o => { o.profile_url = links.get(o.influencer_id) || null; });
     }
+    // How much has been said about each — the list flags an order that has been talked about.
+    const counts = await comments.countsFor('marketing_order', orders.map(o => o.id));
+    orders.forEach(o => { o.comment_count = counts.get(o.id) || 0; });
     // Summary describes every order that matches the filters, not just the page in view — a
     // count that changed as you paged would be meaningless.
     const sums = await db.query(
       `SELECT COUNT(*)::int AS total,
               COUNT(*) FILTER (WHERE status NOT IN ('Delivered','Cancelled','Dispatched'))::int AS awaiting,
               COUNT(*) FILTER (WHERE status = 'Dispatched')::int AS in_transit,
-              COALESCE(SUM(total_qty) FILTER (WHERE status <> 'Cancelled'), 0)::int AS units
+              COALESCE(SUM(total_qty) FILTER (WHERE status <> 'Cancelled'), 0)::int AS units,
+              COUNT(*) FILTER (WHERE COALESCE(post_status,'Pending') <> 'Posted' AND status <> 'Cancelled')::int AS unposted
        FROM marketing_orders ${whereSql}`, vals);
     const s = sums.rows[0] || {};
 
@@ -365,6 +377,7 @@ router.get('/orders', async (req, res) => {
         awaitingDispatch: s.awaiting || 0,
         inTransit: s.in_transit || 0,
         unitsSent: s.units || 0,
+        awaitingPost: s.unposted || 0,
       },
     });
   } catch (err) {
@@ -388,6 +401,56 @@ router.get('/orders/pending-count', async (req, res) => {
   } catch (err) {
     console.error('marketing pending count error:', err);
     res.status(500).json({ error: 'Failed to count pending orders' });
+  }
+});
+
+// GET /api/marketing/orders/:id — one order, for a link that points straight at it.
+// Declared after /orders/pending-count so the literal path still wins.
+router.get('/orders/:id', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: 'Which order?' });
+    const r = await db.query(`SELECT ${ORDER_COLUMNS} FROM marketing_orders WHERE id = $1`, [id]);
+    if (!r.rows[0]) return res.status(404).json({ error: 'Order not found' });
+    res.json({ order: hydrateOrder(r.rows[0]) });
+  } catch (err) {
+    console.error('marketing order read error:', err);
+    res.status(500).json({ error: 'Failed to load the order' });
+  }
+});
+
+/**
+ * POST /api/marketing/orders/:id/post { post_status, video_link? }
+ *
+ * Marking the content live, or taking it back. A link is required to mark it Posted — "Posted"
+ * with nothing to show is a claim nobody can check, which is the state the spreadsheet was in.
+ */
+router.post('/orders/:id/post', async (req, res) => {
+  try {
+    const wanted = String(req.body?.post_status || '').trim();
+    if (!POST_STATUSES.includes(wanted)) return res.status(400).json({ error: 'Post status must be Pending or Posted' });
+
+    const link = String(req.body?.video_link || '').trim();
+    if (wanted === 'Posted') {
+      if (!link) return res.status(400).json({ error: 'Add the link to the post before marking it posted' });
+      if (!/^https?:\/\//i.test(link)) return res.status(400).json({ error: 'That does not look like a link — it should start with http:// or https://' });
+    }
+
+    const r = await db.query(
+      `UPDATE marketing_orders
+          SET post_status = $1,
+              video_link = $2,
+              posted_at = CASE WHEN $1 = 'Posted' THEN COALESCE(posted_at, CURRENT_TIMESTAMP) END,
+              posted_by = CASE WHEN $1 = 'Posted' THEN $3 END,
+              updated_at = CURRENT_TIMESTAMP
+        WHERE id = $4
+        RETURNING ${ORDER_COLUMNS}`,
+      [wanted, wanted === 'Posted' ? link : null, req.user?.username || null, req.params.id]);
+    if (!r.rows[0]) return res.status(404).json({ error: 'Order not found' });
+    res.json({ order: hydrateOrder(r.rows[0]) });
+  } catch (err) {
+    console.error('marketing post status error:', err);
+    res.status(500).json({ error: 'Failed to update the post status' });
   }
 });
 
@@ -583,7 +646,8 @@ router.get('/meta', async (req, res) => {
     )).rows.map(r => r.location);
     res.json({
       contentTypes: CONTENT_TYPES, collabTypes: COLLAB_TYPES, platforms: PLATFORMS,
-      statuses: STATUSES, shippingPartners: SHIPPING_PARTNERS, noAwbPartners: NO_AWB_PARTNERS,
+      statuses: STATUSES, postStatuses: POST_STATUSES,
+      shippingPartners: SHIPPING_PARTNERS, noAwbPartners: NO_AWB_PARTNERS,
       locations,
       canDispatch: await canDispatch(req),
       canApprove: await canApprove(req),

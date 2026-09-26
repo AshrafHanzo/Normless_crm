@@ -13,16 +13,21 @@ const db = require('../db/connection');
 /** The part of a username people actually say out loud: anu@normless.store → anu. */
 const handleOf = (username) => String(username || '').split('@')[0].toLowerCase();
 
+// Permission columns this module will read. The name is interpolated into the query — parameters
+// cannot stand in for identifiers — so it can never come straight from a caller.
+const MENTION_PERMS = new Set(['can_view_crewfit_orders', 'can_view_marketing', 'can_view_orders']);
+
 /**
- * Everyone who could be named in a comment: active accounts that can open the order being
+ * Everyone who could be named in a comment: active accounts that can open the thing being
  * discussed. Mentioning someone who cannot see it would notify them about a page they cannot
  * reach.
  */
-async function mentionableUsers() {
+async function mentionableUsers(permission = 'can_view_crewfit_orders') {
+    if (!MENTION_PERMS.has(permission)) throw new Error(`Unknown mention permission: ${permission}`);
     const r = await db.query(
         `SELECT username, role FROM admin_users
           WHERE COALESCE(is_active, true) = true
-            AND (role IN ('owner','admin') OR COALESCE(can_view_crewfit_orders, false) = true)
+            AND (role IN ('owner','admin') OR COALESCE(${permission}, false) = true)
           ORDER BY username`);
     return r.rows.map(u => ({ username: u.username, handle: handleOf(u.username), role: u.role }));
 }
