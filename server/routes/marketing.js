@@ -373,6 +373,24 @@ router.get('/orders', async (req, res) => {
   }
 });
 
+/**
+ * GET /api/marketing/orders/pending-count — seeding orders that have not gone out.
+ *
+ * Its own endpoint rather than the full list: the sidebar asks for this every couple of minutes
+ * on every page, and it has no business pulling a page of orders to count them.
+ */
+router.get('/orders/pending-count', async (req, res) => {
+  try {
+    const r = await db.query(
+      `SELECT COUNT(*)::int AS n FROM marketing_orders
+        WHERE status NOT IN ('Delivered','Cancelled','Dispatched')`);
+    res.json({ pending: r.rows[0].n });
+  } catch (err) {
+    console.error('marketing pending count error:', err);
+    res.status(500).json({ error: 'Failed to count pending orders' });
+  }
+});
+
 // POST /api/marketing/orders — raised by marketing; the dispatch half stays empty until production fills it
 router.post('/orders', async (req, res) => {
   const body = req.body || {};

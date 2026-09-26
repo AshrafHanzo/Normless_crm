@@ -8,8 +8,15 @@ import { useEffect, useRef } from 'react'
  * Height is measured rather than derived from the character count: wrapping depends on the
  * field's actual width, which varies with the drawer, the column layout and the viewport.
  */
-export default function AutoTextarea({ value, minRows = 3, maxRows = 16, style, ...props }) {
+export default function AutoTextarea({ value, minRows = 3, maxRows = 16, style, inputRef, ...props }) {
   const ref = useRef(null)
+  // The element is needed here to measure it, and sometimes by the caller too — a mention picker
+  // has to know where the caret is. `inputRef` is a callback rather than a ref object, because
+  // writing through someone else's ref is writing to a prop.
+  const attach = (el) => {
+    ref.current = el
+    if (typeof inputRef === 'function') inputRef(el)
+  }
 
   useEffect(() => {
     const el = ref.current
@@ -27,5 +34,5 @@ export default function AutoTextarea({ value, minRows = 3, maxRows = 16, style, 
     el.style.overflowY = el.scrollHeight > max ? 'auto' : 'hidden'
   }, [value, maxRows])
 
-  return <textarea ref={ref} value={value} rows={minRows} style={{ resize: 'none', ...style }} {...props} />
+  return <textarea ref={attach} value={value} rows={minRows} style={{ resize: 'none', ...style }} {...props} />
 }

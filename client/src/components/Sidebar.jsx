@@ -3,6 +3,7 @@ import { NavLink, useNavigate } from 'react-router-dom'
 import { useAuth, useApi } from '../App'
 import { useTheme } from './ThemeProvider'
 import Icon from './Icon'
+import NotificationsBell from './NotificationsBell'
 
 const BRANDS = {
   normless: { name: 'Normless', tag: 'Retail CRM', glyph: 'activity' },
@@ -15,7 +16,7 @@ const NAV = {
     { to: '/customers', icon: 'users', label: 'Customers', perm: 'can_view_customers' },
     { to: '/orders', icon: 'box', label: 'Orders', perm: 'can_view_orders' },
     { to: '/scan', icon: 'scan', label: 'Scan Order', perm: 'can_scan_orders' },
-    { to: '/marketing', icon: 'spark', label: 'Marketing', perm: 'can_view_marketing' },
+    { to: '/marketing', icon: 'spark', label: 'Marketing', perm: 'can_view_marketing', badge: 'marketing' },
     { to: '/invoices', icon: 'invoice', label: 'Invoices', perm: 'can_view_invoices' },
     { to: '/inventory', icon: 'box', label: 'Inventory', perm: 'can_view_inventory', badge: 'rto' },
     { to: '/offline-sales', icon: 'card', label: 'Offline Sales', perm: 'can_view_offline_sales' },
@@ -44,6 +45,9 @@ export default function Sidebar({ collapsed = false, onToggleCollapse }) {
   // page because the whole value is being told before you open the page — the alternative is
   // printing a second garment for something already sitting in the building.
   const [rtoAlerts, setRtoAlerts] = useState(0)
+  // Influencer seeding orders that haven't gone out. On the menu because the people who raise them
+  // and the people who dispatch them are different desks — the badge is how one tells the other.
+  const [marketingPending, setMarketingPending] = useState(0)
   // Normless-only: Inventory is not a Crewfit menu, so there is nothing to badge over there.
   const canSeeInventory = brand === 'normless'
     && (user?.role === 'owner' || user?.role === 'admin' || !!user?.can_view_inventory)
@@ -60,6 +64,21 @@ export default function Sidebar({ collapsed = false, onToggleCollapse }) {
     return () => { live = false; clearInterval(t) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canSeeInventory])
+
+  const canSeeMarketing = brand === 'normless'
+    && (user?.role === 'owner' || user?.role === 'admin' || !!user?.can_view_marketing)
+  useEffect(() => {
+    if (!canSeeMarketing) return
+    let live = true
+    const check = async () => {
+      const r = await apiFetch('/api/marketing/orders/pending-count')
+      if (live && r && !r.error) setMarketingPending(r.pending || 0)
+    }
+    check()
+    const t = setInterval(check, 120000)
+    return () => { live = false; clearInterval(t) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canSeeMarketing])
 
   const b = BRANDS[brand] || BRANDS.normless
   const isAdminRole = user?.role === 'owner' || user?.role === 'admin'
@@ -109,10 +128,12 @@ export default function Sidebar({ collapsed = false, onToggleCollapse }) {
           <div className="sidebar-section">
             <div className="sidebar-section-label">Main</div>
             {mainItems.map(item => {
-              const count = item.badge === 'rto' ? rtoAlerts : 0
+              const count = item.badge === 'rto' ? rtoAlerts : item.badge === 'marketing' ? marketingPending : 0
               return (
                 <NavLink key={item.to} to={item.to} end={item.end} onClick={close}
-                  title={count ? `${item.label} — ${count} order${count > 1 ? 's' : ''} can be served from the RTO shelf` : item.label}
+                  title={!count ? item.label : item.badge === 'rto'
+                    ? `${item.label} — ${count} order${count > 1 ? 's' : ''} can be served from the RTO shelf`
+                    : `${item.label} — ${count} seeding order${count > 1 ? 's' : ''} not dispatched yet`}
                   className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>
                   <span className="link-icon">
                     <Icon name={item.icon} size={19} />
@@ -144,6 +165,8 @@ export default function Sidebar({ collapsed = false, onToggleCollapse }) {
         </nav>
 
         <div className="sidebar-bottom">
+          {/* Above the theme toggle: it is the one thing down here someone actually waits for. */}
+          <NotificationsBell collapsed={collapsed} />
           <button className="theme-toggle-row" onClick={toggleTheme} title={`Switch to ${isDark ? 'light' : 'dark'} mode`}>
             <Icon name={isDark ? 'moon' : 'sun'} size={16} />
             <span style={{ fontSize: '12px', color: 'var(--text-secondary)', flex: 1, textAlign: 'left' }}>{isDark ? 'Dark' : 'Light'} mode</span>

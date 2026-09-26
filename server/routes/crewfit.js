@@ -6,6 +6,7 @@ const multer = require('multer');
 const PDFDocument = require('pdfkit');
 const db = require('../db/connection');
 const inv = require('../services/inventory');
+const notify = require('../services/notify');
 const { renderInvoice, renderProforma, renderShippingLabel, LABEL_SIZE, nextProformaNumber } = require('../services/invoice');
 const numbering = require('../services/invoice-numbers');
 const { STATE_NAMES, derivePlaceOfSupply, normaliseState } = require('../utils/place-of-supply');
@@ -945,13 +946,23 @@ router.get('/orders/:id/history', async (req, res) => {
  * Comments — what the team says to each other about an order
  * ========================================================================================== */
 
-const commentRow = (r) => ({ ...r, created_by: r.created_by || null });
+const commentRow = (r) => ({ ...r, created_by: r.created_by || null, mentions: safeJson(r.mentions, []) });
+
+// GET /api/crewfit/team — who can be named in a comment. Anyone who can open the order.
+router.get('/team', async (req, res) => {
+  try {
+    res.json({ team: await notify.mentionableUsers() });
+  } catch (err) {
+    console.error('crewfit team error:', err);
+    res.status(500).json({ error: 'Failed to load the team list' });
+  }
+});
 
 // GET /api/crewfit/orders/:id/comments — oldest first, the way a conversation reads.
 router.get('/orders/:id/comments', async (req, res) => {
   try {
     const r = await db.query(
-      `SELECT id, body, created_by, created_at FROM crewfit_order_comments
+      `SELECT id, parent_id, body, created_by, mentions, created_at FROM crewfit_order_comments
         WHERE order_id = $1 ORDER BY created_at, id`, [req.params.id]);
     res.json({ comments: r.rows.map(commentRow) });
   } catch (err) {
@@ -960,20 +971,56 @@ router.get('/orders/:id/comments', async (req, res) => {
   }
 });
 
-// POST /api/crewfit/orders/:id/comments { body } — anyone who can edit the order can comment.
+/**
+ * POST /api/crewfit/orders/:id/comments { body, parent_id? }
+ *
+ * Anyone who can edit the order can comment. A `parent_id` makes it a reply; replies are one
+ * level deep, so answering a reply answers the comment it hangs off rather than nesting further.
+ * Whoever is named with an @ is told, and so is the author of the comment being answered.
+ */
 router.post('/orders/:id/comments', canEditOrders, async (req, res) => {
   try {
     const body = trimmed(req.body?.body);
     if (!body) return res.status(400).json({ error: 'Write something first' });
     if (body.length > 4000) return res.status(400).json({ error: 'That is too long for one comment — keep it under 4000 characters' });
 
-    const order = (await db.query('SELECT id FROM crewfit_orders WHERE id = $1', [req.params.id])).rows[0];
+    const order = (await db.query('SELECT id, sl_no, customer_name FROM crewfit_orders WHERE id = $1', [req.params.id])).rows[0];
     if (!order) return res.status(404).json({ error: 'Order not found' });
 
+    let parent = null;
+    if (req.body?.parent_id) {
+      parent = (await db.query(
+        'SELECT id, parent_id, created_by FROM crewfit_order_comments WHERE id = $1 AND order_id = $2',
+        [req.body.parent_id, order.id])).rows[0];
+      if (!parent) return res.status(404).json({ error: 'The comment you are replying to is gone' });
+    }
+    // Replying to a reply answers the same comment: one level, or the thread stops being readable.
+    const parentId = parent ? (parent.parent_id || parent.id) : null;
+
+    const author = req.user?.username || null;
+    const mentioned = notify.mentionsIn(body, await notify.mentionableUsers());
+
     const r = await db.query(
-      `INSERT INTO crewfit_order_comments (order_id, body, created_by) VALUES ($1,$2,$3)
-       RETURNING id, body, created_by, created_at`,
-      [order.id, body, req.user?.username || null]);
+      `INSERT INTO crewfit_order_comments (order_id, parent_id, body, created_by, mentions)
+       VALUES ($1,$2,$3,$4,$5)
+       RETURNING id, parent_id, body, created_by, mentions, created_at`,
+      [order.id, parentId, body, author, JSON.stringify(mentioned)]);
+
+    const ref = `CF-${order.sl_no}${order.customer_name ? ` · ${order.customer_name}` : ''}`;
+    const link = `/crewfit/orders?focus=${order.id}`;
+    const from = notify.handleOf(author) || 'Someone';
+    await notify.notify({
+      usernames: mentioned, kind: 'mention', actor: author, link,
+      title: `${from} mentioned you on ${ref}`, body,
+    });
+    // The person being answered hears about it too — unless they were named, which already told them.
+    if (parent?.created_by && !mentioned.includes(parent.created_by)) {
+      await notify.notify({
+        usernames: [parent.created_by], kind: 'reply', actor: author, link,
+        title: `${from} replied to you on ${ref}`, body,
+      });
+    }
+
     res.status(201).json({ comment: commentRow(r.rows[0]) });
   } catch (err) {
     console.error('crewfit comment create error:', err);
@@ -993,7 +1040,8 @@ router.delete('/comments/:id', ownerOnly, async (req, res) => {
   try {
     const row = (await db.query('SELECT id FROM crewfit_order_comments WHERE id = $1', [req.params.id])).rows[0];
     if (!row) return res.status(404).json({ error: 'That comment is already gone' });
-    await db.query('DELETE FROM crewfit_order_comments WHERE id = $1', [req.params.id]);
+    // A reply without the comment it answers reads as a non-sequitur, so it goes with it.
+    await db.query('DELETE FROM crewfit_order_comments WHERE id = $1 OR parent_id = $1', [req.params.id]);
     res.json({ success: true });
   } catch (err) {
     console.error('crewfit comment delete error:', err);

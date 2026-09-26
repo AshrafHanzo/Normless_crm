@@ -300,6 +300,8 @@ app.use('/api/marketing', authMiddleware, marketingRoutes);
 app.use('/api/offline-sales', authMiddleware, offlineSalesRoutes);
 // The packing bench: confirming an order packed, and the dispatch log that comes out of it.
 app.use('/api/scanner', authMiddleware, require('./routes/packing'));
+// Your own inbox: mentions and replies. Scoped to the caller inside the route.
+app.use('/api/notifications', authMiddleware, require('./routes/notifications'));
 
 // Health check
 app.get('/api/health', (req, res) => {
@@ -666,6 +668,29 @@ async function ensureOrderAuditSchema() {
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             CREATE INDEX IF NOT EXISTS crewfit_comments_order_idx ON crewfit_order_comments (order_id, created_at);
+            -- A reply hangs off the comment it answers; one level deep, because a thread that
+            -- nests further stops being readable in a drawer.
+            ALTER TABLE crewfit_order_comments ADD COLUMN IF NOT EXISTS parent_id INTEGER;
+            -- Who was named in it, resolved when it was posted rather than re-parsed on every
+            -- read: usernames can change, and what matters is who was meant at the time.
+            ALTER TABLE crewfit_order_comments ADD COLUMN IF NOT EXISTS mentions TEXT;
+            CREATE INDEX IF NOT EXISTS crewfit_comments_parent_idx ON crewfit_order_comments (parent_id);
+
+            -- Told to one person: you were named in a comment, or someone answered yours. Kept as
+            -- rows rather than derived on read, because "have I seen this" is a fact about the
+            -- person, not about the comment.
+            CREATE TABLE IF NOT EXISTS notifications (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                username TEXT NOT NULL,          -- who it is for
+                kind TEXT NOT NULL,              -- 'mention' | 'reply'
+                title TEXT NOT NULL,
+                body TEXT,
+                link TEXT,                       -- where to go when it is clicked
+                actor TEXT,                      -- who caused it
+                read_at TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS notifications_inbox_idx ON notifications (username, read_at, created_at DESC);
 
             CREATE TABLE IF NOT EXISTS crewfit_order_audit (
                 id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
