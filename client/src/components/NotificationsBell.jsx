@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useApi } from '../App'
+import { useToast } from './Toast'
 import Icon from './Icon'
 
 const when = (v) => {
@@ -23,6 +24,7 @@ const when = (v) => {
  */
 export default function NotificationsBell({ collapsed }) {
   const apiFetch = useApi()
+  const toast = useToast()
   const navigate = useNavigate()
   const [open, setOpen] = useState(false)
   const [items, setItems] = useState([])
@@ -58,7 +60,9 @@ export default function NotificationsBell({ collapsed }) {
   }
 
   const markAll = async () => {
-    await apiFetch('/api/notifications/read', { method: 'POST', body: JSON.stringify({}) })
+    if (!unread) return
+    const res = await apiFetch('/api/notifications/read', { method: 'POST', body: JSON.stringify({}) })
+    if (!res || res.error) { toast.error(res?.error || 'Could not mark them read'); return }
     setItems(list => list.map(n => ({ ...n, read_at: n.read_at || new Date().toISOString() })))
     setUnread(0)
   }
@@ -85,8 +89,15 @@ export default function NotificationsBell({ collapsed }) {
       {open && (
         <div className="notif-panel" role="dialog" aria-label="Notifications">
           <div className="notif-head">
-            <b>Notifications</b>
-            {unread > 0 && <button type="button" className="comment-act" onClick={markAll}>Mark all read</button>}
+            <b>Notifications{unread > 0 ? ` · ${unread} unread` : ''}</b>
+            {/* Always here once there is anything to mark, disabled when there is nothing left:
+                a control that vanishes once it has been used reads as a control that went missing. */}
+            {!!items.length && (
+              <button type="button" className="notif-mark" onClick={markAll} disabled={!unread}
+                title={unread ? `Mark ${unread} notification${unread === 1 ? '' : 's'} read` : 'Nothing unread'}>
+                Mark all read
+              </button>
+            )}
           </div>
           {items.length ? (
             <ul className="notif-list">
