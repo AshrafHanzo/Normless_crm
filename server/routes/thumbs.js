@@ -19,9 +19,35 @@ const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
-const sharp = require('sharp');
 
 const router = express.Router();
+
+/**
+ * The resizer, if it is usable here.
+ *
+ * Pure JavaScript (jimp) rather than the obvious choice, sharp: this server is a QEMU virtual CPU
+ * without SSE4.2 or POPCNT, so it meets neither the x86-64-v2 baseline sharp's prebuilt binaries
+ * require nor the SIMD its WebAssembly fallback needs. Sharp does not merely run slowly there —
+ * it throws while reporting that it cannot load, which took the whole CRM down on boot the first
+ * time it was deployed.
+ *
+ * jimp is perhaps three times slower at this, which for a 96-pixel thumbnail rendered once and
+ * then cached forever is not a number anybody will ever notice: 80ms for a 2560px photo.
+ *
+ * Loaded on first request and never allowed to throw past this function, because a thumbnail is a
+ * convenience and nothing about it should be able to stop someone opening an order.
+ */
+let resizer;
+function loadResizer() {
+    if (resizer !== undefined) return resizer;
+    try {
+        resizer = require('jimp');
+    } catch (err) {
+        resizer = null;
+        console.error('thumbnails are off — the resizer could not be loaded:', err.message);
+    }
+    return resizer;
+}
 
 const UPLOAD_ROOT = path.join(__dirname, '..', 'uploads');
 const CACHE_ROOT = path.join(__dirname, '..', 'storage', 'thumbs');
@@ -54,29 +80,33 @@ router.get('/', async (req, res) => {
 
     const width = WIDTHS.has(parseInt(req.query.w, 10)) ? parseInt(req.query.w, 10) : DEFAULT_WIDTH;
     const key = crypto.createHash('sha1').update(`${file}|${width}`).digest('hex');
-    const cached = path.join(CACHE_ROOT, String(width), `${key}.webp`);
+    const cached = path.join(CACHE_ROOT, String(width), `${key}.jpg`);
 
     const send = () => {
-        res.setHeader('Content-Type', 'image/webp');
+        res.setHeader('Content-Type', 'image/jpeg');
         // A thumbnail of a given upload never changes — the upload is immutable and a new photo
         // is a new filename — so it can be held for a year.
         res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
         fs.createReadStream(cached).pipe(res);
     };
 
+    // Straight to the original when there is no resizer: slow beats broken.
+    const Jimp = loadResizer();
+    if (!Jimp) return res.redirect(String(req.query.src).split('?')[0]);
+
     try {
         if (fs.existsSync(cached)) return send();
         if (!fs.existsSync(file)) return res.status(404).json({ error: 'That image is not here' });
 
         await fsp.mkdir(path.dirname(cached), { recursive: true });
-        // `withoutEnlargement` so a small image is served as-is rather than blown up and blurred.
-        // rotate() first: phone photos carry their orientation in EXIF, and dropping it turns a
-        // portrait mock on its side.
-        await sharp(file)
-            .rotate()
-            .resize({ width, withoutEnlargement: true })
-            .webp({ quality: 78 })
-            .toFile(cached);
+        const img = await Jimp.read(file);
+        // Never enlarged: a small image blown up is just a blurry small image.
+        if (img.getWidth() > width) img.scaleToFit(width, Jimp.AUTO);
+        // Written to a temporary name and moved into place, so two requests for the same new
+        // thumbnail at the same moment cannot serve each other a half-written file.
+        const tmp = `${cached}.${process.pid}.tmp`;
+        await img.quality(72).writeAsync(tmp);
+        await fsp.rename(tmp, cached);
         send();
     } catch (err) {
         console.error('thumb failed for', file, '-', err.message);
