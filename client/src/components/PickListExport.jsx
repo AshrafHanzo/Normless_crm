@@ -2,13 +2,12 @@ import { useState, useRef, useEffect } from 'react'
 import { useApi } from '../App'
 import { useToast } from './Toast'
 import Icon from './Icon'
-import drawPickList from './pick-list-png'
 
 /**
- * Export what is ordered and not yet sent, as a spreadsheet, a picture or a printable page.
+ * Export what is ordered and not yet sent, as a spreadsheet or a printable page.
  *
- * Three formats because the list is used three ways: opened in Excel, pasted into a chat, and
- * pinned up beside the press.
+ * Two formats because the list is used two ways: opened in Excel to work with, and printed to
+ * stand beside the press.
  */
 export default function PickListExport({ from, to }) {
   const apiFetch = useApi()
@@ -44,19 +43,6 @@ export default function PickListExport({ from, to }) {
     toast.success(`Pick list exported as ${kind.toUpperCase()}`)
   }
 
-  const png = async () => {
-    setBusy('png'); setOpen(false)
-    const data = await apiFetch(`/api/orders/pick-list${params ? `?${params}` : ''}`)
-    if (!data || data.error) { setBusy(''); toast.error(data?.error || 'Export failed'); return }
-    const canvas = drawPickList(data, span)
-    canvas.toBlob(blob => {
-      setBusy('')
-      if (!blob) { toast.error('Could not draw the image'); return }
-      save(URL.createObjectURL(blob), `Pick list — ${span}.png`, true)
-      toast.success(`Pick list exported as PNG · ${data.summary.units} units`)
-    }, 'image/png')
-  }
-
   return (
     <div className="export-menu" ref={boxRef}>
       <button type="button" className="btn btn-primary" onClick={() => setOpen(o => !o)} disabled={!!busy} aria-expanded={open}>
@@ -67,7 +53,6 @@ export default function PickListExport({ from, to }) {
         <div className="export-menu-panel" role="menu">
           <p className="export-menu-note">Unfulfilled orders only, grouped by edition, colour and size. {span}.</p>
           <button type="button" onClick={() => file('csv')}>CSV <span>opens in Excel</span></button>
-          <button type="button" onClick={png}>PNG <span>to paste in a chat</span></button>
           <button type="button" onClick={() => file('pdf')}>PDF <span>to print and pin up</span></button>
         </div>
       )}
