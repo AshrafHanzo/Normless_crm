@@ -38,7 +38,12 @@ router.get('/', async (req, res) => {
             paramCount += 1;
         }
 
-        if (fulfillment_status) {
+        if (fulfillment_status === 'ON_HOLD') {
+            // Shopify reports a held order as simply unfulfilled, so "on hold" is a flag of its
+            // own rather than a fulfillment status — asked for by the same dropdown all the same.
+            conditions.push('COALESCE(o.on_hold, false) = true');
+            // No parameter to bind, so the counter stays where it is.
+        } else if (fulfillment_status) {
             conditions.push(`fulfillment_status = $${paramCount}`);
             params.push(fulfillment_status);
             paramCount += 1;

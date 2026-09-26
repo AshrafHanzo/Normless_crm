@@ -108,6 +108,13 @@ const ScanHub = () => {
    */
   const confirmPacked = async () => {
     if (!order || packing) return;
+    // Not refused outright — the hold may have been lifted in Shopify a minute ago and the sync
+    // not caught up — but nobody should be able to do it without being told.
+    if (order.on_hold && !await toast.confirm({
+      title: `${order.order_number} is on hold`,
+      message: 'Shopify says this order is on hold, so it should not be going out. Record it as packed anyway?',
+      confirmLabel: 'Pack it anyway', cancelLabel: 'Stop', danger: true,
+    })) return;
     setPacking(true);
     const res = await apiFetch('/api/scanner/packed', {
       method: 'POST',
@@ -197,6 +204,18 @@ const ScanHub = () => {
         )}
 
         {error && <div className="scan-error-msg">{error}</div>}
+
+        {/* Before anything else: a held order is one someone deliberately stopped, and the packing
+            bench is the last place that would otherwise find out. */}
+        {order?.on_hold && (
+          <div className="scan-hold-alert">
+            <span className="scan-hold-icon">⏸</span>
+            <div>
+              <b>This order is ON HOLD in Shopify — do not pack it.</b>
+              <div className="rto-scan-hint">Someone put it on hold deliberately. Check with the team before it goes anywhere.</div>
+            </div>
+          </div>
+        )}
 
         {/* Said before the garments, because this is the last moment before someone pulls a blank
             off the shelf and prints a second copy of something already in the building. */}

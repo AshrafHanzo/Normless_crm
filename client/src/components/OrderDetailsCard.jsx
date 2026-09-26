@@ -73,7 +73,9 @@ const OrderDetailsCard = ({ order }) => {
             </div>
           </div>
           <div className="scan-order-badges">
-            <span className={`status-badge ${fulfilled ? 'fulfilled' : 'unfulfilled'}`}>{label(order.fulfillment_status || 'Unfulfilled')}</span>
+            {order.on_hold
+              ? <span className="status-badge on-hold" title="On hold in Shopify">On hold</span>
+              : <span className={`status-badge ${fulfilled ? 'fulfilled' : 'unfulfilled'}`}>{label(order.fulfillment_status || 'Unfulfilled')}</span>}
             <div className="scan-total-pill">
               <span className="scan-total-value">{totalQty}</span>
               <span className="scan-total-label">units<br />to pack</span>

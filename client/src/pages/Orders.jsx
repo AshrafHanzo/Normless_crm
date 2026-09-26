@@ -94,6 +94,7 @@ export default function Orders() {
           <option value="FULFILLED">Fulfilled</option>
           <option value="UNFULFILLED">Unfulfilled</option>
           <option value="PARTIALLY_FULFILLED">Partially Fulfilled</option>
+          <option value="ON_HOLD">On hold</option>
         </select>
       </div>
 
@@ -144,9 +145,15 @@ export default function Orders() {
                         </span>
                       </td>
                       <td data-label="Fulfillment">
-                        <span className={`status-badge ${getStatusClass(o.fulfillment_status)}`}>
-                          {o.fulfillment_status || 'Unfulfilled'}
-                        </span>
+                        {/* Shopify reports a held order as unfulfilled, which is true and useless:
+                            the thing worth knowing is that it must not be packed. */}
+                        {o.on_hold ? (
+                          <span className="status-badge on-hold" title="On hold in Shopify — do not pack">On hold</span>
+                        ) : (
+                          <span className={`status-badge ${getStatusClass(o.fulfillment_status)}`}>
+                            {o.fulfillment_status || 'Unfulfilled'}
+                          </span>
+                        )}
                       </td>
                       <td data-label="Total" style={{ fontWeight: 700 }}>{formatCurrency(o.total_price)}</td>
                     </tr>
