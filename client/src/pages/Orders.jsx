@@ -1,6 +1,8 @@
 import { useState, useEffect, Fragment } from 'react'
 import { useApi } from '../App'
 import useServerTable from '../hooks/useServerTable'
+import DateRangeFilter from '../components/DateRangeFilter'
+import PickListExport from '../components/PickListExport'
 import SortTh from '../components/SortTh'
 import Pagination from '../components/Pagination'
 
@@ -12,6 +14,9 @@ export default function Orders() {
   const [search, setSearch] = useState('')
   const [financialFilter, setFinancialFilter] = useState('')
   const [fulfillmentFilter, setFulfillmentFilter] = useState('')
+  // Narrows the list, and is what the pick list is taken over.
+  const [from, setFrom] = useState('')
+  const [to, setTo] = useState('')
   const [loading, setLoading] = useState(true)
   const [expandedOrder, setExpandedOrder] = useState(null)
   // Sorting and paging both happen on the server — a header click reorders every matching order,
@@ -22,7 +27,7 @@ export default function Orders() {
   useEffect(() => {
     loadOrders()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [t.key, search, financialFilter, fulfillmentFilter])
+  }, [t.key, search, financialFilter, fulfillmentFilter, from, to])
 
   const loadOrders = async () => {
     setLoading(true)
@@ -30,6 +35,7 @@ export default function Orders() {
       search,
       ...(financialFilter && { financial_status: financialFilter }),
       ...(fulfillmentFilter && { fulfillment_status: fulfillmentFilter }),
+      ...(from && to && { from, to }),
     }))
     if (result && !result.error) {
       setOrders(result.orders)
@@ -70,9 +76,19 @@ export default function Orders() {
 
   return (
     <div className="page-enter">
-      <div className="page-header">
-        <h1>Orders</h1>
-        <p>{pagination.total || 0} total orders synced from Shopify</p>
+      {/* Title and the two things done to the whole list — narrow it by date, take the pick list
+          out of it — share one row, the way every other page here is laid out. */}
+      <div className="dash-toolbar">
+        <div>
+          <h1>Orders</h1>
+          <p style={{ color: 'var(--text-muted)' }}>{pagination.total || 0} orders synced from Shopify</p>
+        </div>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          <DateRangeFilter startDate={from} endDate={to}
+            onApply={(s2, e2) => { setFrom(s2); setTo(e2); t.resetPage() }}
+            onClear={() => { setFrom(''); setTo(''); t.resetPage() }} />
+          <PickListExport from={from} to={to} />
+        </div>
       </div>
 
       {/* Filters */}

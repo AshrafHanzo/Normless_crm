@@ -2,8 +2,13 @@ const express = require('express');
 const db = require('../db/connection');
 const { tableParams, pagination } = require('../utils/table');
 const inv = require('../services/inventory');
+const PDFDocument = require('pdfkit');
+const pickList = require('../services/pick-list');
+const { toCsv } = require('../utils/csv');
 
 const router = express.Router();
+
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 // Client column key → SQL expression. Only these can be sorted on.
 const ORDER_SORTS = {
@@ -35,6 +40,18 @@ router.get('/', async (req, res) => {
         if (financial_status) {
             conditions.push(`financial_status = $${paramCount}`);
             params.push(financial_status);
+            paramCount += 1;
+        }
+
+        // The same window the pick list uses, so what is exported is what is on screen.
+        if (DATE_RE.test(req.query.from || '')) {
+            conditions.push(`o.created_at::date >= $${paramCount}`);
+            params.push(req.query.from);
+            paramCount += 1;
+        }
+        if (DATE_RE.test(req.query.to || '')) {
+            conditions.push(`o.created_at::date <= $${paramCount}`);
+            params.push(req.query.to);
             paramCount += 1;
         }
 
@@ -101,6 +118,128 @@ router.get('/', async (req, res) => {
 });
 
 // GET /api/orders/stats
+/* ==========================================================================================
+ * The production pick list — what is ordered and not yet sent, grouped for the print floor
+ * ========================================================================================== */
+
+const range = (q) => ({
+    from: DATE_RE.test(q.from || '') ? q.from : null,
+    to: DATE_RE.test(q.to || '') ? q.to : null,
+});
+
+/** A filename that says what it holds and when it was taken. */
+const fileName = (ext, period) => {
+    const span = period.from && period.to
+        ? (period.from === period.to ? period.from : `${period.from} to ${period.to}`)
+        : 'all open orders';
+    return `Pick list — ${span}.${ext}`;
+};
+
+/**
+ * Content-Disposition for a name that may contain non-Latin-1 characters (an em dash here), which
+ * Node rejects in a header value — so the plain form is ASCII and the real name rides in the RFC
+ * 5987 parameter browsers prefer.
+ */
+function contentDisposition(name) {
+    const ascii = name.replace(/[^\x20-\x7E]/g, '-').replace(/["\\]/g, '');
+    return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`;
+}
+
+// GET /api/orders/pick-list?from=&to= — the grouped rows, for the screen and the PNG.
+router.get('/pick-list', async (req, res) => {
+    try {
+        res.json(await pickList.build(range(req.query)));
+    } catch (err) {
+        console.error('pick list error:', err);
+        res.status(500).json({ error: 'Failed to build the pick list' });
+    }
+});
+
+// GET /api/orders/pick-list.csv?from=&to=
+router.get('/pick-list.csv', async (req, res) => {
+    try {
+        const { rows, period } = await pickList.build(range(req.query));
+        const csv = toCsv(
+            rows.map(r => ({ type: r.type, edition: r.edition, color: r.color, size: r.size, qty: r.qty, orders: r.orders.join(' ') })),
+            [{ key: 'type', label: 'Product type' }, { key: 'edition', label: 'Edition' },
+             { key: 'color', label: 'Colour' }, { key: 'size', label: 'Size' },
+             { key: 'qty', label: 'Qty' }, { key: 'orders', label: 'Orders' }]);
+        res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+        res.setHeader('Content-Disposition', contentDisposition(fileName('csv', period)));
+        res.send(csv);
+    } catch (err) {
+        console.error('pick list csv error:', err);
+        res.status(500).json({ error: 'Failed to export the pick list' });
+    }
+});
+
+/**
+ * GET /api/orders/pick-list.pdf?from=&to=
+ *
+ * Printed the way it is read: a heading per garment type, then a block per design, with its
+ * colours and sizes under it. A flat table of 300 rows is a worse piece of paper than the same
+ * rows with their headings.
+ */
+router.get('/pick-list.pdf', async (req, res) => {
+    try {
+        const { rows, summary, period } = await pickList.build(range(req.query));
+        const doc = new PDFDocument({ size: 'A4', margin: 40 });
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', contentDisposition(fileName('pdf', period)));
+        doc.pipe(res);
+
+        const L = 40, R = 555, W = R - L;
+        const span = period.from && period.to
+            ? (period.from === period.to ? period.from : `${period.from} → ${period.to}`)
+            : 'All open orders';
+
+        doc.font('Helvetica-Bold').fontSize(18).fillColor('#1a1a1a').text('Pick list', L, 40);
+        doc.font('Helvetica').fontSize(9.5).fillColor('#666')
+            .text(`${span} · ${summary.units} units · ${summary.lines} lines · ${summary.orders} orders`, L, 63);
+        doc.font('Helvetica-Oblique').fontSize(8.5).fillColor('#888')
+            .text('Unfulfilled orders only — held, cancelled and refunded orders are left out.', L, 77);
+        doc.moveTo(L, 92).lineTo(R, 92).strokeColor('#ddd').lineWidth(1).stroke();
+
+        let y = 104;
+        const room = (need) => { if (y + need > 780) { doc.addPage(); y = 50; } };
+        const COL = { colour: L + 14, size: 300, qty: 360, orders: 405 };
+
+        let type = null, edition = null;
+        for (const r of rows) {
+            if (r.type !== type) {
+                room(40); type = r.type; edition = null;
+                doc.font('Helvetica-Bold').fontSize(12).fillColor('#1a1a1a').text(r.type, L, y);
+                y += 18;
+            }
+            if (r.edition !== edition) {
+                room(30); edition = r.edition;
+                doc.font('Helvetica-Bold').fontSize(9.5).fillColor('#444').text(edition, L + 6, y, { width: W - 12 });
+                y += 14;
+                doc.font('Helvetica').fontSize(7.5).fillColor('#999')
+                    .text('COLOUR', COL.colour, y).text('SIZE', COL.size, y)
+                    .text('QTY', COL.qty, y, { width: 30, align: 'right' }).text('ORDERS', COL.orders, y);
+                y += 11;
+            }
+            room(16);
+            doc.font('Helvetica').fontSize(9).fillColor('#1a1a1a')
+                .text(r.color, COL.colour, y, { width: 180, ellipsis: true })
+                .text(r.size, COL.size, y, { width: 55 });
+            doc.font('Helvetica-Bold').text(String(r.qty), COL.qty, y, { width: 30, align: 'right' });
+            doc.font('Helvetica').fontSize(7.5).fillColor('#777')
+                .text(r.orders.join(' '), COL.orders, y + 1, { width: R - COL.orders, ellipsis: true });
+            y += 14;
+        }
+
+        if (!rows.length) {
+            doc.font('Helvetica').fontSize(11).fillColor('#666').text('Nothing waiting to go out in this period.', L, y);
+        }
+        doc.end();
+    } catch (err) {
+        console.error('pick list pdf error:', err);
+        if (!res.headersSent) res.status(500).json({ error: 'Failed to export the pick list' });
+    }
+});
+
 router.get('/stats', async (req, res) => {
     try {
         const totalOrdersResult = await db.query('SELECT COUNT(*) as count FROM orders');
