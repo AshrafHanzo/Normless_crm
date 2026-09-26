@@ -8,8 +8,9 @@ import { cleanMobile, mobileError, isValidMobile, mobileInputProps } from '../..
 const fmt = (v) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(v || 0)
 // Where the artwork goes, and how it is applied. Two questions the floor asks separately: the
 // same placement is printed on one order and embroidered on the next.
-const PRINTING_PLACEMENTS = ['Front', 'Back', 'Front & Back', 'Front Chest & Back', 'No Print']
-const PRINTING_TYPES = ['DTF', 'Embroidery']
+const PRINTING_PLACEMENTS = ['Front', 'Back', 'Front & Back', 'Front Chest & Back', 'Sleeve', 'No Print']
+// A line can carry both — a DTF chest print with an embroidered logo is one garment, not two lines.
+const PRINTING_TYPES = ['DTF', 'Embroidery', 'DTF & Embroidery']
 
 /** Orders raised before placement and type were separate fields kept it all under `printing`. */
 const placementOf = (it) => it.printing_placement ?? it.printing ?? ''
