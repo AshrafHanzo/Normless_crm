@@ -1989,15 +1989,52 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .item-cols-4 > .form-row { grid-template-columns: minmax(0, 2.2fr) minmax(0, 1.6fr) minmax(0, 0.6fr) minmax(0, 0.9fr); }
 /* design · colour/size · qty */
 .item-cols-3 > .form-row { grid-template-columns: minmax(0, 2.4fr) minmax(0, 1.8fr) minmax(0, 0.6fr); }
-/* A Crewfit line: product · colour · qty · where the artwork goes · how it is applied. Five
-   named columns rather than the auto-fit grid, which fits four and drops the fifth onto a line
-   of its own beside three empty columns. */
-.crewfit-line-row {
-  grid-template-columns: minmax(0, 1.9fr) minmax(0, 1.2fr) minmax(0, 0.7fr) minmax(0, 1.3fr) minmax(0, 1.1fr);
+/* Several answers to one question, as toggles rather than a multi-select box — which on a phone
+   opens a modal list and on a desktop needs ctrl-click to mean what it looks like. */
+.chip-picker { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  padding: 7px 11px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface);
+  color: var(--text-secondary); font-size: 12.5px; font-weight: 600; cursor: pointer; transition: all 0.15s;
+  line-height: 1.1;
 }
-@media (max-width: 1100px) {
-  .crewfit-line-row { grid-template-columns: repeat(auto-fit, minmax(min(190px, 100%), 1fr)); }
+.chip:hover { border-color: var(--primary); color: var(--text-primary); }
+.chip-on { background: var(--primary); border-color: var(--primary); color: #fff; }
+
+/* ---- Order comments ---------------------------------------------------------------------- */
+.order-comments { display: flex; flex-direction: column; gap: 12px; }
+.comment-list { display: flex; flex-direction: column; gap: 10px; max-height: 340px; overflow-y: auto; padding-right: 4px; }
+.comment { display: flex; gap: 10px; align-items: flex-start; }
+.comment-avatar {
+  flex: none; width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--surface-active); color: var(--text-secondary); font-size: 11px; font-weight: 800;
 }
+.comment-mine .comment-avatar { background: var(--primary); color: #fff; }
+.comment-body {
+  flex: 1; min-width: 0; padding: 9px 12px; border-radius: var(--radius-md);
+  background: var(--surface); border: 1px solid var(--border);
+}
+.comment-head { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; margin-bottom: 3px; }
+.comment-when { color: var(--text-muted); font-size: 11.5px; }
+.comment-del {
+  margin-left: auto; border: none; background: transparent; color: var(--text-muted);
+  cursor: pointer; font-size: 12px; line-height: 1; padding: 2px 4px;
+}
+.comment-del:hover { color: var(--danger); }
+.comment-text { font-size: 13.5px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.comment-empty { color: var(--text-muted); font-size: 13px; }
+.comment-draft {
+  font-size: 12.5px; color: var(--text-muted); padding: 8px 12px; border-radius: var(--radius-md);
+  border: 1px dashed var(--border);
+}
+.comment-compose { display: flex; gap: 8px; align-items: flex-end; }
+.comment-compose > :first-child { flex: 1; min-width: 0; }
+.comment-compose .btn { flex: none; }
+
+@media (max-width: 600px) {
+  .comment-compose { flex-direction: column; align-items: stretch; }
+}
+
+
 /* The row above already carries the spacing; the button only needs to clear the last one. */
 .form-item-add { margin-top: 2px; }
 

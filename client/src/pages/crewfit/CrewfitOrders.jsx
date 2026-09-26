@@ -138,12 +138,12 @@ export default function CrewfitOrders() {
               </tr></thead>
               <tbody>
                 {orders.map(o => (
-                  <tr key={o.id} onClick={() => setTarget(o)} className={o.notes?.trim() ? 'has-note' : ''}>
+                  <tr key={o.id} onClick={() => setTarget(o)} className={o.comment_count ? 'has-note' : ''}>
                     <td data-label="Order #" style={{ color: 'var(--text-muted)' }}>
                       <span className="order-no">
                         {o.sl_no}
-                        {o.notes?.trim() && (
-                          <span className="note-flag" title={o.notes} aria-label="Has an internal note">
+                        {!!o.comment_count && (
+                          <span className="note-flag" title={`${o.comment_count} comment${o.comment_count > 1 ? 's' : ''}`} aria-label="Has comments">
                             <Icon name="note" size={13} />
                           </span>
                         )}
@@ -153,7 +153,12 @@ export default function CrewfitOrders() {
                     <td className="cell-primary">
                       <div style={{ fontWeight: 600 }}>{o.customer_name}</div>
                       <div style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>{o.contact_number}</div>
-                      {o.notes?.trim() && <div className="note-preview" title={o.notes}>{o.notes.trim()}</div>}
+                      {/* The last thing anyone said about it — the reason to open the order. */}
+                      {!!o.last_comment && (
+                        <div className="note-preview" title={o.last_comment}>
+                          {o.last_comment_by ? `${String(o.last_comment_by).split('@')[0]}: ` : ''}{o.last_comment.trim()}
+                        </div>
+                      )}
                     </td>
                     <td data-label="Product" style={{ fontSize: 12.5, maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.product || '—'}</td>
                     <td data-label="Qty" style={{ textAlign: 'center' }}>{o.qty || '—'}</td>

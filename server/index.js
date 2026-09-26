@@ -655,6 +655,18 @@ async function ensureCrewfitSchema() {
 async function ensureOrderAuditSchema() {
     try {
         await db.exec(`
+            -- What the team says to each other about an order. Replaces the single shared "internal
+            -- notes" box, which had no author and no date: the second person to write in it either
+            -- overwrote the first or left a wall of text nobody could attribute.
+            CREATE TABLE IF NOT EXISTS crewfit_order_comments (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                order_id INTEGER NOT NULL,
+                body TEXT NOT NULL,
+                created_by TEXT,                 -- NULL for the notes imported from the old box
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS crewfit_comments_order_idx ON crewfit_order_comments (order_id, created_at);
+
             CREATE TABLE IF NOT EXISTS crewfit_order_audit (
                 id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
                 order_id INTEGER NOT NULL,

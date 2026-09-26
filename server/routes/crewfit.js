@@ -91,6 +91,12 @@ const ownerOnly = (req, res, next) => {
   next();
 };
 
+/** Owners and admins: they can remove anyone's comment, not only their own. */
+const isAdmin = (req) => req.user?.role === 'owner' || req.user?.role === 'admin';
+
+/** Trimmed text, or null — a box someone tabbed through is empty, not a value. */
+const trimmed = (v) => { const t = String(v ?? '').trim(); return t || null; };
+
 /**
  * Write access to bulk orders, which is separate from being able to see them: a read-only
  * operator opens every order and changes none. Enforced here rather than only in the UI —
@@ -154,7 +160,19 @@ async function applyStock(row) {
 const parseOrder = (o) => ({ ...o, deadline_at: toDateStr(o.deadline_at), order_date: toDateStr(o.order_date), dispatch_date: toDateStr(o.dispatch_date), line_items: safeJson(o.line_items, []), invoices: safeJson(o.invoices, []) });
 
 async function fetchAll() {
-  const r = await db.query('SELECT * FROM crewfit_orders ORDER BY sl_no DESC');
+  // The comment count and the newest line come along for the ride: the orders list flags an order
+  // that has been talked about and previews the last thing said, which used to come from `notes`.
+  const r = await db.query(`
+    SELECT o.*, c.n::int AS comment_count, c.body AS last_comment, c.created_by AS last_comment_by
+      FROM crewfit_orders o
+      LEFT JOIN LATERAL (
+        SELECT COUNT(*) OVER () AS n, body, created_by
+          FROM crewfit_order_comments
+         WHERE order_id = o.id
+         ORDER BY created_at DESC, id DESC
+         LIMIT 1
+      ) c ON true
+     ORDER BY o.sl_no DESC`);
   return r.rows.map(parseOrder);
 }
 
@@ -923,6 +941,65 @@ router.get('/orders/:id/history', async (req, res) => {
   } catch (err) {
     console.error('crewfit order history error:', err);
     res.status(500).json({ error: 'Failed to load history' });
+  }
+});
+
+/* ==========================================================================================
+ * Comments — what the team says to each other about an order
+ * ========================================================================================== */
+
+const commentRow = (r) => ({ ...r, created_by: r.created_by || null });
+
+// GET /api/crewfit/orders/:id/comments — oldest first, the way a conversation reads.
+router.get('/orders/:id/comments', async (req, res) => {
+  try {
+    const r = await db.query(
+      `SELECT id, body, created_by, created_at FROM crewfit_order_comments
+        WHERE order_id = $1 ORDER BY created_at, id`, [req.params.id]);
+    res.json({ comments: r.rows.map(commentRow) });
+  } catch (err) {
+    console.error('crewfit comments error:', err);
+    res.status(500).json({ error: 'Failed to load the comments' });
+  }
+});
+
+// POST /api/crewfit/orders/:id/comments { body } — anyone who can edit the order can comment.
+router.post('/orders/:id/comments', canEditOrders, async (req, res) => {
+  try {
+    const body = trimmed(req.body?.body);
+    if (!body) return res.status(400).json({ error: 'Write something first' });
+    if (body.length > 4000) return res.status(400).json({ error: 'That is too long for one comment — keep it under 4000 characters' });
+
+    const order = (await db.query('SELECT id FROM crewfit_orders WHERE id = $1', [req.params.id])).rows[0];
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+
+    const r = await db.query(
+      `INSERT INTO crewfit_order_comments (order_id, body, created_by) VALUES ($1,$2,$3)
+       RETURNING id, body, created_by, created_at`,
+      [order.id, body, req.user?.username || null]);
+    res.status(201).json({ comment: commentRow(r.rows[0]) });
+  } catch (err) {
+    console.error('crewfit comment create error:', err);
+    res.status(500).json({ error: 'Failed to post that comment' });
+  }
+});
+
+/**
+ * DELETE /api/crewfit/comments/:id — your own, or anyone's if you are an owner or admin.
+ * Deliberately not editable: a comment someone else has already read and acted on should be
+ * answered, not rewritten.
+ */
+router.delete('/comments/:id', canEditOrders, async (req, res) => {
+  try {
+    const row = (await db.query('SELECT * FROM crewfit_order_comments WHERE id = $1', [req.params.id])).rows[0];
+    if (!row) return res.status(404).json({ error: 'That comment is already gone' });
+    const mine = row.created_by && row.created_by === req.user?.username;
+    if (!mine && !isAdmin(req)) return res.status(403).json({ error: 'You can only delete your own comments' });
+    await db.query('DELETE FROM crewfit_order_comments WHERE id = $1', [req.params.id]);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('crewfit comment delete error:', err);
+    res.status(500).json({ error: 'Failed to delete that comment' });
   }
 });
 

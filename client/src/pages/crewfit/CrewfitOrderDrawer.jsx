@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, Children, isValidElement, Fragment } from 'react'
 import useDirtyGuard from '../../hooks/useDirtyGuard'
 import AutoTextarea from '../../components/AutoTextarea'
+import OrderComments from '../../components/OrderComments'
 import { useApi, useAuth } from '../../App'
 import { useToast } from '../../components/Toast'
 import { cleanMobile, mobileError, isValidMobile, mobileInputProps } from '../../utils/phone'
@@ -15,6 +16,19 @@ const PRINTING_TYPES = ['DTF', 'Embroidery', 'DTF & Embroidery']
 /** Orders raised before placement and type were separate fields kept it all under `printing`. */
 const placementOf = (it) => it.printing_placement ?? it.printing ?? ''
 const printSpec = (it) => [placementOf(it), it.printing_type].filter(Boolean).join(' · ')
+
+// Placement is several answers, not one — a front print and a sleeve print are one garment. Kept
+// as the same comma-joined string the WhatsApp summary, the flat column and old orders all read.
+const placementList = (it) => placementOf(it).split(',').map(v => v.trim()).filter(Boolean)
+const NO_PRINT = 'No Print'
+/** Toggling one on or off, with "No Print" as the answer that excludes every other. */
+function togglePlacement(current, value) {
+  const has = current.includes(value)
+  if (value === NO_PRINT) return has ? [] : [NO_PRINT]
+  const next = has ? current.filter(v => v !== value) : [...current.filter(v => v !== NO_PRINT), value]
+  // Keep them in the order they are offered, so two lines with the same placements read the same.
+  return PRINTING_PLACEMENTS.filter(v => next.includes(v))
+}
 const STANDARD_SIZES = ['XS', 'S', 'M', 'L', 'XL', 'XXL', '3XL', '4XL', '5XL']
 const MAX_IMAGE_MB = 10 // mirrors MAX_UPLOAD_MB in server/routes/crewfit.js
 
@@ -503,6 +517,8 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
   const [products, setProducts] = useState([])
   const [form, setForm] = useState(null)
   const [saving, setSaving] = useState(false)
+  // A comment typed on an order that does not exist yet: posted as soon as it does.
+  const [pendingComment, setPendingComment] = useState('')
   const [invoiceBusy, setInvoiceBusy] = useState(null)
   const [imgBusy, setImgBusy] = useState(null) // `${idx}-mock` | `${idx}-prod` while an upload is in flight
   const [lightbox, setLightbox] = useState(null) // { idx, kind, images, index } | null
@@ -1058,6 +1074,14 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
         const failures = await uploadPendingImages(res.id, form.line_items)
         if (failures.length) toast.error(`These photo uploads failed: ${failures.join(', ')}. You can retry from the order's edit screen.`, { title: 'Order saved, photos did not upload', duration: 0 })
       }
+      // Same for a comment written before the order had an id to hang it on.
+      if (pendingComment.trim()) {
+        const posted = await apiFetch(`/api/crewfit/orders/${res.id}/comments`, {
+          method: 'POST', body: JSON.stringify({ body: pendingComment.trim() }),
+        })
+        if (!posted || posted.error) toast.error('The order saved, but your comment did not post — add it again from the order.', { duration: 0 })
+        setPendingComment('')
+      }
       setSaving(false)
       // Oversized tees print on the Normless blank, so a production run moves that count. Say so —
       // a silent deduction is the kind of thing people only notice once the shelf is wrong.
@@ -1178,7 +1202,7 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
                   <span>Product {idx + 1}</span>
                   {form.line_items.length > 1 && <button type="button" className="btn-icon" onClick={() => removeItem(idx)}>✕</button>}
                 </div>
-                <div className="form-row crewfit-line-row">
+                <div className="form-row">
                   <div className="input-group"><label>Product *</label>
                     <select required value={item.product || ''} onChange={e => onItemProduct(idx, e.target.value)}>
                       <option value="">— Select from catalog —</option>
@@ -1191,15 +1215,27 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
                       : <input required value={item.color || ''} onChange={e => updateItem(idx, { color: e.target.value })} placeholder="Color" />}
                   </div>
                   <div className="input-group"><label>Qty *</label><input required type="number" readOnly={item._sizeMode !== 'manual'} value={item.qty || ''} onChange={e => onItemQty(idx, e.target.value)} title={item._sizeMode !== 'manual' ? 'Derived from the size breakdown below' : ''} /></div>
-                  <div className="input-group"><label>Printing placement *</label>
-                    <select required value={placementOf(item)} onChange={e => updateItem(idx, { printing_placement: e.target.value, printing: undefined })}>
-                      <option value="">—</option>{PRINTING_PLACEMENTS.map(v => <option key={v}>{v}</option>)}
-                    </select>
-                  </div>
                   <div className="input-group"><label>Printing type *</label>
                     <select required value={item.printing_type || ''} onChange={e => updateItem(idx, { printing_type: e.target.value })}>
                       <option value="">—</option>{PRINTING_TYPES.map(v => <option key={v}>{v}</option>)}
                     </select>
+                  </div>
+                </div>
+                {/* Its own row: several answers fit across the card, where a column would stack
+                    them six deep beside three fields one line tall. */}
+                <div className="input-group"><label>Printing placement *</label>
+                  <div className="chip-picker" role="group" aria-label="Printing placement">
+                    {PRINTING_PLACEMENTS.map(v => {
+                      const on = placementList(item).includes(v)
+                      return (
+                        <button type="button" key={v} className={`chip${on ? ' chip-on' : ''}`}
+                          aria-pressed={on}
+                          onClick={() => updateItem(idx, {
+                            printing_placement: togglePlacement(placementList(item), v).join(', '),
+                            printing: undefined,
+                          })}>{v}</button>
+                      )
+                    })}
                   </div>
                 </div>
                 <div className="input-group">
@@ -1501,8 +1537,8 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
 
           {/* Own header so it becomes its own collapsible section rather than being tucked
               inside whichever section happens to render last. */}
-          <div className="form-section">Internal notes</div>
-          <div className="input-group"><AutoTextarea value={form.notes || ''} onChange={e => setF({ notes: e.target.value })} placeholder="Anything the team should know about this order — flagged on the orders list once saved." /></div>
+          <div className="form-section">Comments</div>
+          <OrderComments orderId={form.id} draft={pendingComment} onDraft={setPendingComment} />
           </AccordionSections>
           </fieldset>
 
