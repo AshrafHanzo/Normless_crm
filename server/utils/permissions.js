@@ -12,6 +12,7 @@ const COLUMNS = new Set([
   'can_view_marketing', 'can_dispatch_marketing', 'can_view_inventory', 'can_edit_inventory', 'can_import_rto', 'can_approve_marketing',
   'can_view_marketing_reports',
   'can_view_offline_sales', 'can_edit_offline_sales',
+  'can_view_backups',
 ]);
 
 // Whether this request holds a given permission.

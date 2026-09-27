@@ -30,6 +30,7 @@ import CrewfitInvoices from './pages/crewfit/CrewfitInvoices'
 import CrewfitActivity from './pages/crewfit/CrewfitActivity'
 import Inventory from './pages/Inventory'
 import OfflineSales from './pages/OfflineSales'
+import Backup from './pages/Backup'
 
 // API base. In dev, VITE_API_URL (from .env.development.local) points at the
 // production backend + Postgres so previews use the real database.
@@ -197,6 +198,8 @@ function App() {
             <Route path="/offline-sales" element={<ProtectedRoute permission="can_view_offline_sales"><AppLayout><OfflineSales /></AppLayout></ProtectedRoute>} />
             <Route path="/settings" element={<ProtectedRoute permission="can_sync_data"><AppLayout><Settings /></AppLayout></ProtectedRoute>} />
             <Route path="/admin" element={<AdminRoute><AppLayout><Admin /></AppLayout></AdminRoute>} />
+            {/* Not brand-specific: one database holds both CRMs, so one backup covers both. */}
+            <Route path="/backup" element={<ProtectedRoute permission="can_view_backups"><AppLayout><Backup /></AppLayout></ProtectedRoute>} />
             <Route path="/profile" element={<ProtectedRoute><AppLayout><Profile /></AppLayout></ProtectedRoute>} />
 
             {/* Crewfit CRM */}

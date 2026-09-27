@@ -34,17 +34,18 @@ const GROUPS = [
   ] },
 ]
 
-const blankForm = () => ({ username: '', password: '', role: 'operator', normless: true, dashboard: true, customers: true, orders: true, scanner: true, marketing: false, marketing_dispatch: false, marketing_approve: false, marketing_reports: false, invoices: false, crewfit: false, crewfit_analytics: false, crewfit_followups: false, crewfit_orders: false, crewfit_catalog: false, crewfit_calculator: false, crewfit_payments: false, crewfit_customers: false, crewfit_vendors: false, crewfit_invoices: false, crewfit_orders_edit: false, inventory: false, inventory_edit: false, inventory_import: false, offline_sales: false, offline_sales_edit: false, revenue: false })
+const blankForm = () => ({ username: '', password: '', role: 'operator', normless: true, dashboard: true, customers: true, orders: true, scanner: true, marketing: false, marketing_dispatch: false, marketing_approve: false, marketing_reports: false, invoices: false, crewfit: false, crewfit_analytics: false, crewfit_followups: false, crewfit_orders: false, crewfit_catalog: false, crewfit_calculator: false, crewfit_payments: false, crewfit_customers: false, crewfit_vendors: false, crewfit_invoices: false, crewfit_orders_edit: false, inventory: false, inventory_edit: false, inventory_import: false, offline_sales: false, offline_sales_edit: false, revenue: false, backups: false })
 const fromUser = (u) => ({
   id: u.id, username: u.username, password: '', role: u.role,
   normless: !!u.can_access_normless, dashboard: !!u.can_view_dashboard, customers: !!u.can_view_customers, orders: !!u.can_view_orders, scanner: !!u.can_scan_orders, invoices: !!u.can_view_invoices,
   marketing: !!u.can_view_marketing, marketing_dispatch: !!u.can_dispatch_marketing, marketing_approve: !!u.can_approve_marketing, marketing_reports: !!u.can_view_marketing_reports,
   crewfit: !!u.can_access_crewfit, crewfit_analytics: !!u.can_view_crewfit_analytics, crewfit_followups: !!u.can_view_crewfit_followups, crewfit_orders: !!u.can_view_crewfit_orders, crewfit_catalog: !!u.can_view_crewfit_catalog, crewfit_calculator: !!u.can_view_crewfit_calculator, crewfit_payments: !!u.can_view_crewfit_payments, crewfit_customers: !!u.can_view_crewfit_customers, crewfit_vendors: !!u.can_view_crewfit_vendors, crewfit_invoices: !!u.can_view_crewfit_invoices, crewfit_orders_edit: !!u.can_edit_crewfit_orders, inventory: !!u.can_view_inventory, inventory_edit: !!u.can_edit_inventory, inventory_import: !!u.can_import_rto, offline_sales: !!u.can_view_offline_sales, offline_sales_edit: !!u.can_edit_offline_sales, revenue: !!u.can_view_revenue,
+  backups: !!u.can_view_backups,
 })
 const buildPerms = (f) => {
   // Owner and admin both hold every page; the server short-circuits permission checks for them
   // either way, so these columns are really just kept consistent with the role.
-  if (f.role === 'admin' || f.role === 'owner') return { normless: true, crewfit: true, dashboard: true, customers: true, orders: true, scanner: true, marketing: true, marketing_dispatch: true, marketing_approve: true, marketing_reports: true, invoices: true, crewfit_analytics: true, crewfit_followups: true, crewfit_orders: true, crewfit_catalog: true, crewfit_calculator: true, crewfit_payments: true, crewfit_customers: true, crewfit_vendors: true, crewfit_invoices: true, crewfit_orders_edit: true, inventory: true, inventory_edit: true, inventory_import: true, offline_sales: true, offline_sales_edit: true, revenue: true, sync: f.role === 'owner' }
+  if (f.role === 'admin' || f.role === 'owner') return { normless: true, crewfit: true, dashboard: true, customers: true, orders: true, scanner: true, marketing: true, marketing_dispatch: true, marketing_approve: true, marketing_reports: true, invoices: true, crewfit_analytics: true, crewfit_followups: true, crewfit_orders: true, crewfit_catalog: true, crewfit_calculator: true, crewfit_payments: true, crewfit_customers: true, crewfit_vendors: true, crewfit_invoices: true, crewfit_orders_edit: true, inventory: true, inventory_edit: true, inventory_import: true, offline_sales: true, offline_sales_edit: true, revenue: true, backups: true, sync: f.role === 'owner' }
   return {
     normless: !!f.normless, crewfit: !!f.crewfit, sync: false,
     dashboard: !!(f.normless && f.dashboard), customers: !!(f.normless && f.customers), orders: !!(f.normless && f.orders), scanner: !!(f.normless && f.scanner), invoices: !!(f.normless && f.invoices),
@@ -61,6 +62,8 @@ const buildPerms = (f) => {
     inventory_import: !!(f.normless && f.inventory && f.inventory_edit && f.inventory_import),
     offline_sales: !!(f.normless && f.offline_sales), offline_sales_edit: !!(f.normless && f.offline_sales && f.offline_sales_edit),
     revenue: !!f.revenue,
+    // Not tied to either brand: one database holds both, so one backup covers both.
+    backups: !!f.backups,
   }
 }
 
@@ -169,6 +172,17 @@ export default function AdminManagement() {
                 <span>
                   <b>See revenue totals</b>
                   <em>Collected &amp; outstanding totals on Payments, combined lifetime value on Customers, and all money figures on the dashboard. Individual order and payment amounts stay visible either way.</em>
+                </span>
+              </label>
+              {/* Backups cover both brands at once, so this sits with the other cross-cutting
+                  rights rather than inside a brand card. Viewing and running only — connecting
+                  Telegram, changing the passphrase and restoring stay owner-only in the server. */}
+              <label className="page-check" style={{ margin: '10px 0 0' }}>
+                <input type="checkbox" checked={!!form.backups} onChange={e => setF({ backups: e.target.checked })} />
+                <Icon name="cloud" size={15} />
+                <span>
+                  <b>See and run backups</b>
+                  <em>Open System → Backup, read the history and start a backup. The page shows which Telegram account the archives go to. Connecting or disconnecting that account, changing the encryption passphrase, and restoring an archive remain owner-only whatever is ticked here.</em>
                 </span>
               </label>
             </div>

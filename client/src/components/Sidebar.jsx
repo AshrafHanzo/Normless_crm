@@ -20,6 +20,9 @@ const NAV = {
     { to: '/invoices', icon: 'invoice', label: 'Invoices', perm: 'can_view_invoices' },
     { to: '/inventory', icon: 'box', label: 'Inventory', perm: 'can_view_inventory', badge: 'rto' },
     { to: '/offline-sales', icon: 'card', label: 'Offline Sales', perm: 'can_view_offline_sales' },
+    // One database holds both brands, so Backup is listed under either — it is the same page and
+    // the same archives whichever side you are looking at.
+    { to: '/backup', icon: 'cloud', label: 'Backup', perm: 'can_view_backups', section: 'System' },
   ],
   crewfit: [
     { to: '/crewfit/dashboard', icon: 'dashboard', label: 'Dashboard', perm: 'can_view_crewfit_analytics' },
@@ -32,6 +35,7 @@ const NAV = {
     { to: '/crewfit/vendor-orders', icon: 'truck', label: 'Vendor Orders', perm: 'can_view_crewfit_vendors' },
     { to: '/crewfit/invoices', icon: 'invoice', label: 'Invoices', perm: 'can_view_crewfit_invoices' },
     { to: '/crewfit/activity', icon: 'bell', label: 'Activity', adminOnly: true },
+    { to: '/backup', icon: 'cloud', label: 'Backup', perm: 'can_view_backups', section: 'System' },
   ],
 }
 

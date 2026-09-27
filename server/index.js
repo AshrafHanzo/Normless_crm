@@ -310,6 +310,9 @@ app.use('/api/scanner', authMiddleware, require('./routes/packing'));
 app.use('/api/notifications', authMiddleware, require('./routes/notifications'));
 // One comment thread implementation for every kind of thing that has one.
 app.use('/api/comments', authMiddleware, require('./routes/comments'));
+// Off-server backups to Telegram. Gated again inside the router: the page needs
+// can_view_backups, and anything destructive needs to be an owner.
+app.use('/api/backup', authMiddleware, require('./routes/backup'));
 
 // Health check
 app.get('/api/health', (req, res) => {
@@ -1317,6 +1320,106 @@ async function ensureSyncSchema() {
     }
 }
 
+/**
+ * Automatic off-server backups to Telegram (System → Backup).
+ *
+ * Three tables rather than one, because they answer different questions and die at different
+ * times: what the account and schedule are (one row, long-lived), what happened on each run
+ * (history, pruned by retention), and where each archive physically sits in Telegram (the thing a
+ * restore reads).
+ *
+ * `backup_artifacts` is the only one a restore truly needs — and it is deliberately duplicated
+ * into a plaintext manifest uploaded alongside every run, because an index that lives only in the
+ * database is an index you cannot read on the day the database is what you lost.
+ */
+async function ensureBackupSchema() {
+    try {
+        await db.exec(`
+            CREATE TABLE IF NOT EXISTS backup_config (
+                id INTEGER PRIMARY KEY,
+                -- Telegram application credentials, from my.telegram.org.
+                tg_api_id TEXT,
+                tg_api_hash TEXT,
+                -- The signed-in user session, sealed with a key derived from JWT_SECRET so a
+                -- stolen database dump cannot be used to take over the Telegram account.
+                tg_session TEXT,
+                tg_user_id TEXT, tg_username TEXT, tg_phone TEXT, tg_user_name TEXT,
+                tg_premium BOOLEAN DEFAULT false,
+                -- The private channel archives are posted to.
+                channel_id TEXT, channel_access_hash TEXT, channel_title TEXT,
+                -- scrypt verifier for the archive passphrase. Never the passphrase itself, and
+                -- never the key: this only answers "is this the same passphrase as before".
+                passphrase_verifier TEXT,
+                -- Only set when scheduling is on; see services/backup/scheduler.js for the
+                -- trade-off that involves.
+                sched_passphrase TEXT,
+                schedule_enabled BOOLEAN DEFAULT false,
+                db_cron TEXT DEFAULT '30 2 * * *',
+                files_cron TEXT DEFAULT '30 3 * * *',
+                files_full_every_days INTEGER DEFAULT 7,
+                include_uploads BOOLEAN DEFAULT true,
+                include_storage BOOLEAN DEFAULT true,
+                keep_daily INTEGER DEFAULT 14,
+                keep_weekly INTEGER DEFAULT 8,
+                keep_monthly INTEGER DEFAULT 6,
+                timezone TEXT DEFAULT 'Asia/Kolkata',
+                last_run_at TIMESTAMP,
+                last_success_at TIMESTAMP,
+                last_files_full_at TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS backup_runs (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                kind TEXT NOT NULL,                     -- 'full' | 'db' | 'files'
+                trigger TEXT NOT NULL,                  -- 'manual' | 'schedule'
+                status TEXT NOT NULL DEFAULT 'running', -- running | success | failed | empty | pruned
+                started_by TEXT,
+                plain_bytes BIGINT DEFAULT 0,
+                cipher_bytes BIGINT DEFAULT 0,
+                artifact_count INTEGER DEFAULT 0,
+                manifest_message_id INTEGER,
+                duration_ms INTEGER,
+                error TEXT,
+                started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                finished_at TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS backup_runs_started_idx ON backup_runs (started_at DESC);
+            CREATE INDEX IF NOT EXISTS backup_runs_status_idx ON backup_runs (status);
+
+            CREATE TABLE IF NOT EXISTS backup_artifacts (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                run_id INTEGER NOT NULL,
+                kind TEXT NOT NULL,                     -- 'database' | 'uploads' | 'storage'
+                filename TEXT NOT NULL,
+                plain_bytes BIGINT, cipher_bytes BIGINT,
+                -- Both hashes: the ciphertext one proves the transfer was clean, the plaintext one
+                -- proves the decryption produced the original bytes. A failure names which broke.
+                plain_sha256 TEXT, cipher_sha256 TEXT,
+                -- Telegram caps a document at 2GB, so one artifact can be several messages. The
+                -- order of these ids IS the byte order — concatenate them to rebuild the file.
+                part_count INTEGER DEFAULT 1,
+                message_ids TEXT,
+                file_count INTEGER,
+                meta TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS backup_artifacts_run_idx ON backup_artifacts (run_id);
+        `);
+
+        await db.exec(`
+            -- Backups hold every customer record and, once restored, the whole CRM. Seeing the
+            -- page means seeing the Telegram account it uploads to, so this is off by default and
+            -- the destructive half (restore, delete, disconnect) stays owner-only in the route.
+            ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_backups BOOLEAN DEFAULT false;
+        `);
+        await db.query(`UPDATE admin_users SET can_view_backups = true WHERE role IN ('owner','admin')`);
+    } catch (err) {
+        console.error('ensureBackupSchema error:', err.message);
+    }
+}
+
 // Start Server
 app.listen(PORT, async () => {
     console.log(`🚀 Normless CRM Backend running on http://localhost:${PORT}`);
@@ -1333,7 +1436,19 @@ app.listen(PORT, async () => {
     await ensureMarketingSchema();
     await ensureSalesSchema();
     await ensureSyncSchema();
+    await ensureBackupSchema();
 
     // START AUTO-SYNC IMMEDIATELY (no user action needed!)
     startAutoSync();
+
+    // Arm the backup schedule. Never allowed to stop the server coming up: a CRM that will not
+    // boot because its backup cron is misconfigured is a far worse outcome than a missed backup.
+    try {
+        const s = await require('./services/backup/scheduler').reload();
+        console.log(s.active
+            ? `🗄  Backup schedule armed (${s.count} job${s.count > 1 ? 's' : ''})`
+            : `🗄  Backup schedule idle — ${s.reason}`);
+    } catch (e) {
+        console.error('backup scheduler failed to start:', e.message);
+    }
 });
