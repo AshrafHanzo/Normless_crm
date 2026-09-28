@@ -441,7 +441,9 @@ router.post('/orders/:id/post', async (req, res) => {
           SET post_status = $1,
               video_link = $2,
               posted_at = CASE WHEN $1 = 'Posted' THEN COALESCE(posted_at, CURRENT_TIMESTAMP) END,
-              posted_by = CASE WHEN $1 = 'Posted' THEN $3 END,
+              -- Kept when it is already posted, so correcting the link does not rewrite who
+              -- posted it. Cleared by going back to pending, so a re-post records the new person.
+              posted_by = CASE WHEN $1 = 'Posted' THEN COALESCE(posted_by, $3) END,
               updated_at = CURRENT_TIMESTAMP
         WHERE id = $4
         RETURNING ${ORDER_COLUMNS}`,

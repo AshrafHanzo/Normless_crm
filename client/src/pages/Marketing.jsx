@@ -241,18 +241,29 @@ function ItemRows({ items, products, onChange }) {
  * a claim nobody can check.
  */
 function PostStatus({ order, apiFetch, toast, onChanged }) {
-  const [link, setLink] = useState(order.video_link || '')
+  const saved = order.video_link || ''
+  const [link, setLink] = useState(saved)
   const [busy, setBusy] = useState(false)
   const posted = order.post_status === 'Posted'
+  // Typed but not saved. Once an order was posted the only button left was "back to pending", so
+  // correcting a link — the commonest edit there is, since the first one is usually pasted from a
+  // phone — changed nothing at all.
+  const dirty = link.trim() !== saved
 
-  const set = async (post_status) => {
+  // Follow the stored value when it changes underneath (a save, or a different order opened), but
+  // never while someone is mid-edit. Adjusted during render rather than in an effect — React's own
+  // advice for state derived from a prop, and it avoids the extra pass an effect would cost.
+  const [lastSaved, setLastSaved] = useState(saved)
+  if (lastSaved !== saved) { setLastSaved(saved); setLink(saved) }
+
+  const set = async (post_status, what) => {
     setBusy(true)
     const res = await apiFetch(`/api/marketing/orders/${order.id}/post`, {
       method: 'POST', body: JSON.stringify({ post_status, video_link: link.trim() }),
     })
     setBusy(false)
     if (!res || res.error) { toast.error(res?.error || 'Failed to update'); return }
-    toast.success(post_status === 'Posted' ? `${res.order.ref} marked posted` : `${res.order.ref} back to pending`)
+    toast.success(`${res.order.ref} ${what}`)
     onChanged(res.order)
   }
 
@@ -267,9 +278,19 @@ function PostStatus({ order, apiFetch, toast, onChanged }) {
             {order.posted_at ? ` · ${new Date(order.posted_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}` : ''}</div>
         )}
       </div>
-      {posted
-        ? <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => set('Pending')}>{busy ? 'Saving…' : '↩ Back to pending'}</button>
-        : <button type="button" className="btn btn-primary" disabled={busy || !link.trim()} onClick={() => set('Posted')}>{busy ? 'Saving…' : '✓ Mark posted'}</button>}
+      {posted ? (
+        <>
+          {dirty && (
+            <button type="button" className="btn btn-primary" disabled={busy || !link.trim()}
+              onClick={() => set('Posted', 'link updated')}>{busy ? 'Saving…' : 'Save link'}</button>
+          )}
+          <button type="button" className="btn btn-secondary" disabled={busy}
+            onClick={() => set('Pending', 'back to pending')}>{busy ? 'Saving…' : '↩ Back to pending'}</button>
+        </>
+      ) : (
+        <button type="button" className="btn btn-primary" disabled={busy || !link.trim()}
+          onClick={() => set('Posted', 'marked posted')}>{busy ? 'Saving…' : '✓ Mark posted'}</button>
+      )}
     </div>
   )
 }
@@ -477,8 +498,14 @@ function OrderDrawer({ target, meta, influencers, products, productsError, onClo
                 Content
                 <span className={`status-badge ${form.post_status === 'Posted' ? 'fulfilled' : 'pending'}`}>{form.post_status || 'Pending'}</span>
               </div>
+              {/* The content half saves itself, so the new values are already stored — re-baseline
+                  the guard or closing the drawer asks to discard changes that were never pending. */}
               <PostStatus order={target} apiFetch={apiFetch} toast={toast}
-                onChanged={(o) => { setF({ post_status: o.post_status, video_link: o.video_link }); onSaved(o, false, true) }} />
+                onChanged={(o) => {
+                  setF({ post_status: o.post_status, video_link: o.video_link })
+                  guard.reset({ form: { ...form, post_status: o.post_status, video_link: o.video_link }, dispatch })
+                  onSaved(o, false, true)
+                }} />
 
               <div className="form-section">Comments</div>
               <OrderComments entity="marketing_order" orderId={target.id} />

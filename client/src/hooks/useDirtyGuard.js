@@ -73,7 +73,17 @@ export default function useDirtyGuard({
 
   const dirty = current != null && baseline.current != null && current !== baseline.current
 
-  const reset = useCallback(() => { baseline.current = currentRef.current }, [])
+  /**
+   * Take the current state as the new "saved" state.
+   *
+   * Called with no argument after a save that used what is already on screen. A form that is
+   * about to *become* the saved state in the same tick — a half of the drawer that saves itself,
+   * where setState has not re-rendered yet — passes that state explicitly, since currentRef still
+   * holds the values from the last render.
+   */
+  const reset = useCallback((snap) => {
+    baseline.current = snap === undefined ? currentRef.current : stableStringify(snap);
+  }, [])
 
   // Guards against a second prompt when an impatient click lands on the overlay twice.
   const asking = useRef(false)
