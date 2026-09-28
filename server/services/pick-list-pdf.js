@@ -14,11 +14,20 @@ const PDFDocument = require('pdfkit');
 const L = 40, R = 555, W = R - L;
 const TOP = 50, BOTTOM = 762;          // the band of the page rows may occupy
 const INK = '#15161a', MUTED = '#6b7280', RULE = '#e4e6eb', BAND = '#f3f4f6', ZEBRA = '#fafafa';
+// A line that can come off the RTO shelf is the one thing on this sheet that must not be printed,
+// so it is the one thing on it that is coloured.
+const SHELF = '#b45309', SHELF_BG = '#fff7ed';
 
-// Edition · Colour · Size · Qty · Orders. Qty is narrow and right-aligned so the numbers line up
-// in a column the eye can run down, with a clear gap before the order list.
-const COL = { edition: L + 10, colour: L + 200, size: L + 300, qty: L + 352, orders: L + 404 };
-const WID = { edition: 185, colour: 95, size: 50, qty: 32, orders: R - (L + 404) - 10 };
+// Edition · Colour · Size · Qty · RTO · Print · Orders. The three counts are narrow and
+// right-aligned so they line up in columns the eye can run down.
+const COL = {
+    edition: L + 10, colour: L + 160, size: L + 232,
+    qty: L + 270, rto: L + 300, print: L + 334, orders: L + 372,
+};
+const WID = {
+    edition: 145, colour: 68, size: 34,
+    qty: 26, rto: 30, print: 32, orders: R - (L + 372) - 10,
+};
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
@@ -33,19 +42,30 @@ module.exports = function renderPickListPdf({ rows = [], summary = {}, period = 
     doc.font('Helvetica-Bold').fontSize(19).fillColor(INK).text('Pick list', L, 42);
     doc.font('Helvetica').fontSize(10).fillColor(MUTED).text(span, L, 66);
     doc.font('Helvetica').fontSize(8).fillColor(MUTED)
-        .text('Unfulfilled orders only — held, cancelled and refunded orders are left out.', L, 81);
+        .text('Unfulfilled orders only - held, cancelled and refunded orders are left out.', L, 81);
+    if (summary.from_shelf) {
+        doc.font('Helvetica-Bold').fontSize(8).fillColor(SHELF)
+            .text(`Highlighted rows are already in the building — take ${summary.from_shelf} from the RTO shelf instead of printing.`, L, 91);
+    }
 
     // The three numbers anyone checks first, as their own block in the corner.
     const stat = (label, value, x) => {
         doc.font('Helvetica-Bold').fontSize(15).fillColor(INK).text(String(value ?? 0), x, 44, { width: 58, align: 'right' });
         doc.font('Helvetica').fontSize(7.5).fillColor(MUTED).text(label.toUpperCase(), x, 63, { width: 58, align: 'right' });
     };
-    stat('units', summary.units, R - 190);
-    stat('lines', summary.lines, R - 126);
-    stat('orders', summary.orders, R - 62);
+    stat('units', summary.units, R - 254);
+    stat('lines', summary.lines, R - 190);
+    stat('orders', summary.orders, R - 126);
+    // Said up front: it is the number that changes what the floor does today.
+    const shelf = summary.from_shelf || 0;
+    doc.font('Helvetica-Bold').fontSize(15).fillColor(shelf ? SHELF : MUTED)
+        .text(String(shelf), R - 62, 44, { width: 58, align: 'right' });
+    doc.font('Helvetica').fontSize(7.5).fillColor(shelf ? SHELF : MUTED)
+        .text('FROM RTO', R - 62, 63, { width: 58, align: 'right' });
 
-    doc.moveTo(L, 96).lineTo(R, 96).strokeColor(INK).lineWidth(1.2).stroke();
-    let y = 112;
+    const ruleY = summary.from_shelf ? 105 : 96;
+    doc.moveTo(L, ruleY).lineTo(R, ruleY).strokeColor(INK).lineWidth(1.2).stroke();
+    let y = ruleY + 16;
 
     /* ── A table per garment type ───────────────────────────────────────────────────── */
     const byType = [];
@@ -62,6 +82,8 @@ module.exports = function renderPickListPdf({ rows = [], summary = {}, period = 
         doc.text('COLOUR', COL.colour, y + 6, { width: WID.colour });
         doc.text('SIZE', COL.size, y + 6, { width: WID.size });
         doc.text('QTY', COL.qty, y + 6, { width: WID.qty, align: 'right' });
+        doc.fillColor(SHELF).text('RTO', COL.rto, y + 6, { width: WID.rto, align: 'right' });
+        doc.fillColor(MUTED).text('PRINT', COL.print, y + 6, { width: WID.print, align: 'right' });
         doc.text('ORDERS', COL.orders, y + 6, { width: WID.orders });
         y += 18;
     };
@@ -73,8 +95,10 @@ module.exports = function renderPickListPdf({ rows = [], summary = {}, period = 
 
         doc.rect(L, y, W, 24).fillColor(INK).fill();
         doc.font('Helvetica-Bold').fontSize(11).fillColor('#ffffff').text(section.type, L + 10, y + 7);
+        const fromShelf = section.rows.reduce((n, r) => n + (r.rto || 0), 0);
         doc.font('Helvetica').fontSize(9).fillColor('#d7d9de')
-            .text(`${plural(units, 'unit')} · ${plural(section.rows.length, 'line')}`, L, y + 8, { width: W - 10, align: 'right' });
+            .text(`${plural(units, 'unit')} · ${plural(section.rows.length, 'line')}${fromShelf ? ` · ${fromShelf} from the RTO shelf` : ''}`,
+                L, y + 8, { width: W - 10, align: 'right' });
         y += 24;
         tableHead();
 
@@ -102,7 +126,13 @@ module.exports = function renderPickListPdf({ rows = [], summary = {}, period = 
             const fresh = r.edition !== edition;
             if (fresh) stripe++;
             if (fresh && stripe > 1) doc.moveTo(L, y).lineTo(R, y).strokeColor(RULE).lineWidth(0.8).stroke();
-            if (stripe % 2 === 0) doc.rect(L, y, W, rowH).fillColor(ZEBRA).fill();
+            // The shelf tint wins over the stripe: this row is an instruction, not decoration.
+            if (r.rto > 0) {
+                doc.rect(L, y, W, rowH).fillColor(SHELF_BG).fill();
+                doc.rect(L, y, 3, rowH).fillColor(SHELF).fill();
+            } else if (stripe % 2 === 0) {
+                doc.rect(L, y, W, rowH).fillColor(ZEBRA).fill();
+            }
 
             if (fresh) {
                 doc.font('Helvetica-Bold').fontSize(8.5).fillColor(INK)
@@ -114,6 +144,13 @@ module.exports = function renderPickListPdf({ rows = [], summary = {}, period = 
                 .text(r.size, COL.size, y + 5, { width: WID.size });
             doc.font('Helvetica-Bold').fontSize(9.5).fillColor(INK)
                 .text(String(r.qty), COL.qty, y + 4, { width: WID.qty, align: 'right' });
+            // Take this many off the shelf, print the rest. A dash rather than a zero, so the eye
+            // finds the rows that have a number in them. No arrow glyph: the standard PDF fonts
+            // have no U+21A9, and pdfkit draws the bytes it does have instead — "!©1".
+            doc.font('Helvetica-Bold').fontSize(9.5).fillColor(r.rto ? SHELF : '#c9cdd4')
+                .text(r.rto ? String(r.rto) : '-', COL.rto, y + 4, { width: WID.rto, align: 'right' });
+            doc.font(r.rto ? 'Helvetica-Bold' : 'Helvetica').fontSize(9.5).fillColor(r.qty - r.rto ? INK : '#c9cdd4')
+                .text(String(r.qty - r.rto), COL.print, y + 4, { width: WID.print, align: 'right' });
             doc.font('Helvetica').fontSize(7.5).fillColor(MUTED)
                 .text(orders, COL.orders, y + 5.5, { width: WID.orders });
             y += rowH;

@@ -161,10 +161,16 @@ router.get('/pick-list.csv', async (req, res) => {
     try {
         const { rows, period } = await pickList.build(range(req.query));
         const csv = toCsv(
-            rows.map(r => ({ type: r.type, edition: r.edition, color: r.color, size: r.size, qty: r.qty, orders: r.orders.join(' ') })),
+            rows.map(r => ({
+                type: r.type, edition: r.edition, color: r.color, size: r.size,
+                qty: r.qty, rto: r.rto, print: r.qty - r.rto, orders: r.orders.join(' '),
+            })),
             [{ key: 'type', label: 'Product type' }, { key: 'edition', label: 'Edition' },
              { key: 'color', label: 'Colour' }, { key: 'size', label: 'Size' },
-             { key: 'qty', label: 'Qty' }, { key: 'orders', label: 'Orders' }]);
+             { key: 'qty', label: 'Qty' },
+             // What is already in the building, and what is therefore left to make.
+             { key: 'rto', label: 'From RTO shelf' }, { key: 'print', label: 'To print' },
+             { key: 'orders', label: 'Orders' }]);
         res.setHeader('Content-Type', 'text/csv; charset=utf-8');
         res.setHeader('Content-Disposition', contentDisposition(fileName('csv', period)));
         res.send(csv);

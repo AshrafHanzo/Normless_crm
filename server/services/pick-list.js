@@ -76,11 +76,30 @@ async function build({ from, to } = {}) {
             const size = parts?.size || 'One size';
 
             const key = `${type}|${edition}|${color}|${size}`;
-            const g = groups.get(key) || { type, edition, color, size, qty: 0, orders: [] };
+            const g = groups.get(key) || {
+                type, edition, color, size, qty: 0, orders: [],
+                // Kept so the group can be matched against the RTO shelf afterwards — the shelf is
+                // keyed by variant id where there is one, and by product + variant text otherwise.
+                shopify_variant_id: item.shopify_variant_id || null,
+                shopify_product_id: item.shopify_product_id || null,
+                variant: item.variant || '',
+            };
             g.qty += qty;
             if (!g.orders.includes(order.order_number)) g.orders.push(order.order_number);
             groups.set(key, g);
         }
+    }
+
+    // What is already in the building. A garment that came back and can go straight out again is
+    // the one thing on this list that must not be printed, so it is answered here rather than left
+    // to whoever happens to remember the shelf exists.
+    const shelf = inv.availabilityIndex(await inv.rtoAvailable());
+    for (const g of groups.values()) {
+        const hit = inv.matchLine(g, shelf);
+        // What to fetch, not what the shelf holds: a shelf with four of something an order needs
+        // two of still only saves two.
+        g.rto = hit ? Math.min(hit.available, g.qty) : 0;
+        g.rto_available = hit ? hit.available : 0;
     }
 
     // Read down the page the way the floor works: a garment type at a time, then the design, then
@@ -98,12 +117,14 @@ async function build({ from, to } = {}) {
             units: rows.reduce((n, r) => n + r.qty, 0),
             lines: rows.length,
             editions: new Set(rows.map(r => `${r.type}|${r.edition}`)).size,
+            // How much of the work is already done, sitting on a shelf.
+            from_shelf: rows.reduce((n, r) => n + r.rto, 0),
         },
         period: { from: from || null, to: to || null },
     };
 }
 
-const COLUMNS = ['Product type', 'Edition', 'Colour', 'Size', 'Qty', 'Orders'];
-const toRow = (r) => [r.type, r.edition, r.color, r.size, r.qty, r.orders.join(' ')];
+const COLUMNS = ['Product type', 'Edition', 'Colour', 'Size', 'Qty', 'From RTO shelf', 'To print', 'Orders'];
+const toRow = (r) => [r.type, r.edition, r.color, r.size, r.qty, r.rto, r.qty - r.rto, r.orders.join(' ')];
 
 module.exports = { build, COLUMNS, toRow, TYPE_LABEL, SIZE_RANK };
