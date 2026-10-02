@@ -250,7 +250,15 @@ export default function TicketDrawer({ ticket, options, onClose, onSaved, onDele
               </div>
               <div className="input-group">
                 <label>Work</label>
-                <select value={form.progress} disabled={ro} onChange={e => setF({ progress: e.target.value })}>
+                {/* Finishing the work finishes the ticket: it closes here rather than waiting for
+                    somebody to remember the other dropdown. */}
+                <select value={form.progress} disabled={ro}
+                  onChange={e => setF({
+                    progress: e.target.value,
+                    ...(e.target.value === 'Completed'
+                      ? { status: 'Closed', resolved_on: form.resolved_on || today() }
+                      : {}),
+                  })}>
                   {(options.progress || []).map(v => <option key={v} value={v}>{v}</option>)}
                 </select>
               </div>

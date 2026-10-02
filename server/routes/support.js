@@ -256,6 +256,9 @@ router.post('/tickets', canEdit, async (req, res) => {
         body.raised_on = body.raised_on || today();
         body.status = STATUSES.includes(body.status) ? body.status : 'Open';
         body.progress = PROGRESS.includes(body.progress) ? body.progress : 'Pending';
+        // Work finished is the ticket finished. Closing was a second step nobody took, which is
+        // how the spreadsheet ended up with settled requests sitting in the open list for weeks.
+        if (body.progress === 'Completed' && !STATUSES.includes(trim(req.body.status))) body.status = 'Closed';
         if (body.status === 'Closed' && !body.resolved_on) body.resolved_on = today();
 
         const cols = Object.keys(body);
@@ -287,12 +290,17 @@ router.post('/tickets', canEdit, async (req, res) => {
 router.patch('/tickets/:id', canEdit, async (req, res) => {
     try {
         const id = parseInt(req.params.id, 10) || 0;
-        const before = (await db.query('SELECT id, status, resolved_on FROM support_tickets WHERE id = $1', [id])).rows[0];
+        const before = (await db.query('SELECT id, status, progress, resolved_on FROM support_tickets WHERE id = $1', [id])).rows[0];
         if (!before) return res.status(404).json({ error: 'That ticket is gone' });
 
         const patch = {};
         for (const [col, clean] of Object.entries(WRITABLE)) {
             if (req.body[col] !== undefined) patch[col] = clean(req.body[col]);
+        }
+        // Marking the work Completed closes the ticket — that is what finishing it means, and
+        // the Closed tab is where anyone then looks for it.
+        if (patch.progress === 'Completed' && before.progress !== 'Completed' && patch.status === undefined) {
+            patch.status = 'Closed';
         }
         if (patch.status === 'Closed' && before.status !== 'Closed' && patch.resolved_on === undefined && !before.resolved_on) {
             patch.resolved_on = today();

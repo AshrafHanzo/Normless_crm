@@ -93,7 +93,9 @@ async function main() {
         reason: REASON[(r['Reason'] || '').toLowerCase()] || trim(r['Reason']),
         payment_status: trim(r['RR Payment Status']),
         request: trim(r['Comments']),
-        status: 'Open',
+        // The sheet left rows open with the work marked Completed. Finished work is a finished
+        // ticket here, so they land in Closed — with the day the sheet says it was settled.
+        status: trim(r['Overall status']) === 'Completed' ? 'Closed' : 'Open',
         progress: ['Pending', 'In Progress', 'Completed'].includes(trim(r['Overall status'])) ? trim(r['Overall status']) : 'Pending',
         action: trim(r['Operations comment']),
         // The sheet's second free-text column, which operations used for what they actually did.
@@ -102,7 +104,7 @@ async function main() {
         return_awb: awb(r['RAWB']),
         assigned_to: trim(r['Assigned to']),
         raised_on: date(r['Request Date']) || date(r['Date']),
-        resolved_on: null,
+        resolved_on: trim(r['Overall status']) === 'Completed' ? date(r['Resolved Date']) : null,
     })).filter(t => t.raised_on || t.order_number);
 
     for (const t of tickets) if (!t.raised_on) t.raised_on = '2026-09-26';   // undated jottings, latest sheet date
