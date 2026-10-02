@@ -629,6 +629,25 @@ select { cursor: pointer; appearance: none;
 .pack-done-sub { color: var(--text-muted); font-size: 12.5px; margin-top: 2px; }
 .pack-done > button { margin-left: auto; }
 
+/* ---- Bulk scanning ------------------------------------------------------------------------ */
+.bulk-scan { display: flex; flex-direction: column; gap: 14px; }
+.bulk-tally { display: flex; flex-wrap: wrap; gap: 8px; }
+.bulk-stat {
+  padding: 7px 12px; border-radius: 999px; background: var(--surface); border: 1px solid var(--border);
+  font-size: 12.5px; color: var(--text-secondary);
+}
+.bulk-stat b { color: var(--text-primary); font-size: 14px; margin-right: 4px; }
+.bulk-stat-ok { border-color: color-mix(in srgb, var(--success, #16a34a) 50%, var(--border)); }
+.bulk-stat-warn { border-color: color-mix(in srgb, var(--warning) 55%, var(--border)); }
+.bulk-stat-bad { border-color: color-mix(in srgb, var(--danger) 55%, var(--border)); }
+/* The newest row is the one just scanned — tint tells the bench whether to keep going without
+   reading a word of it. */
+.bulk-row-packed td:first-child { box-shadow: inset 3px 0 0 var(--success, #16a34a); }
+.bulk-row-duplicate td { background: color-mix(in srgb, var(--warning) 9%, transparent); }
+.bulk-row-duplicate td:first-child { box-shadow: inset 3px 0 0 var(--warning); }
+.bulk-row-problem td { background: color-mix(in srgb, var(--danger) 9%, transparent); }
+.bulk-row-problem td:first-child { box-shadow: inset 3px 0 0 var(--danger); }
+
 .packed-tab { margin-top: 4px; }
 .packed-toolbar { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin-bottom: 14px; }
 .packed-stats { display: flex; flex-wrap: wrap; gap: 8px; }

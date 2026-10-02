@@ -93,7 +93,7 @@ async function shopifyDispatchDetails(shopifyOrderId) {
 async function localOrder(orderNumber) {
     const r = await db.query(
         `SELECT o.id, o.shopify_id, o.order_number, o.total_price, o.line_items_json,
-                o.fulfillment_status, o.financial_status, o.cancelled_at,
+                o.fulfillment_status, o.financial_status, o.cancelled_at, o.on_hold,
                 c.first_name, c.last_name, c.email AS customer_email, c.phone AS customer_phone
            FROM orders o
            LEFT JOIN customers c ON c.shopify_id = o.customer_shopify_id
@@ -127,6 +127,13 @@ router.post('/packed', async (req, res) => {
         const order = await localOrder(orderNumber);
         if (!order) return res.status(404).json({ error: `Order ${orderNumber} is not in the CRM yet — run a sync and scan it again.` });
         if (order.cancelled_at) return res.status(409).json({ error: `Order ${orderNumber} is cancelled — it should not be going out.` });
+        // A held order is one somebody deliberately stopped. The bench can still record it after
+        // being told — the hold may have been lifted a minute ago and the sync not caught up — but
+        // only deliberately, with `force`. Scanning a stack in bulk sends none, so a held parcel
+        // drops out of the run instead of going out in it.
+        if (order.on_hold && !req.body?.force) {
+            return res.status(409).json({ error: `Order ${orderNumber} is ON HOLD — do not pack it.`, on_hold: true });
+        }
 
         const items = safeJson(order.line_items_json, []).map(it => ({
             title: it.title, variant: it.variant || null, quantity: Number(it.quantity) || 0,

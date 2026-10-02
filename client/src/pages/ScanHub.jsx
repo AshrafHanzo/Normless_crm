@@ -3,6 +3,7 @@ import { useApi } from '../App';
 import { useToast } from '../components/Toast';
 import OrderDetailsCard from '../components/OrderDetailsCard';
 import PackedTab from './scan/PackedTab';
+import BulkScanTab from './scan/BulkScanTab';
 
 const ScanHub = () => {
   const [activeTab, setActiveTab] = useState('scan');
@@ -118,7 +119,9 @@ const ScanHub = () => {
     setPacking(true);
     const res = await apiFetch('/api/scanner/packed', {
       method: 'POST',
-      body: JSON.stringify({ order_number: order.order_number }),
+      // The hold was shown and acknowledged in the dialog above — tell the server so, since it
+      // refuses a held order on its own.
+      body: JSON.stringify({ order_number: order.order_number, ...(order.on_hold ? { force: true } : {}) }),
     });
     setPacking(false);
     if (!res || res.error) { toast.error(res?.error || 'Could not record this parcel'); return; }
@@ -157,6 +160,13 @@ const ScanHub = () => {
             >
               ⌨️ Manual
             </button>
+            {/* A trolley of sealed parcels, recorded without stopping to read each one. */}
+            <button
+              className={`scan-tab ${activeTab === 'bulk' ? 'active' : ''}`}
+              onClick={() => { setActiveTab('bulk'); clearOrder(); }}
+            >
+              ⚡ Bulk
+            </button>
             {/* What has gone out. Beside the scanner rather than on a page of its own: the person
                 asking "did that one ship?" is standing at the packing bench. */}
             <button
@@ -185,6 +195,8 @@ const ScanHub = () => {
               autoComplete="off"
             />
           </div>
+        ) : activeTab === 'bulk' ? (
+          <BulkScanTab />
         ) : activeTab === 'packed' ? (
           <PackedTab />
         ) : (
@@ -255,7 +267,7 @@ const ScanHub = () => {
               )}
             </div>
           </>
-        ) : activeTab === 'packed' ? null : !loading && !error && (
+        ) : ['packed', 'bulk'].includes(activeTab) ? null : !loading && !error && (
           <div className="empty-state">
             <div className="empty-icon">📦</div>
             <h3>No Scan Detected</h3>
