@@ -630,7 +630,7 @@ select { cursor: pointer; appearance: none;
 .pack-done > button { margin-left: auto; }
 
 /* ---- Bulk scanning ------------------------------------------------------------------------ */
-.bulk-scan { display: flex; flex-direction: column; gap: 14px; }
+.bulk-scan { display: flex; flex-direction: column; gap: 12px; margin-bottom: 16px; }
 .bulk-tally { display: flex; flex-wrap: wrap; gap: 8px; }
 .bulk-stat {
   padding: 7px 12px; border-radius: 999px; background: var(--surface); border: 1px solid var(--border);
@@ -640,13 +640,26 @@ select { cursor: pointer; appearance: none;
 .bulk-stat-ok { border-color: color-mix(in srgb, var(--success, #16a34a) 50%, var(--border)); }
 .bulk-stat-warn { border-color: color-mix(in srgb, var(--warning) 55%, var(--border)); }
 .bulk-stat-bad { border-color: color-mix(in srgb, var(--danger) 55%, var(--border)); }
-/* The newest row is the one just scanned — tint tells the bench whether to keep going without
-   reading a word of it. */
-.bulk-row-packed td:first-child { box-shadow: inset 3px 0 0 var(--success, #16a34a); }
-.bulk-row-duplicate td { background: color-mix(in srgb, var(--warning) 9%, transparent); }
-.bulk-row-duplicate td:first-child { box-shadow: inset 3px 0 0 var(--warning); }
-.bulk-row-problem td { background: color-mix(in srgb, var(--danger) 9%, transparent); }
-.bulk-row-problem td:first-child { box-shadow: inset 3px 0 0 var(--danger); }
+/* The run reads as a feed, newest first: the dispatch log below carries the detail, so a line here
+   only has to say whether to keep going — which a tint and a mark answer without being read. */
+.bulk-feed { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; max-height: 320px; overflow-y: auto; }
+.bulk-feed-line {
+  display: flex; align-items: center; gap: 10px; padding: 9px 12px; font-size: 13px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface);
+}
+.bulk-feed-mark {
+  display: grid; place-items: center; width: 20px; height: 20px; flex: none;
+  border-radius: 50%; font-size: 11px; font-weight: 800; color: #fff;
+}
+.bulk-feed-note { color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bulk-feed-time { margin-left: auto; flex: none; color: var(--text-muted); font-size: 12px; }
+.bulk-feed-packed { border-left: 3px solid var(--success, #16a34a); }
+.bulk-feed-packed .bulk-feed-mark { background: var(--success, #16a34a); }
+.bulk-feed-duplicate { border-left: 3px solid var(--warning); background: color-mix(in srgb, var(--warning) 8%, var(--surface)); }
+.bulk-feed-duplicate .bulk-feed-mark { background: var(--warning); }
+.bulk-feed-problem { border-left: 3px solid var(--danger); background: color-mix(in srgb, var(--danger) 8%, var(--surface)); }
+.bulk-feed-problem .bulk-feed-mark { background: var(--danger); }
+.bulk-feed-empty { margin: 0; padding: 14px 16px; border: 1px dashed var(--border); border-radius: var(--radius-md); color: var(--text-muted); font-size: 13px; }
 
 .packed-tab { margin-top: 4px; }
 .packed-toolbar { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin-bottom: 14px; }

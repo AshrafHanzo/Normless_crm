@@ -5,6 +5,7 @@ import useServerTable from '../../hooks/useServerTable'
 import SortTh from '../../components/SortTh'
 import Pagination from '../../components/Pagination'
 import Icon from '../../components/Icon'
+import BulkScanPanel from './BulkScanPanel'
 
 const money = (v) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(v || 0)
 const stamp = (v) => (v ? new Date(v).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—')
@@ -16,6 +17,9 @@ const today = () => new Date().toLocaleDateString('en-CA')   // YYYY-MM-DD in lo
  * Opens on today, because the question this tab answers at the bench is "did that one go out?"
  * — and today's parcels are the ones anyone is still asking about. The stored row is a snapshot
  * taken at the moment of packing, so it keeps reading correctly after the order changes.
+ *
+ * A trolley of sealed parcels is recorded from here too, rather than from a tab of its own: the
+ * scanner belongs next to the list it fills, so each parcel can be seen arriving in it.
  */
 export default function PackedTab() {
   const apiFetch = useApi()
@@ -30,6 +34,7 @@ export default function PackedTab() {
   const [term, setTerm] = useState('')
   const [onlyToday, setOnlyToday] = useState(true)
   const [busy, setBusy] = useState(null)
+  const [scanning, setScanning] = useState(false)
   const t = useServerTable({ sort: 'packed_at', dir: 'desc' })
 
   useEffect(() => {
@@ -92,8 +97,20 @@ export default function PackedTab() {
             onClick={() => { setOnlyToday(v => !v); t.resetPage() }}>
             {onlyToday ? 'Today' : 'All days'}
           </button>
+          {/* Recording a stack of parcels is the same log, filled faster — so it opens in place. */}
+          <button type="button" className={`mini-btn ${scanning ? 'mini-btn-active' : ''}`}
+            onClick={() => setScanning(v => !v)}>
+            {scanning ? 'Stop scanning' : '⚡ Scan parcels'}
+          </button>
         </div>
       </div>
+
+      {scanning && (
+        <BulkScanPanel
+          onRecorded={() => { if (t.page !== 1) t.resetPage(); else load() }}
+          onClose={() => setScanning(false)}
+        />
+      )}
 
       <div className="data-table-wrapper">
         {loading ? <div className="loader"><div className="spinner" /></div> : !rows.length ? (

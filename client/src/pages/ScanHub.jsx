@@ -3,7 +3,6 @@ import { useApi } from '../App';
 import { useToast } from '../components/Toast';
 import OrderDetailsCard from '../components/OrderDetailsCard';
 import PackedTab from './scan/PackedTab';
-import BulkScanTab from './scan/BulkScanTab';
 
 const ScanHub = () => {
   const [activeTab, setActiveTab] = useState('scan');
@@ -160,13 +159,6 @@ const ScanHub = () => {
             >
               ⌨️ Manual
             </button>
-            {/* A trolley of sealed parcels, recorded without stopping to read each one. */}
-            <button
-              className={`scan-tab ${activeTab === 'bulk' ? 'active' : ''}`}
-              onClick={() => { setActiveTab('bulk'); clearOrder(); }}
-            >
-              ⚡ Bulk
-            </button>
             {/* What has gone out. Beside the scanner rather than on a page of its own: the person
                 asking "did that one ship?" is standing at the packing bench. */}
             <button
@@ -195,8 +187,6 @@ const ScanHub = () => {
               autoComplete="off"
             />
           </div>
-        ) : activeTab === 'bulk' ? (
-          <BulkScanTab />
         ) : activeTab === 'packed' ? (
           <PackedTab />
         ) : (
@@ -267,7 +257,7 @@ const ScanHub = () => {
               )}
             </div>
           </>
-        ) : ['packed', 'bulk'].includes(activeTab) ? null : !loading && !error && (
+        ) : activeTab === 'packed' ? null : !loading && !error && (
           <div className="empty-state">
             <div className="empty-icon">📦</div>
             <h3>No Scan Detected</h3>
