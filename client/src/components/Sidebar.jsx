@@ -17,6 +17,7 @@ const NAV = {
     { to: '/orders', icon: 'box', label: 'Orders', perm: 'can_view_orders' },
     { to: '/scan', icon: 'scan', label: 'Scan Order', perm: 'can_scan_orders' },
     { to: '/marketing', icon: 'spark', label: 'Marketing', perm: 'can_view_marketing', badge: 'marketing' },
+    { to: '/support', icon: 'bell', label: 'Support', perm: 'can_view_support', badge: 'support' },
     { to: '/invoices', icon: 'invoice', label: 'Invoices', perm: 'can_view_invoices' },
     { to: '/inventory', icon: 'box', label: 'Inventory', perm: 'can_view_inventory', badge: 'rto' },
     { to: '/offline-sales', icon: 'card', label: 'Offline Sales', perm: 'can_view_offline_sales' },
@@ -86,6 +87,24 @@ export default function Sidebar({ collapsed = false, onToggleCollapse }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canSeeMarketing])
 
+  // Customer requests nobody has closed. On the menu for the same reason as the others: the desk
+  // that answers the customer is not the desk that packs the replacement.
+  const canSeeSupport = brand === 'normless'
+    && (user?.role === 'owner' || user?.role === 'admin' || !!user?.can_view_support)
+  const [supportOpen, setSupportOpen] = useState(0)
+  useEffect(() => {
+    if (!canSeeSupport) return
+    let live = true
+    const check = async () => {
+      const r = await apiFetch('/api/support/open-count')
+      if (live && r && !r.error) setSupportOpen(r.open || 0)
+    }
+    check()
+    const t = setInterval(check, 120000)
+    return () => { live = false; clearInterval(t) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canSeeSupport])
+
   const b = BRANDS[brand] || BRANDS.normless
   const isAdminRole = user?.role === 'owner' || user?.role === 'admin'
   // adminOnly wins over perm: a page that names who did what is not team-wide, and no permission
@@ -134,12 +153,16 @@ export default function Sidebar({ collapsed = false, onToggleCollapse }) {
           <div className="sidebar-section">
             <div className="sidebar-section-label">Main</div>
             {mainItems.map(item => {
-              const count = item.badge === 'rto' ? rtoAlerts : item.badge === 'marketing' ? marketingPending : 0
+              const count = item.badge === 'rto' ? rtoAlerts
+                : item.badge === 'marketing' ? marketingPending
+                  : item.badge === 'support' ? supportOpen : 0
               return (
                 <NavLink key={item.to} to={item.to} end={item.end} onClick={close}
                   title={!count ? item.label : item.badge === 'rto'
                     ? `${item.label} — ${count} order${count > 1 ? 's' : ''} can be served from the RTO shelf`
-                    : `${item.label} — ${count} thing${count > 1 ? 's' : ''} still waiting`}
+                    : item.badge === 'support'
+                      ? `${item.label} — ${count} ticket${count > 1 ? 's' : ''} still open`
+                      : `${item.label} — ${count} thing${count > 1 ? 's' : ''} still waiting`}
                   className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>
                   <span className="link-icon">
                     <Icon name={item.icon} size={19} />

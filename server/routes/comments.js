@@ -36,6 +36,16 @@ const ENTITIES = {
         }),
         columns: 'id, sl_no, customer_name',
     },
+    support_ticket: {
+        perm: 'can_view_support',
+        mention: 'can_view_support',
+        table: 'support_tickets',
+        describe: (r) => ({
+            ref: `CS-${String(r.ref_no).padStart(4, '0')}${r.order_number ? ` · ${r.order_number}` : ''}`,
+            link: `/support?focus=${r.id}`,
+        }),
+        columns: 'id, ref_no, order_number',
+    },
     marketing_order: {
         perm: 'can_view_marketing',
         mention: 'can_view_marketing',

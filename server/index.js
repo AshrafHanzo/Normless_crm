@@ -306,6 +306,8 @@ app.use('/api/offline-sales', authMiddleware, offlineSalesRoutes);
 app.use('/api/thumb', require('./routes/thumbs'));
 // The packing bench: confirming an order packed, and the dispatch log that comes out of it.
 app.use('/api/scanner', authMiddleware, require('./routes/packing'));
+// Customer support: returns, replacements and refunds arranged by hand.
+app.use('/api/support', authMiddleware, require('./routes/support'));
 // Your own inbox: mentions and replies. Scoped to the caller inside the route.
 app.use('/api/notifications', authMiddleware, require('./routes/notifications'));
 // One comment thread implementation for every kind of thing that has one.
@@ -463,6 +465,9 @@ async function ensureCrewfitSchema() {
                 -- The daily Meta Ads + Shopify report carries spend and revenue, so being on the
                 -- Marketing page does not by itself mean seeing it.
                 ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_marketing_reports BOOLEAN DEFAULT false;
+                -- Customer support: the returns, replacements and refunds handled by hand.
+                ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_support BOOLEAN DEFAULT false;
+                ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_edit_support BOOLEAN DEFAULT false;
             `);
             await db.query(`UPDATE admin_users SET can_access_normless=true, can_access_crewfit=true,
                 can_view_crewfit_followups=true, can_view_crewfit_orders=true, can_view_crewfit_catalog=true,
@@ -1213,6 +1218,69 @@ async function ensureMarketingSchema() {
 }
 
 // Shoot samples (Marketing → Samples) and offline sales (its own menu)
+/**
+ * Customer support — what a customer asked for after the order was placed.
+ *
+ * This work is done by hand, on WhatsApp mostly: a customer says the size is wrong, somebody
+ * arranges a return, a replacement goes out, and days later it is closed. It lived in a
+ * spreadsheet, which is why it is a table and not a column on the order — a request is its own
+ * thing with its own clock, one order can raise several, and the request outlives the sixty-day
+ * window Shopify will still serve an order inside.
+ *
+ * The customer's name, phone and email are snapshotted the way packed_orders does it, for the same
+ * reason: the ticket has to still read correctly when the order is gone.
+ *
+ * Seeding orders are not in here. Marketing raises and tracks those on its own page, and the two
+ * were only ever in one spreadsheet because it was one spreadsheet.
+ */
+async function ensureSupportSchema() {
+    try {
+        await db.exec(`
+            CREATE TABLE IF NOT EXISTS support_tickets (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                ref_no INTEGER,
+                -- The Shopify order this is about, as text: an old order may no longer be a row in
+                -- orders, and the ticket still has to say which order it was.
+                order_number TEXT,
+                shopify_order_id TEXT,
+                customer_name TEXT,
+                customer_phone TEXT,
+                customer_email TEXT,
+                -- Where the customer reached out: WhatsApp, Email, Instagram, Phone.
+                source TEXT,
+                -- What they are asking for, and why. Both the spreadsheet's words.
+                nature TEXT,
+                reason TEXT,
+                -- Whether the customer has paid for the replacement/reship where one is charged.
+                payment_status TEXT,
+                request TEXT,
+                -- Open or Closed, and how far along it is. Two columns because the sheet had two:
+                -- a ticket can be Closed with the work Completed, or still Open and In Progress.
+                status TEXT DEFAULT 'Open',
+                progress TEXT DEFAULT 'Pending',
+                -- What operations actually did about it: Replacement Initiated, Refunded, ...
+                action TEXT,
+                ops_note TEXT,
+                -- Forward and return waybills: the parcel going out, and the one coming back.
+                forward_awb TEXT,
+                return_awb TEXT,
+                assigned_to TEXT,
+                raised_on DATE NOT NULL,
+                resolved_on DATE,
+                created_by TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS support_tickets_ref_idx ON support_tickets (ref_no);
+            CREATE INDEX IF NOT EXISTS support_tickets_order_idx ON support_tickets (order_number);
+            CREATE INDEX IF NOT EXISTS support_tickets_raised_idx ON support_tickets (raised_on DESC);
+            CREATE INDEX IF NOT EXISTS support_tickets_status_idx ON support_tickets (status);
+        `);
+    } catch (err) {
+        console.error('ensureSupportSchema error:', err.message);
+    }
+}
+
 async function ensureSalesSchema() {
     try {
         await db.exec(`
@@ -1435,6 +1503,8 @@ app.listen(PORT, async () => {
     // Ensure influencer marketing schema
     await ensureMarketingSchema();
     await ensureSalesSchema();
+    // Customer support tickets: returns, replacements and refunds handled by hand
+    await ensureSupportSchema();
     await ensureSyncSchema();
     await ensureBackupSchema();
 

@@ -661,6 +661,20 @@ select { cursor: pointer; appearance: none;
 .bulk-feed-problem .bulk-feed-mark { background: var(--danger); }
 .bulk-feed-empty { margin: 0; padding: 14px 16px; border: 1px dashed var(--border); border-radius: var(--radius-md); color: var(--text-muted); font-size: 13px; }
 
+/* ---- Customer support ---------------------------------------------------------------------- */
+/* A request nobody has answered in a week reads as late without anyone comparing dates. */
+.support-row-stale td { background: color-mix(in srgb, var(--warning) 6%, transparent); }
+.support-row-stale td:first-child { box-shadow: inset 3px 0 0 var(--warning); }
+.support-nowrap { white-space: nowrap; }
+/* The order the ticket is about, pulled in beside the form so nobody opens another tab for it. */
+.support-order-card {
+  display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; margin: 6px 0 16px;
+  border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface);
+}
+.support-order-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+/* Three tickets on one order is a different conversation from the first one. */
+.support-order-prior { font-size: 12.5px; color: var(--warning); }
+
 .packed-tab { margin-top: 4px; }
 .packed-toolbar { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin-bottom: 14px; }
 .packed-stats { display: flex; flex-wrap: wrap; gap: 8px; }

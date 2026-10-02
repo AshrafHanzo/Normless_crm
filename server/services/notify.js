@@ -15,7 +15,7 @@ const handleOf = (username) => String(username || '').split('@')[0].toLowerCase(
 
 // Permission columns this module will read. The name is interpolated into the query — parameters
 // cannot stand in for identifiers — so it can never come straight from a caller.
-const MENTION_PERMS = new Set(['can_view_crewfit_orders', 'can_view_marketing', 'can_view_orders']);
+const MENTION_PERMS = new Set(['can_view_crewfit_orders', 'can_view_marketing', 'can_view_orders', 'can_view_support']);
 
 /**
  * Everyone who could be named in a comment: active accounts that can open the thing being
