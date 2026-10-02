@@ -14,9 +14,24 @@ export const blankTicket = () => ({
   order_number: '', customer_name: '', customer_phone: '', customer_email: '',
   source: 'WhatsApp', nature: '', reason: '', payment_status: '', request: '',
   status: 'Open', progress: 'Pending', action: '', ops_note: '',
-  forward_awb: '', return_awb: '', assigned_to: '', raised_on: today(), resolved_on: '',
+  forward_awb: '', return_awb: '', raised_on: today(), resolved_on: '',
 })
 
 const FIELDS = Object.keys(blankTicket())
 /** Only the editable fields, with nulls flattened to '' so React keeps the inputs controlled. */
 export const asForm = (t) => Object.fromEntries(FIELDS.map(k => [k, t?.[k] ?? '']))
+
+/**
+ * Where a waybill can be followed.
+ *
+ * The dispatch log already holds the courier's own link for the parcel that went out, so that one
+ * is used when the number matches. Everything else is Delhivery, which is what nearly every parcel
+ * ships with and whose tracker is a predictable URL — the same trick the marketing page uses, so a
+ * typed number produces its own link instead of being pasted twice.
+ */
+export const trackingFor = (awb, dispatch) => {
+  const n = String(awb || '').trim()
+  if (!/^[A-Za-z0-9-]{6,}$/.test(n)) return null
+  if (dispatch?.tracking_url && String(dispatch.awb || '').trim() === n) return dispatch.tracking_url
+  return `https://www.delhivery.com/track-v2/package/${encodeURIComponent(n)}`
+}

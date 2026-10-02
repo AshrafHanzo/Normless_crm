@@ -8,7 +8,7 @@ import Pagination from '../components/Pagination'
 import DateRangeFilter from '../components/DateRangeFilter'
 import useServerTable from '../hooks/useServerTable'
 import TicketDrawer from './support/TicketDrawer'
-import { blankTicket, refOf } from './support/ticket'
+import { blankTicket, refOf, trackingFor } from './support/ticket'
 
 const day = (v) => (v ? new Date(v).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit' }) : '—')
 const TABS = [
@@ -92,7 +92,7 @@ export default function Support() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params])
 
-  const onSaved = (saved) => { setTarget(saved); load() }
+  const onSaved = (saved, isNew) => { setTarget(isNew ? null : saved); load() }
 
   const remove = async (row) => {
     if (!await toast.confirm({
@@ -193,8 +193,15 @@ export default function Support() {
                       <td data-label="Ticket" className="cell-primary support-nowrap">{refOf(x)}</td>
                       <td data-label="Order">
                         {x.order_number || '—'}
-                        {x.forward_awb && <div className="packed-sub">F {x.forward_awb}</div>}
-                        {x.return_awb && <div className="packed-sub">R {x.return_awb}</div>}
+                        {/* Followed from the list without opening the ticket — the row click opens
+                            the drawer, so the link has to keep the click to itself. */}
+                        {[['F', x.forward_awb], ['R', x.return_awb]].filter(([, n]) => n).map(([tag, n]) => (
+                          <div className="packed-sub" key={tag}>
+                            {tag}{' '}
+                            <a className="support-awb" href={trackingFor(n)} target="_blank" rel="noreferrer"
+                              onClick={e => e.stopPropagation()}>{n}</a>
+                          </div>
+                        ))}
                       </td>
                       <td data-label="Customer">
                         {x.customer_name || '—'}

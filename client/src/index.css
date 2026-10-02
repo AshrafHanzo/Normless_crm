@@ -674,6 +674,18 @@ select { cursor: pointer; appearance: none;
 .support-order-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 /* Three tickets on one order is a different conversation from the first one. */
 .support-order-prior { font-size: 12.5px; color: var(--warning); }
+/* One gap down the whole form. Each field carrying its own bottom margin left consecutive rows
+   touching — a label sitting on the box above it, which reads as two fields fighting. */
+.support-form { display: flex; flex-direction: column; gap: 18px; }
+.support-form > .input-group, .support-form .form-row > .input-group { margin-bottom: 0; }
+.support-form > .form-section { margin: 6px 0 0; }
+.support-form > .support-order-card { margin: 0; }
+/* A waybill is only useful as a link somebody can send on. */
+.awb-track { display: flex; align-items: center; gap: 12px; font-size: 12.5px; }
+.awb-track a { color: var(--primary-light); font-weight: 600; text-decoration: none; }
+.awb-track a:hover { text-decoration: underline; }
+.support-awb { color: var(--primary-light); text-decoration: none; }
+.support-awb:hover { text-decoration: underline; }
 
 .packed-tab { margin-top: 4px; }
 .packed-toolbar { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin-bottom: 14px; }

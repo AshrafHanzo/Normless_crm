@@ -1,14 +1,47 @@
 import { useState, useEffect } from 'react'
-import { useApi, useAuth } from '../../App'
+import { useApi } from '../../App'
 import { useToast } from '../../components/Toast'
 import Icon from '../../components/Icon'
 import AutoTextarea from '../../components/AutoTextarea'
 import OrderComments from '../../components/OrderComments'
 import useDirtyGuard from '../../hooks/useDirtyGuard'
-import { refOf, blankTicket, asForm } from './ticket'
+import { refOf, blankTicket, asForm, trackingFor } from './ticket'
 
 const today = () => new Date().toLocaleDateString('en-CA')
 const day = (v) => (v ? new Date(v).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit' }) : '—')
+
+/**
+ * A waybill, with the parcel it belongs to one click away.
+ *
+ * Support lives on sending people a tracking link, so the link is made from the number rather than
+ * looked up somewhere else and pasted back — and it can be copied in one go, because the next
+ * thing that happens to it is being pasted into WhatsApp.
+ */
+function AwbField({ label, hint, value, disabled, link, onChange }) {
+  const toast = useToast()
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(link)
+      toast.success('Tracking link copied')
+    } catch {
+      // Clipboard access can be refused outright; selecting the text by hand still works.
+      toast.error('Could not copy — the link is open in a new tab instead')
+      window.open(link, '_blank', 'noreferrer')
+    }
+  }
+  return (
+    <div className="input-group">
+      <label>{label} <span className="label-hint">{hint}</span></label>
+      <input value={value} disabled={disabled} onChange={onChange} />
+      {link && (
+        <div className="awb-track">
+          <a href={link} target="_blank" rel="noreferrer">Track this parcel ↗</a>
+          <button type="button" className="mini-btn" onClick={copy}>Copy link</button>
+        </div>
+      )}
+    </div>
+  )
+}
 
 /**
  * One customer request, from "my size is wrong" to the day it was settled.
@@ -22,7 +55,6 @@ const day = (v) => (v ? new Date(v).toLocaleDateString('en-IN', { day: '2-digit'
 export default function TicketDrawer({ ticket, options, onClose, onSaved, onDelete, canEdit }) {
   const apiFetch = useApi()
   const toast = useToast()
-  const { user } = useAuth()
   const isNew = !ticket?.id
 
   const [form, setForm] = useState(() => asForm(ticket?.id ? ticket : { ...blankTicket(), ...ticket }))
@@ -81,8 +113,10 @@ export default function TicketDrawer({ ticket, options, onClose, onSaved, onDele
       : await apiFetch(`/api/support/tickets/${ticket.id}`, { method: 'PATCH', body: JSON.stringify(body) })
     setBusy(false)
     if (!res || res.error) { toast.error(res?.error || 'Could not save the ticket'); return }
-    toast.success(`${refOf(res.ticket)} saved`)
+    toast.success(isNew ? `${refOf(res.ticket)} raised` : `${refOf(res.ticket)} saved`)
     guard.reset(asForm(res.ticket))
+    // A new ticket is finished with: it goes back to the list, where it can now be seen. An edit
+    // stays open, because the next thing anyone does with it is usually the next field.
     onSaved(res.ticket, isNew)
   }
 
@@ -110,7 +144,7 @@ export default function TicketDrawer({ ticket, options, onClose, onSaved, onDele
         </div>
 
         <div className="drawer-body">
-          <form id="support-ticket-form" onSubmit={save}>
+          <form id="support-ticket-form" className="support-form" onSubmit={save}>
             <div className="form-section" style={{ marginTop: 0 }}>The order</div>
             <div className="form-row">
               <div className="input-group">
@@ -210,21 +244,14 @@ export default function TicketDrawer({ ticket, options, onClose, onSaved, onDele
                   {opt(options.payments, 'Not applicable')}
                 </select>
               </div>
-              <div className="input-group">
-                <label>Assigned to</label>
-                <input value={form.assigned_to} disabled={ro} placeholder={user?.username?.split('@')[0] || 'Who is on it'}
-                  onChange={e => setF({ assigned_to: e.target.value })} />
-              </div>
             </div>
             <div className="form-row">
-              <div className="input-group">
-                <label>Forward AWB <span className="label-hint">parcel going out</span></label>
-                <input value={form.forward_awb} disabled={ro} onChange={e => setF({ forward_awb: e.target.value })} />
-              </div>
-              <div className="input-group">
-                <label>Return AWB <span className="label-hint">parcel coming back</span></label>
-                <input value={form.return_awb} disabled={ro} onChange={e => setF({ return_awb: e.target.value })} />
-              </div>
+              <AwbField label="Forward AWB" hint="parcel going out" value={form.forward_awb} disabled={ro}
+                link={trackingFor(form.forward_awb, lookup?.dispatch)}
+                onChange={e => setF({ forward_awb: e.target.value })} />
+              <AwbField label="Return AWB" hint="parcel coming back" value={form.return_awb} disabled={ro}
+                link={trackingFor(form.return_awb, null)}
+                onChange={e => setF({ return_awb: e.target.value })} />
             </div>
             <div className="input-group">
               <label>Operations note <span className="label-hint">optional</span></label>

@@ -181,7 +181,7 @@ router.get('/order/:number', async (req, res) => {
         // The dispatch log knows where the parcel went and under which waybill — which is exactly
         // what a return is arranged against, and it outlives the order in Shopify.
         const packed = (await db.query(
-            `SELECT awb, courier, customer_name, customer_phone, customer_email, ship_city, ship_state, packed_at
+            `SELECT awb, courier, tracking_url, customer_name, customer_phone, customer_email, ship_city, ship_state, packed_at
                FROM packed_orders WHERE order_number = $1`, [orderNumber])).rows[0] || null;
 
         if (!o && !packed) {
