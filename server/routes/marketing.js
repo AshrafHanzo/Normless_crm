@@ -387,20 +387,26 @@ router.get('/orders', async (req, res) => {
 });
 
 /**
- * GET /api/marketing/orders/pending-count — seeding orders that have not gone out.
+ * GET /api/marketing/pending-count — what is still waiting, on both halves of the module.
  *
- * Its own endpoint rather than the full list: the sidebar asks for this every couple of minutes
- * on every page, and it has no business pulling a page of orders to count them.
+ * Seeding orders that have not gone out, and sample requests that have not reached the marketing
+ * team. Its own endpoint rather than the two lists: the sidebar asks for this every couple of
+ * minutes on every page, and it has no business pulling pages of rows to count them.
  */
-router.get('/orders/pending-count', async (req, res) => {
+router.get('/pending-count', async (req, res) => {
   try {
-    const r = await db.query(
+    const orders = (await db.query(
       `SELECT COUNT(*)::int AS n FROM marketing_orders
-        WHERE status NOT IN ('Delivered','Cancelled','Dispatched')`);
-    res.json({ pending: r.rows[0].n });
+        WHERE status NOT IN ('Delivered','Cancelled','Dispatched')`)).rows[0].n;
+    // A sample is done once it is with the marketing team — what happens after that (returned,
+    // given away) is history, not work.
+    const samples = (await db.query(
+      `SELECT COUNT(*)::int AS n FROM marketing_samples
+        WHERE status NOT IN ('With Marketing','Returned','Given as barter','Cancelled')`)).rows[0].n;
+    res.json({ orders, samples, total: orders + samples, pending: orders });
   } catch (err) {
     console.error('marketing pending count error:', err);
-    res.status(500).json({ error: 'Failed to count pending orders' });
+    res.status(500).json({ error: 'Failed to count what is pending' });
   }
 });
 

@@ -75,8 +75,10 @@ export default function Sidebar({ collapsed = false, onToggleCollapse }) {
     if (!canSeeMarketing) return
     let live = true
     const check = async () => {
-      const r = await apiFetch('/api/marketing/orders/pending-count')
-      if (live && r && !r.error) setMarketingPending(r.pending || 0)
+      const r = await apiFetch('/api/marketing/pending-count')
+      // Both halves of the menu: seeding orders waiting to go out, and sample requests waiting to
+      // reach the marketing team. The badge stands for everything behind the word "Marketing".
+      if (live && r && !r.error) setMarketingPending(r.total || 0)
     }
     check()
     const t = setInterval(check, 120000)
@@ -137,7 +139,7 @@ export default function Sidebar({ collapsed = false, onToggleCollapse }) {
                 <NavLink key={item.to} to={item.to} end={item.end} onClick={close}
                   title={!count ? item.label : item.badge === 'rto'
                     ? `${item.label} — ${count} order${count > 1 ? 's' : ''} can be served from the RTO shelf`
-                    : `${item.label} — ${count} seeding order${count > 1 ? 's' : ''} not dispatched yet`}
+                    : `${item.label} — ${count} thing${count > 1 ? 's' : ''} still waiting`}
                   className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>
                   <span className="link-icon">
                     <Icon name={item.icon} size={19} />

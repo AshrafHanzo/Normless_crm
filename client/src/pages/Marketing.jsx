@@ -532,6 +532,9 @@ export default function Marketing() {
   const toast = useToast()
   const [params, setParams] = useSearchParams()
   const [tab, setTab] = useState('orders')
+  // What is still waiting on each half, for the tab badges. Refreshed whenever either list is
+  // reloaded, so approving a sample or dispatching an order moves the number straight away.
+  const [pending, setPending] = useState({ orders: 0, samples: 0 })
   const [meta, setMeta] = useState(null)
   const [influencers, setInfluencers] = useState([])
   // The order form's picker needs every creator, not the page being browsed, so it keeps its own
@@ -567,10 +570,15 @@ export default function Marketing() {
   const loadOrders = async (q = search, s = status) => {
     const r = await apiFetch('/api/marketing/orders?' + ordTable.query({ search: q, status: s }))
     if (r && !r.error) { setOrders(r.orders || []); setRto(r.rto || {}); setSummary(r.summary || null); ordTable.setPagination(r.pagination) }
+    loadPending()
   }
   const loadPicker = async () => {
     const r = await apiFetch('/api/marketing/influencers?limit=200&sort=name&dir=asc')
     if (r && !r.error) setAllInfluencers(r.influencers || [])
+  }
+  const loadPending = async () => {
+    const r = await apiFetch('/api/marketing/pending-count')
+    if (r && !r.error) setPending({ orders: r.orders || 0, samples: r.samples || 0 })
   }
 
   useEffect(() => {
@@ -605,6 +613,10 @@ export default function Marketing() {
     return () => clearTimeout(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [term])
+
+  // Switching tabs is the moment someone looks at the other badge, so refresh it then too.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { loadPending() }, [tab])
 
   const applyStatus = (s) => { setStatus(s); ordTable.resetPage(); loadOrders(search, s) }
   const applyCollab = (c) => { setCollab(c); infTable.resetPage(); loadInfluencers(search, c) }
@@ -706,9 +718,15 @@ export default function Marketing() {
       </div>
 
       <div className="scan-tabs" style={{ marginBottom: 16 }}>
-        <button className={tab === 'orders' ? 'active' : ''} onClick={() => setTab('orders')}>📦 Orders</button>
+        {/* The counts are the point of the tabs: an order nobody dispatched and a sample nobody
+            approved are both invisible from the tab you happen to be looking at. */}
+        <button className={tab === 'orders' ? 'active' : ''} onClick={() => setTab('orders')}>
+          📦 Orders{pending.orders > 0 && <span className="tab-badge">{pending.orders}</span>}
+        </button>
         <button className={tab === 'influencers' ? 'active' : ''} onClick={() => setTab('influencers')}>⭐ Influencers</button>
-        <button className={tab === 'samples' ? 'active' : ''} onClick={() => setTab('samples')}>📸 Shoot samples</button>
+        <button className={tab === 'samples' ? 'active' : ''} onClick={() => setTab('samples')}>
+          📸 Shoot samples{pending.samples > 0 && <span className="tab-badge">{pending.samples}</span>}
+        </button>
         {canSeeReports && <button className={tab === 'reports' ? 'active' : ''} onClick={() => setTab('reports')}>📊 Daily reports</button>}
       </div>
 
@@ -734,7 +752,7 @@ export default function Marketing() {
 
       {/* Samples are their own thing entirely — their own filters, table and actions —
           so the shared search and list below are skipped rather than left empty. */}
-      {tab === 'samples' ? <SamplesTab /> : tab === 'reports' && canSeeReports ? <ReportsTab /> : (
+      {tab === 'samples' ? <SamplesTab onChanged={loadPending} /> : tab === 'reports' && canSeeReports ? <ReportsTab /> : (
         <>
         <div className="filters-row filters-row-search">
           <div className="search-bar"><span className="search-icon" />

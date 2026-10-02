@@ -34,7 +34,11 @@ const blankForm = () => ({ purpose: '', requested_for: '', shoot_date: '', notes
  * RTO shelf that a customer can still buy. The shelf is checked first, because a sample is exactly
  * the kind of thing a returned garment is good for.
  */
-export default function SamplesTab() {
+/**
+ * `onChanged` lets the page around this tab keep its badge honest: approving a sample or handing
+ * it to marketing changes how many are still waiting, and the count lives a level up.
+ */
+export default function SamplesTab({ onChanged }) {
   const apiFetch = useApi()
   const toast = useToast()
   const { user } = useAuth()
@@ -48,6 +52,7 @@ export default function SamplesTab() {
   const [takeFor, setTakeFor] = useState(null)   // { sample, lines }
 
   const load = async () => {
+    onChanged?.()
     const r = await apiFetch('/api/marketing/samples')
     if (r && !r.error) setData(r)
     else if (r?.error) toast.error(r.error)
