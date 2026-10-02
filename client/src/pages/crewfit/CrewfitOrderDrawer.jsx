@@ -16,6 +16,9 @@ const PRINTING_TYPES = ['None', 'DTF', 'Embroidery', 'DTF & Embroidery']
 /** Orders raised before placement and type were separate fields kept it all under `printing`. */
 const placementOf = (it) => it.printing_placement ?? it.printing ?? ''
 const printSpec = (it) => [placementOf(it), it.printing_type].filter(Boolean).join(' · ')
+// "Embroidery" and "DTF & Embroidery" both go to the embroiderer, and both need the file and the
+// measurement — so the test is on the word, not on the exact option.
+const isEmbroidered = (it) => /embroidery/i.test(it.printing_type || '')
 
 // Placement is several answers, not one — a front print and a sleeve print are one garment. Kept
 // as the same comma-joined string the WhatsApp summary, the flat column and old orders all read.
@@ -86,8 +89,21 @@ function shippingFor(region, qty) {
 // keys are dropped, staged-but-not-uploaded photos are reduced to a count (File objects don't
 // serialise), and customer_type is excluded because the phone lookup rewrites it on its own —
 // prompting over a value the user never touched would be noise.
+/**
+ * The sets of images a product line carries. Embroidery brought two more — the artwork the machine
+ * is given, and the measurement sheet saying where it goes on the garment and how big — kept apart
+ * from the design mock because different people read them.
+ */
+const IMAGE_KINDS = {
+  mock: { uploaded: 'mockImages', pending: '_pendingMock', label: 'design mock' },
+  prod: { uploaded: 'prodImages', pending: '_pendingProd', label: 'production' },
+  emb: { uploaded: 'embImages', pending: '_pendingEmb', label: 'embroidery file' },
+  embm: { uploaded: 'embMeasureImages', pending: '_pendingEmbM', label: 'embroidery measurement' },
+}
+const PENDING_KEYS = Object.values(IMAGE_KINDS).map(k => k.pending)
+
 const omit = (obj, keys) => Object.fromEntries(Object.entries(obj).filter(([k]) => !keys.includes(k)))
-const ITEM_UI_KEYS = ['_sizeMode', '_sizes', '_saved', '_pendingMock', '_pendingProd']
+const ITEM_UI_KEYS = ['_sizeMode', '_sizes', '_saved', ...PENDING_KEYS]
 
 function dirtySnapshot(f) {
   if (!f) return null
@@ -95,7 +111,7 @@ function dirtySnapshot(f) {
     ...omit(f, ['customer_type']),
     line_items: (f.line_items || []).map(it => ({
       ...omit(it, ITEM_UI_KEYS),
-      _staged: (it._pendingMock || []).length + (it._pendingProd || []).length,
+      _staged: PENDING_KEYS.reduce((n, k) => n + (it[k] || []).length, 0),
     })),
   }
 }
@@ -103,7 +119,7 @@ function dirtySnapshot(f) {
 function blankItem() {
   return {
     product: '', color: '', printing_placement: 'Front & Back', printing_type: '', qty: '', unit_price: '', product_total: '', size_breakdown: '',
-    _sizeMode: 'standard', _sizes: {}, _pendingMock: [], _pendingProd: [],
+    _sizeMode: 'standard', _sizes: {}, ...Object.fromEntries(PENDING_KEYS.map(k => [k, []])),
   }
 }
 // Local calendar date (YYYY-MM-DD). toISOString() would report yesterday for any IST time
@@ -296,11 +312,10 @@ export async function openShippingLabel(apiFetch, order, toast) {
   setTimeout(() => URL.revokeObjectURL(url), 60000)
 }
 
-// Uploaded (server-backed) + pending (picked but not saved yet, local blob preview) images for
-// one product line item's mock/production set — a homogeneous shape the grid and lightbox share.
+// Uploaded (server-backed) + pending (picked but not saved yet, local blob preview) images for one
+// product line item's set — a homogeneous shape the grid and lightbox share.
 function imageThumbs(item, kind, apiUrl) {
-  const uploadedKey = kind === 'mock' ? 'mockImages' : 'prodImages'
-  const pendingKey = kind === 'mock' ? '_pendingMock' : '_pendingProd'
+  const { uploaded: uploadedKey, pending: pendingKey } = IMAGE_KINDS[kind]
   const uploaded = (item[uploadedKey] || []).map(url => ({ src: `${apiUrl}${url}`, pending: false, ref: url }))
   const pending = (item[pendingKey] || []).map(p => ({ src: p.previewUrl, pending: true, ref: p }))
   return [...uploaded, ...pending]
@@ -665,8 +680,7 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
 
   const revokePendingUrls = (items) => {
     items.forEach(it => {
-      ;(it._pendingMock || []).forEach(p => URL.revokeObjectURL(p.previewUrl))
-      ;(it._pendingProd || []).forEach(p => URL.revokeObjectURL(p.previewUrl))
+      PENDING_KEYS.forEach(k => (it[k] || []).forEach(p => URL.revokeObjectURL(p.previewUrl)))
     })
   }
   const closeDrawer = () => {
@@ -759,11 +773,10 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
   // picked files can't go anywhere server-side yet. Queue them locally (with a blob preview) and
   // they're uploaded for real right after the order is saved.
   const addPendingImages = (idx, kind, files) => {
-    const uploadedKey = kind === 'mock' ? 'mockImages' : 'prodImages'
-    const pendingKey = kind === 'mock' ? '_pendingMock' : '_pendingProd'
+    const { uploaded: uploadedKey, pending: pendingKey, label } = IMAGE_KINDS[kind]
     const item = form.line_items[idx]
     const room = 5 - (item[uploadedKey] || []).length - (item[pendingKey] || []).length
-    if (room <= 0) { toast.warning(`Max 5 ${kind === 'mock' ? 'mock' : 'production'} images per product`); return }
+    if (room <= 0) { toast.warning(`Max 5 ${label} images per product`); return }
     const accepted = files.slice(0, room)
     if (accepted.length < files.length) toast.warning(`Only ${accepted.length} of ${files.length} file(s) added — max 5 images per product`)
     const withPreview = accepted.map(file => ({ file, previewUrl: URL.createObjectURL(file) }))
@@ -771,7 +784,7 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
     setF({ line_items: items })
   }
   const removePendingImage = (idx, kind, pendingRef) => {
-    const pendingKey = kind === 'mock' ? '_pendingMock' : '_pendingProd'
+    const { pending: pendingKey } = IMAGE_KINDS[kind]
     URL.revokeObjectURL(pendingRef.previewUrl)
     const items = form.line_items.map((it, i) => i === idx ? { ...it, [pendingKey]: (it[pendingKey] || []).filter(p => p !== pendingRef) } : it)
     setF({ line_items: items })
@@ -1019,19 +1032,18 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
   }
 
   // Design mock / production photos picked before the order existed are queued on the line item
-  // as _pendingMock/_pendingProd; once the order is created and has a real id, push them up for real.
+  // on the line item as _pending*; once the order has a real id, push them up for real.
   const uploadPendingImages = async (orderId, items) => {
     const failures = []
     for (let idx = 0; idx < items.length; idx++) {
-      for (const kind of ['mock', 'prod']) {
-        const pendingKey = kind === 'mock' ? '_pendingMock' : '_pendingProd'
-        const pending = items[idx][pendingKey] || []
+      for (const [kind, spec] of Object.entries(IMAGE_KINDS)) {
+        const pending = items[idx][spec.pending] || []
         if (!pending.length) continue
         const fd = new FormData()
         fd.append('kind', kind); fd.append('itemIndex', idx)
         pending.forEach(p => fd.append('images', p.file))
         const res = await apiFetch(`/api/crewfit/orders/${orderId}/images`, { method: 'POST', body: fd })
-        if (!res || res.error) failures.push(`${kind === 'mock' ? 'design mock' : 'production'} photos for product ${idx + 1}`)
+        if (!res || res.error) failures.push(`${spec.label} images for product ${idx + 1}`)
         pending.forEach(p => URL.revokeObjectURL(p.previewUrl))
       }
     }
@@ -1051,7 +1063,7 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
       return
     }
     setSaving(true)
-    const items = form.line_items.map(({ _sizeMode, _sizes, _saved, _pendingMock, _pendingProd, ...rest }) => rest)
+    const items = form.line_items.map(it => omit(it, ITEM_UI_KEYS))
     const merged = { ...form, ...recompute(form), line_items: items }
     const payload = {
       ...merged,
@@ -1069,7 +1081,7 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
     if (res && !res.error) {
       // Photos queued against a row that didn't exist server-side yet (a brand-new order, or a
       // product row just added to an existing one) — now that it's saved, push them up for real.
-      const hasPending = form.line_items.some(it => (it._pendingMock || []).length || (it._pendingProd || []).length)
+      const hasPending = form.line_items.some(it => PENDING_KEYS.some(k => (it[k] || []).length))
       if (hasPending) {
         const failures = await uploadPendingImages(res.id, form.line_items)
         if (failures.length) toast.error(`These photo uploads failed: ${failures.join(', ')}. You can retry from the order's edit screen.`, { title: 'Order saved, photos did not upload', duration: 0 })
@@ -1292,6 +1304,30 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
                     downloadBusy={bulkDownloading === `${idx}-prod-all`}
                   />
                 </div>
+
+                {/* Only for an embroidered line: the artwork the machine is given, and the sheet
+                    saying where on the garment it goes and how big. Asked for here rather than in
+                    the chat thread so the embroiderer finds them on the order itself. */}
+                {isEmbroidered(item) && (
+                  <div className="item-media-row">
+                    <ImageUploadGrid
+                      icon="🧵" label="Embroidery file (PNG)" thumbs={imageThumbs(item, 'emb', API_URL)}
+                      busy={imgBusy === `${idx}-emb`}
+                      onUpload={files => uploadItemImages(idx, 'emb', files)}
+                      onView={i => openLightbox(idx, 'emb', imageThumbs(item, 'emb', API_URL), i)}
+                      onDownloadAll={() => downloadImages(item.embImages || [], `${idx}-emb-all`)}
+                      downloadBusy={bulkDownloading === `${idx}-emb-all`}
+                    />
+                    <ImageUploadGrid
+                      icon="📐" label="Embroidery measurement" thumbs={imageThumbs(item, 'embm', API_URL)}
+                      busy={imgBusy === `${idx}-embm`}
+                      onUpload={files => uploadItemImages(idx, 'embm', files)}
+                      onView={i => openLightbox(idx, 'embm', imageThumbs(item, 'embm', API_URL), i)}
+                      onDownloadAll={() => downloadImages(item.embMeasureImages || [], `${idx}-embm-all`)}
+                      downloadBusy={bulkDownloading === `${idx}-embm-all`}
+                    />
+                  </div>
+                )}
               </div>
             )
           })}

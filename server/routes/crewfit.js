@@ -1037,13 +1037,26 @@ function ensureLineItems(order) {
   }];
 }
 
+/**
+ * The sets of images a product line can carry, and what each is called when something goes wrong.
+ *
+ * Embroidery brought two more: the artwork the machine is given, and the measurement sheet saying
+ * where on the garment it goes and how big. They are kept apart from the design mock because they
+ * are read by different people — the mock goes to the customer, these go to the embroiderer.
+ */
+const IMAGE_KINDS = {
+  mock: { field: 'mockImages', label: 'design mock' },
+  prod: { field: 'prodImages', label: 'production' },
+  emb: { field: 'embImages', label: 'embroidery file' },
+  embm: { field: 'embMeasureImages', label: 'embroidery measurement' },
+};
+
 // POST /api/crewfit/orders/:id/images — attach up to 5 images per product line item.
-// kind: 'mock' (designer mockups, pending client confirmation) | 'prod' (post-production photos).
 router.post('/orders/:id/images', canEditOrders, uploadImages, async (req, res) => {
   try {
     const { kind, itemIndex } = req.body;
     const idx = parseInt(itemIndex, 10);
-    if (!['mock', 'prod'].includes(kind) || Number.isNaN(idx)) {
+    if (!IMAGE_KINDS[kind] || Number.isNaN(idx)) {
       (req.files || []).forEach(f => fs.unlink(f.path, () => {}));
       return res.status(400).json({ error: 'Invalid image kind or product line' });
     }
@@ -1056,12 +1069,12 @@ router.post('/orders/:id/images', canEditOrders, uploadImages, async (req, res) 
       return res.status(400).json({ error: 'Save the order first — this product row does not exist on the order yet.' });
     }
 
-    const field = kind === 'mock' ? 'mockImages' : 'prodImages';
+    const { field, label } = IMAGE_KINDS[kind];
     const existing = items[idx][field] || [];
     const incoming = (req.files || []).map(f => `/uploads/crewfit/${req.params.id}/${f.filename}`);
     if (existing.length + incoming.length > 5) {
       incoming.forEach(u => fs.unlink(path.join(UPLOAD_ROOT, String(req.params.id), path.basename(u)), () => {}));
-      return res.status(400).json({ error: `Max 5 ${kind === 'mock' ? 'mock' : 'production'} images per product (${existing.length} already uploaded)` });
+      return res.status(400).json({ error: `Max 5 ${label} images per product (${existing.length} already uploaded)` });
     }
     items[idx] = { ...items[idx], [field]: [...existing, ...incoming] };
     await db.query('UPDATE crewfit_orders SET line_items = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2', [JSON.stringify(items), req.params.id]);
@@ -1079,7 +1092,7 @@ router.delete('/orders/:id/images', canEditOrders, async (req, res) => {
   try {
     const { kind, itemIndex, url } = req.body;
     const idx = parseInt(itemIndex, 10);
-    if (!['mock', 'prod'].includes(kind) || Number.isNaN(idx) || !url) return res.status(400).json({ error: 'Invalid request' });
+    if (!IMAGE_KINDS[kind] || Number.isNaN(idx) || !url) return res.status(400).json({ error: 'Invalid request' });
 
     const r = await db.query('SELECT * FROM crewfit_orders WHERE id = $1', [req.params.id]);
     if (!r.rows[0]) return res.status(404).json({ error: 'Not found' });
@@ -1087,7 +1100,7 @@ router.delete('/orders/:id/images', canEditOrders, async (req, res) => {
     const items = ensureLineItems(order);
     if (!items[idx]) return res.status(400).json({ error: 'Invalid product line' });
 
-    const field = kind === 'mock' ? 'mockImages' : 'prodImages';
+    const { field } = IMAGE_KINDS[kind];
     items[idx] = { ...items[idx], [field]: (items[idx][field] || []).filter(u => u !== url) };
     await db.query('UPDATE crewfit_orders SET line_items = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2', [JSON.stringify(items), req.params.id]);
 
