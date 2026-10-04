@@ -14,6 +14,7 @@ import ScanHub from './pages/ScanHub'
 import Invoices from './pages/Invoices'
 import Marketing from './pages/Marketing'
 import Support from './pages/Support'
+import Banking from './pages/Banking'
 import Settings from './pages/Settings'
 import Admin from './pages/Admin'
 import Profile from './pages/Profile'
@@ -195,6 +196,7 @@ function App() {
             <Route path="/scan" element={<ProtectedRoute permission="can_scan_orders"><AppLayout><ScanHub /></AppLayout></ProtectedRoute>} />
             <Route path="/marketing" element={<ProtectedRoute permission="can_view_marketing"><AppLayout><Marketing /></AppLayout></ProtectedRoute>} />
             <Route path="/support" element={<ProtectedRoute permission="can_view_support"><AppLayout><Support /></AppLayout></ProtectedRoute>} />
+            <Route path="/bank" element={<ProtectedRoute permission="can_view_banking"><AppLayout><Banking /></AppLayout></ProtectedRoute>} />
             <Route path="/invoices" element={<ProtectedRoute permission="can_view_invoices"><AppLayout><Invoices /></AppLayout></ProtectedRoute>} />
             <Route path="/inventory" element={<ProtectedRoute permission="can_view_inventory"><AppLayout><Inventory /></AppLayout></ProtectedRoute>} />
             <Route path="/offline-sales" element={<ProtectedRoute permission="can_view_offline_sales"><AppLayout><OfflineSales /></AppLayout></ProtectedRoute>} />

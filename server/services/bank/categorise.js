@@ -35,7 +35,8 @@ const SEED_RULES = [
     // What the money goes on
     [/facebk|facebook|meta platforms|meta ads/i, 'Advertising', 'Meta'],
     [/google\s*(ads|ireland|asia)|adwords/i, 'Advertising', 'Google Ads'],
-    [/delhivery|shiprocket|bluedart|blue dart|dtdc|ekart|xpressbees|india post|shadowfax/i, 'Shipping & logistics', null],
+    // A courier paying us is not a shipping cost: it is the cash it collected on delivery.
+    [/delhivery|shiprocket|bluedart|blue dart|dtdc|ekart|xpressbees|india post|shadowfax/i, 'Shipping & logistics', null, 'cod'],
     [/shopify(?!.*payout)/i, 'Software & subscriptions', 'Shopify'],
     [/aws|amazon web|atlassian|adobe|canva|figma|zoho|slack|notion|openai|anthropic|claude/i, 'Software & subscriptions', null],
     [/salary|sal\b.*credit|payroll/i, 'Salaries & contractors', null],
@@ -72,7 +73,39 @@ function counterpartyFrom(narration) {
         const tail = n.replace(/^(pos|vps|ecom)\s*/i, '').replace(/\b[\dX*]{8,}\b/g, ' ').trim();
         return tail ? titled(tail.split(/\s{2,}/)[0]) : null;
     }
+    // Anything else: the longest stretch of words in it, which is almost always the other party's
+    // name sitting among reference numbers.
+    const words = n.replace(/[^A-Za-z ]+/g, ' ').split(/\s{1,}/)
+        .filter(w => w.length > 2 && !/^(upi|neft|rtgs|imps|ach|nach|ecs|dr|cr|ltd|net|bank|txn|ref|inb|tpt|pvt|the|and|for)$/i.test(w));
+    if (words.length) {
+        // The run of consecutive words, not the single longest: "HEAVEN STRUCTURES PRIVATE" is a
+        // name, "HEAVEN" on its own is half of one.
+        let best = [], run = [];
+        for (const w of n.replace(/[^A-Za-z ]+/g, '|').split('|')) {
+            run = w.trim().split(/\s+/).filter(x => x.length > 2);
+            if (run.join(' ').length > best.join(' ').length) best = run;
+        }
+        if (best.join(' ').length >= 5) return titled(best.join(' '));
+    }
     return null;
+}
+
+/**
+ * Is this actually a name?
+ *
+ * The fallback happily lifts a reference code or the city an ATM stands in. Neither is a payee,
+ * and a wrong name is worse than none — it collects a column of unrelated payments under it.
+ */
+function looksLikeName(candidate, narration) {
+    if (!candidate) return false;
+    const c = String(candidate).trim();
+    if (c.length < 3) return false;
+    if (/^[x*]+$/i.test(c.replace(/\s/g, ''))) return false;              // masked card digits
+    // A single word with no vowels in it is a reference code. A name of two or more words is a
+    // name even when one of them reads like one — "EDTODO TECHNOVATIONSLLP" is a real supplier.
+    if (!/\s/.test(c) && /[bcdfghjklmnpqrstvwxyz]{5,}/i.test(c)) return false;
+    if (/\b(atm|nwd|atw)\b/i.test(narration) && !/[a-z]{3,}\s[a-z]{3,}/i.test(c)) return false;
+    return true;
 }
 
 /** SWIGGY LIMITED → Swiggy Limited, but leave short all-caps codes alone. */
@@ -103,7 +136,8 @@ function channelFrom(narration) {
  */
 function categorise(narration, { credit = 0 } = {}, learned = []) {
     const n = String(narration || '');
-    const counterparty = counterpartyFrom(n);
+    const named = counterpartyFrom(n);
+    const counterparty = looksLikeName(named, n) ? named : null;
     const channel = channelFrom(n);
 
     for (const rule of learned) {
@@ -111,8 +145,10 @@ function categorise(narration, { credit = 0 } = {}, learned = []) {
             return { category: rule.category, counterparty: rule.counterparty || counterparty, channel, learned: true };
         }
     }
-    for (const [re, category, who] of SEED_RULES) {
+    for (const [re, category, who, flag] of SEED_RULES) {
         if (re.test(n)) {
+            // Money arriving from a courier is COD it collected from our customers.
+            if (flag === 'cod' && credit) return { category: 'Sales settlements', counterparty: who || counterparty, channel, cod: true };
             // The same word means different things in each direction: a Razorpay line is a
             // settlement coming in and a fee going out.
             if (category === 'Sales settlements' && !credit) return { category: 'Bank charges', counterparty: who || counterparty, channel };
@@ -123,4 +159,4 @@ function categorise(narration, { credit = 0 } = {}, learned = []) {
     return { category: 'Uncategorised', counterparty, channel };
 }
 
-module.exports = { categorise, counterpartyFrom, channelFrom, CATEGORIES, SEED_RULES };
+module.exports = { categorise, counterpartyFrom, channelFrom, looksLikeName, CATEGORIES, SEED_RULES };
