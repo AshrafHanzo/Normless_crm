@@ -13,6 +13,7 @@ const COLUMNS = new Set([
   'can_view_marketing_reports',
   'can_view_offline_sales', 'can_edit_offline_sales',
   'can_view_support', 'can_edit_support',
+  'can_view_banking', 'can_edit_banking',
   'can_view_backups',
 ]);
 

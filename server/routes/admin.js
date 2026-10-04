@@ -23,6 +23,7 @@ const PERM_MAP = {
   marketing_approve: 'can_approve_marketing', marketing_reports: 'can_view_marketing_reports',
   offline_sales: 'can_view_offline_sales', offline_sales_edit: 'can_edit_offline_sales',
   support: 'can_view_support', support_edit: 'can_edit_support',
+  banking: 'can_view_banking', banking_edit: 'can_edit_banking',
   backups: 'can_view_backups',
 };
 const PERM_KEYS = Object.keys(PERM_MAP);

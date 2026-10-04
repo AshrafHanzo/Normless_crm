@@ -306,6 +306,9 @@ app.use('/api/offline-sales', authMiddleware, offlineSalesRoutes);
 app.use('/api/thumb', require('./routes/thumbs'));
 // The packing bench: confirming an order packed, and the dispatch log that comes out of it.
 app.use('/api/scanner', authMiddleware, require('./routes/packing'));
+// The company's bank statements. Gated inside the router as well — it is the most sensitive
+// page in the CRM, and nothing it stores is served off /uploads.
+app.use('/api/banking', authMiddleware, require('./routes/banking'));
 // Customer support: returns, replacements and refunds arranged by hand.
 app.use('/api/support', authMiddleware, require('./routes/support'));
 // Your own inbox: mentions and replies. Scoped to the caller inside the route.
@@ -468,6 +471,10 @@ async function ensureCrewfitSchema() {
                 -- Customer support: the returns, replacements and refunds handled by hand.
                 ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_support BOOLEAN DEFAULT false;
                 ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_edit_support BOOLEAN DEFAULT false;
+                -- The company's bank statements. Off for everyone by default: this is the one page
+                -- that shows what the business earns and what it pays out, down to the rupee.
+                ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_banking BOOLEAN DEFAULT false;
+                ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_edit_banking BOOLEAN DEFAULT false;
             `);
             await db.query(`UPDATE admin_users SET can_access_normless=true, can_access_crewfit=true,
                 can_view_crewfit_followups=true, can_view_crewfit_orders=true, can_view_crewfit_catalog=true,
@@ -1233,6 +1240,97 @@ async function ensureMarketingSchema() {
  * Seeding orders are not in here. Marketing raises and tracks those on its own page, and the two
  * were only ever in one spreadsheet because it was one spreadsheet.
  */
+/**
+ * Bank statements, and every line inside them.
+ *
+ * Two tables because they answer two questions. A statement is a document somebody uploaded —
+ * which account, which period, what the bank itself says the opening and closing balances were.
+ * A transaction is one line of it, and the line is what the reporting is built from.
+ *
+ * The bank's own totals are kept on the statement so every upload can be checked against them:
+ * opening + credits - debits has to equal closing, or the parse missed something. A report that
+ * silently drops a line is worse than no report, so a statement that does not tie out is marked
+ * rather than quietly used.
+ *
+ * Transactions are deduplicated on a fingerprint of the line itself, so re-uploading an
+ * overlapping period — or the same statement twice — cannot double-count a rupee.
+ */
+async function ensureBankingSchema() {
+    try {
+        await db.exec(`
+            CREATE TABLE IF NOT EXISTS bank_statements (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                bank TEXT,
+                account_label TEXT,            -- what the bank calls the account, as printed
+                account_last4 TEXT,
+                period_from DATE,
+                period_to DATE,
+                opening_balance NUMERIC,
+                closing_balance NUMERIC,
+                -- The bank's own totals, as printed on the statement.
+                stated_debits NUMERIC,
+                stated_credits NUMERIC,
+                txn_count INTEGER DEFAULT 0,
+                -- Does the arithmetic tie out against those totals?
+                reconciled BOOLEAN DEFAULT false,
+                reconcile_note TEXT,
+                file_name TEXT,
+                file_path TEXT,                -- under server/storage/bank, never served publicly
+                file_sha256 TEXT,              -- the same document uploaded twice is one statement
+                page_count INTEGER,
+                uploaded_by TEXT,
+                uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS bank_statements_sha_idx ON bank_statements (file_sha256);
+            CREATE INDEX IF NOT EXISTS bank_statements_period_idx ON bank_statements (period_from DESC);
+
+            CREATE TABLE IF NOT EXISTS bank_transactions (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                statement_id INTEGER REFERENCES bank_statements(id) ON DELETE CASCADE,
+                account_last4 TEXT,
+                txn_date DATE NOT NULL,
+                value_date DATE,
+                -- Exactly what the bank printed, kept whole: it is the only description there is,
+                -- and the one anybody reads to work out what a payment was.
+                narration TEXT NOT NULL,
+                ref_no TEXT,
+                debit NUMERIC DEFAULT 0,
+                credit NUMERIC DEFAULT 0,
+                balance NUMERIC,
+                -- What this line is, in business terms. Worked out from the narration on import and
+                -- correctable by hand — the correction is what teaches the next import.
+                category TEXT,
+                counterparty TEXT,
+                channel TEXT,                  -- UPI, NEFT, IMPS, ATM, card, charges...
+                note TEXT,
+                categorised_by TEXT,
+                row_no INTEGER,                -- its place in the statement, for reading in order
+                fingerprint TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS bank_transactions_fp_idx ON bank_transactions (fingerprint);
+            CREATE INDEX IF NOT EXISTS bank_transactions_date_idx ON bank_transactions (txn_date DESC);
+            CREATE INDEX IF NOT EXISTS bank_transactions_cat_idx ON bank_transactions (category);
+            CREATE INDEX IF NOT EXISTS bank_transactions_stmt_idx ON bank_transactions (statement_id);
+
+            -- How a narration gets its category. Seeded with the rules below, then added to every
+            -- time somebody corrects a line: the correction is the rule.
+            CREATE TABLE IF NOT EXISTS bank_rules (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                match TEXT NOT NULL,           -- matched case-insensitively against the narration
+                category TEXT NOT NULL,
+                counterparty TEXT,
+                created_by TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS bank_rules_match_idx ON bank_rules (LOWER(match));
+        `);
+    } catch (err) {
+        console.error('ensureBankingSchema error:', err.message);
+    }
+}
+
 async function ensureSupportSchema() {
     try {
         await db.exec(`
@@ -1505,6 +1603,8 @@ app.listen(PORT, async () => {
     await ensureSalesSchema();
     // Customer support tickets: returns, replacements and refunds handled by hand
     await ensureSupportSchema();
+    // Bank statements and the transactions parsed out of them
+    await ensureBankingSchema();
     await ensureSyncSchema();
     await ensureBackupSchema();
 
