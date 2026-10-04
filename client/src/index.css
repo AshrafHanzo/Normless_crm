@@ -320,6 +320,16 @@ select { cursor: pointer; appearance: none;
 .filters-row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 22px; }
 .filters-row-search { margin-bottom: 10px; }
 .search-bar { position: relative; flex: 1; min-width: 220px; }
+/* A way out of a search without selecting the text and deleting it. Inside the field, because
+   that is where the thing it clears is. */
+.search-clear {
+  position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
+  display: grid; place-items: center; width: 22px; height: 22px; padding: 0;
+  border: none; border-radius: 50%; background: var(--border); color: var(--text-secondary);
+  font-size: 15px; line-height: 1; cursor: pointer; font-family: inherit;
+}
+.search-clear:hover { background: var(--danger-bg); color: var(--danger); }
+.search-bar input { padding-right: 38px; }
 .search-icon {
   position: absolute; left: 16px; top: 50%; transform: translateY(-50%);
   width: 18px; height: 18px; font-size: 0; pointer-events: none; z-index: 1;

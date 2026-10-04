@@ -6,6 +6,7 @@ import SortTh from '../components/SortTh'
 import Pagination from '../components/Pagination'
 import DateRangeFilter from '../components/DateRangeFilter'
 import useServerTable from '../hooks/useServerTable'
+import ComboInput from '../components/ComboInput'
 import UploadDrawer from './banking/UploadDrawer'
 
 const inr = (v) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(Number(v) || 0)
@@ -269,9 +270,17 @@ export default function Banking() {
       </div>
 
       <div className="filters-row">
-        <div className="search-bar"><span className="search-icon" />
-          <input placeholder="Search a name, a reference, anything in the narration…"
-            value={search} onChange={e => setSearch(e.target.value)} /></div>
+        <div className="search-bar">
+          <span className="search-icon" />
+          <input placeholder="A name, a reference, or an amount — 14986, >50000, 1000-2000"
+            value={search} onChange={e => setSearch(e.target.value)} />
+          {/* Clicking a name in the panels above fills this box, so getting back out of it has to
+              be one click — not a text field you have to select and delete. */}
+          {!!search && (
+            <button type="button" className="search-clear" title="Clear the search"
+              onClick={() => { setSearch(''); t.resetPage() }}>×</button>
+          )}
+        </div>
         <select value={category} style={{ width: 'auto' }} onChange={e => { setCategory(e.target.value); t.resetPage() }}>
           <option value="">Every category</option>
           {(options.categories || []).map(c => <option key={c} value={c}>{c}</option>)}
@@ -283,6 +292,7 @@ export default function Banking() {
         </select>
         {totals && (
           <span className="bank-filter-total">
+            {/* What the filters in force actually add up to — the figure the search was asked for. */}
             <b className="bank-in">{inrExact(totals.credits)}</b> in · <b className="bank-out">{inrExact(totals.debits)}</b> out
           </span>
         )}
@@ -447,10 +457,11 @@ export default function Banking() {
             </p>
             <div className="form-row">
               <div className="input-group">
-                <label>What are these?</label>
-                <select value={sorting.category} onChange={e => setSorting({ ...sorting, category: e.target.value })}>
-                  {(options.categories || []).map(c => <option key={c} value={c}>{c}</option>)}
-                </select>
+                <label>What are these? <span className="label-hint">pick or type a new one</span></label>
+                <ComboInput value={sorting.category === 'Uncategorised' ? '' : sorting.category}
+                  options={options.categories || []}
+                  placeholder="e.g. Stitching, or something of your own"
+                  onChange={v => setSorting({ ...sorting, category: v })} />
               </div>
               <div className="input-group">
                 {/* Two spellings of one supplier are one supplier: renaming here merges them. */}
@@ -464,7 +475,8 @@ export default function Banking() {
             </p>
             <div className="confirm-actions">
               <button className="btn btn-secondary" onClick={() => setSorting(null)}>Cancel</button>
-              <button className="btn btn-primary" onClick={() => sortGroup(sorting, sorting.category, sorting.rename)}>
+              <button className="btn btn-primary" disabled={!sorting.category?.trim()}
+                onClick={() => sortGroup(sorting, sorting.category.trim(), sorting.rename)}>
                 Sort all {sorting.txns}
               </button>
             </div>
@@ -484,11 +496,12 @@ export default function Banking() {
             </div>
             <div className="form-row">
               <div className="input-group">
-                <label>Category</label>
-                <select value={editing.category || 'Uncategorised'}
-                  onChange={e => setEditing({ ...editing, category: e.target.value })}>
-                  {(options.categories || []).map(c => <option key={c} value={c}>{c}</option>)}
-                </select>
+                {/* Pick one or type one: the list is a starting point, not a cage. Anything typed
+                    here is a category from then on and comes back in the list. */}
+                <label>Category <span className="label-hint">pick or type a new one</span></label>
+                <ComboInput value={editing.category || ''} options={options.categories || []}
+                  placeholder="e.g. Fabric, or something of your own"
+                  onChange={v => setEditing({ ...editing, category: v })} />
               </div>
               <div className="input-group">
                 <label>Who it was with</label>

@@ -52,6 +52,11 @@ const canEdit = async (req, res, next) => {
 };
 
 const trim = (v) => { const t = String(v ?? '').trim(); return t || null; };
+/** A category someone typed: tidied, capped, and never empty. */
+const asCategory = (v) => {
+    const t = String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, 40);
+    return t || null;
+};
 const isDate = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v || ''));
 const money = (v) => Math.round((Number(v) || 0) * 100) / 100;
 
@@ -157,18 +162,29 @@ router.get('/statements', async (req, res) => {
     }
 });
 
-/** The vocabulary and what is actually in use, for the filters. */
+/**
+ * The vocabulary, for the pickers and the filters.
+ *
+ * The built-in list plus whatever the team has since invented: a category typed into the box is a
+ * category from then on, and it has to come back in the list or the next person cannot pick it.
+ */
 router.get('/options', async (req, res) => {
     try {
         const used = await db.query(
-            `SELECT DISTINCT category FROM bank_transactions WHERE category IS NOT NULL ORDER BY category`);
+            `SELECT DISTINCT category FROM bank_transactions WHERE category IS NOT NULL
+             UNION SELECT DISTINCT category FROM bank_rules WHERE category IS NOT NULL
+             ORDER BY 1`);
         const accounts = await db.query(
             `SELECT DISTINCT account_last4 FROM bank_transactions WHERE account_last4 IS NOT NULL ORDER BY account_last4`);
         const span = await db.query(
             `SELECT TO_CHAR(MIN(txn_date),'YYYY-MM-DD') AS first, TO_CHAR(MAX(txn_date),'YYYY-MM-DD') AS last
                FROM bank_transactions`);
+        const custom = used.rows.map(r => r.category).filter(c => c && !CATEGORIES.includes(c));
         res.json({
-            categories: CATEGORIES,
+            // Ours first, in the order a set of accounts reads; theirs after, alphabetically.
+            categories: [...CATEGORIES.filter(c => c !== 'Uncategorised'), ...custom, 'Uncategorised'],
+            builtIn: CATEGORIES,
+            custom,
             inUse: used.rows.map(r => r.category),
             accounts: accounts.rows.map(r => r.account_last4),
             span: span.rows[0],
@@ -178,6 +194,26 @@ router.get('/options', async (req, res) => {
         res.status(500).json({ error: 'Could not read the filters' });
     }
 });
+
+/**
+ * What someone means when they type a number into the search box.
+ *
+ * Usually a figure they are looking for — "14986", "₹1,54,525" — but the useful questions are
+ * comparisons: everything above fifty thousand, everything between two figures. Both are written
+ * the way anyone would write them, and an unparseable string is simply not an amount query.
+ *
+ * Returns the operator and its operands, never a fragment of SQL: the operator is checked against
+ * a fixed set here so the query below can interpolate it safely.
+ */
+function amountQuery(raw) {
+    const t = String(raw ?? '').replace(/[₹,\s]/g, '');
+    const n = '(\\d+(?:\\.\\d{1,2})?)';
+    let m;
+    if ((m = new RegExp(`^(>=|<=|>|<)${n}$`).exec(t))) return { op: m[1], a: Number(m[2]) };
+    if ((m = new RegExp(`^${n}\\s*-\\s*${n}$`).exec(t))) return { op: 'between', a: Number(m[1]), b: Number(m[2]) };
+    if ((m = new RegExp(`^=?${n}$`).exec(t)) && t.length >= 2) return { op: '=', a: Number(m[1]) };
+    return null;
+}
 
 /** The filters every list and figure on the page share. */
 function scope(query) {
@@ -190,10 +226,35 @@ function scope(query) {
     if (trim(query.channel)) { vals.push(trim(query.channel)); where.push(`channel = $${vals.length}`); }
     if (trim(query.direction) === 'in') where.push('credit > 0');
     if (trim(query.direction) === 'out') where.push('debit > 0');
-    if (trim(query.search)) {
-        vals.push(`%${trim(query.search)}%`);
-        const i = vals.length;
-        where.push(`(narration ILIKE $${i} OR counterparty ILIKE $${i} OR ref_no ILIKE $${i} OR note ILIKE $${i})`);
+    const search = trim(query.search);
+    if (search) {
+        const amount = amountQuery(search);
+        const text = () => {
+            vals.push(`%${search}%`);
+            const i = vals.length;
+            return `narration ILIKE $${i} OR counterparty ILIKE $${i} OR ref_no ILIKE $${i} OR note ILIKE $${i}`;
+        };
+
+        if (!amount) {
+            where.push(`(${text()})`);
+        } else if (amount.op === '=') {
+            // A bare number is ambiguous on purpose: ₹14,986 and a reference ending 14986 are both
+            // things people search for, so both are answered rather than one being guessed at.
+            vals.push(amount.a);
+            const n = vals.length;
+            where.push(`(debit = $${n} OR credit = $${n} OR balance = $${n} OR ${text()})`);
+        } else if (amount.op === 'between') {
+            const [lo, hi] = [Math.min(amount.a, amount.b), Math.max(amount.a, amount.b)];
+            vals.push(lo, hi);
+            const l = vals.length - 1, h = vals.length;
+            where.push(`((debit > 0 AND debit BETWEEN $${l} AND $${h}) OR (credit > 0 AND credit BETWEEN $${l} AND $${h}))`);
+        } else {
+            // Comparisons are about what moved, so the running balance is left out of them — every
+            // row's balance is above fifty thousand, which would answer nothing.
+            vals.push(amount.a);
+            const n = vals.length;
+            where.push(`((debit > 0 AND debit ${amount.op} $${n}) OR (credit > 0 AND credit ${amount.op} $${n}))`);
+        }
     }
     return { clause: where.length ? `WHERE ${where.join(' AND ')}` : '', vals };
 }
@@ -365,7 +426,7 @@ router.get('/counterparties', async (req, res) => {
 router.post('/counterparties', canEdit, async (req, res) => {
     try {
         const name = trim(req.body?.name);
-        const category = trim(req.body?.category);
+        const category = asCategory(req.body?.category);
         const rename = trim(req.body?.rename);
         if (!name) return res.status(400).json({ error: 'Which name?' });
         if (!category && !rename) return res.status(400).json({ error: 'Nothing to change' });
@@ -414,7 +475,7 @@ router.patch('/transactions/:id', canEdit, async (req, res) => {
         if (!row) return res.status(404).json({ error: 'That transaction is gone' });
 
         const patch = {};
-        if (req.body.category !== undefined) patch.category = trim(req.body.category) || 'Uncategorised';
+        if (req.body.category !== undefined) patch.category = asCategory(req.body.category) || 'Uncategorised';
         if (req.body.counterparty !== undefined) patch.counterparty = trim(req.body.counterparty);
         if (req.body.note !== undefined) patch.note = trim(req.body.note);
         if (!Object.keys(patch).length) return res.status(400).json({ error: 'Nothing to change' });
@@ -471,3 +532,5 @@ router.delete('/statements/:id', canEdit, async (req, res) => {
 });
 
 module.exports = router;
+module.exports.amountQuery = amountQuery;   // exported for its own test
+module.exports.scope = scope;
