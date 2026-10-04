@@ -88,6 +88,7 @@ router.post('/statements', canEdit, upload.single('file'), async (req, res) => {
                 preview: true, duplicate: !!seen,
                 statement: read.statement,
                 check: read.check,
+                summary: read.summary,
                 sample: read.transactions.slice(0, 8),
             });
         }
@@ -289,6 +290,112 @@ router.get('/summary', async (req, res) => {
     } catch (err) {
         console.error('bank summary error:', err);
         res.status(500).json({ error: 'Could not work out the summary' });
+    }
+});
+
+/**
+ * GET /api/banking/counterparties — the same money, grouped by who it was with.
+ *
+ * A statement is a list of events; a business is a list of relationships. Twelve payments to one
+ * garment supplier are one supplier, and seeing them as twelve lines spread over a month is what
+ * makes a page of transactions unreadable. Grouped, the question "who are we actually paying"
+ * answers itself — and sorting the group sorts every line in it at once.
+ *
+ * Names are grouped case-insensitively and shown in whichever spelling appears most often.
+ */
+router.get('/counterparties', async (req, res) => {
+    try {
+        const { clause, vals } = scope(req.query);
+        const t = tableParams(req.query, {
+            sortable: {
+                out: 'SUM(debit)', in: 'SUM(credit)', txns: 'COUNT(*)', name: 'MIN(LOWER(counterparty))',
+                last: 'MAX(txn_date)', unsorted: `COUNT(*) FILTER (WHERE category = 'Uncategorised')`,
+            },
+            defaultSort: 'out', defaultDir: 'desc', defaultLimit: 50, maxLimit: 300, tiebreak: null,
+        });
+        const named = `NULLIF(TRIM(COALESCE(counterparty, '')), '')`;
+        const group = `LOWER(${named})`;
+        const rows = (await db.query(
+            `SELECT ${group} AS key,
+                    MODE() WITHIN GROUP (ORDER BY ${named}) AS name,
+                    COUNT(*)::int AS txns,
+                    COALESCE(SUM(debit),0) AS out, COALESCE(SUM(credit),0) AS in,
+                    TO_CHAR(MIN(txn_date),'YYYY-MM-DD') AS first,
+                    TO_CHAR(MAX(txn_date),'YYYY-MM-DD') AS last,
+                    MODE() WITHIN GROUP (ORDER BY category) AS category,
+                    COUNT(DISTINCT category)::int AS categories,
+                    COUNT(*) FILTER (WHERE category = 'Uncategorised')::int AS unsorted,
+                    MODE() WITHIN GROUP (ORDER BY channel) AS channel
+               FROM bank_transactions ${clause} ${clause ? 'AND' : 'WHERE'} ${named} IS NOT NULL
+              GROUP BY 1 ${t.orderBy} LIMIT ${t.limit} OFFSET ${t.offset}`, vals)).rows;
+
+        const totals = (await db.query(
+            `SELECT COUNT(*)::int AS names,
+                    COUNT(*) FILTER (WHERE repeat > 1)::int AS repeats
+               FROM (SELECT ${group} AS k, COUNT(*) AS repeat FROM bank_transactions
+                      ${clause} ${clause ? 'AND' : 'WHERE'} ${named} IS NOT NULL GROUP BY 1) g`, vals)).rows[0];
+
+        // Lines with no name on them at all are still money; they are reported as their own row so
+        // nothing falls off the bottom of this view.
+        const unnamed = (await db.query(
+            `SELECT COUNT(*)::int AS txns, COALESCE(SUM(debit),0) AS out, COALESCE(SUM(credit),0) AS in
+               FROM bank_transactions ${clause} ${clause ? 'AND' : 'WHERE'} ${named} IS NULL`, vals)).rows[0];
+
+        res.json({
+            counterparties: rows.map(r => ({ ...r, out: money(r.out), in: money(r.in), net: money(r.in - r.out) })),
+            unnamed: { txns: unnamed.txns, out: money(unnamed.out), in: money(unnamed.in) },
+            summary: totals,
+            pagination: pagination(totals.names, t),
+        });
+    } catch (err) {
+        console.error('bank counterparties error:', err);
+        res.status(500).json({ error: 'Could not group the transactions' });
+    }
+});
+
+/**
+ * POST /api/banking/counterparties — sort everything with one name in one go, and remember it.
+ *
+ * This is the whole point of grouping. Thirteen payments to a fabric supplier are one decision,
+ * not thirteen, and the decision is worth keeping: the rule it writes means next month's statement
+ * arrives already sorted.
+ *
+ * `rename` merges spellings — the same supplier written two ways is one supplier.
+ */
+router.post('/counterparties', canEdit, async (req, res) => {
+    try {
+        const name = trim(req.body?.name);
+        const category = trim(req.body?.category);
+        const rename = trim(req.body?.rename);
+        if (!name) return res.status(400).json({ error: 'Which name?' });
+        if (!category && !rename) return res.status(400).json({ error: 'Nothing to change' });
+
+        const sets = [];
+        const vals = [name.toLowerCase()];
+        if (category) { vals.push(category); sets.push(`category = $${vals.length}`); }
+        if (rename) { vals.push(rename); sets.push(`counterparty = $${vals.length}`); }
+        vals.push(req.user?.username || null);
+        sets.push(`categorised_by = $${vals.length}`);
+
+        const updated = (await db.query(
+            `UPDATE bank_transactions SET ${sets.join(', ')}, updated_at = CURRENT_TIMESTAMP
+              WHERE LOWER(TRIM(COALESCE(counterparty, ''))) = $1 RETURNING id`, vals)).rows.length;
+
+        // The rule is written against the name as the bank prints it, so the next statement sorts
+        // itself. A rename teaches the new name too.
+        if (category) {
+            for (const match of [name, rename].filter(Boolean)) {
+                await db.query(
+                    `INSERT INTO bank_rules (match, category, counterparty, created_by) VALUES ($1,$2,$3,$4)
+                     ON CONFLICT (LOWER(match)) DO UPDATE SET category = EXCLUDED.category,
+                                                              counterparty = EXCLUDED.counterparty`,
+                    [match, category, rename || name, req.user?.username || null]);
+            }
+        }
+        res.json({ updated, name: rename || name, category });
+    } catch (err) {
+        console.error('bank group categorise error:', err);
+        res.status(500).json({ error: 'Could not sort those' });
     }
 });
 

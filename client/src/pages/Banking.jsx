@@ -55,6 +55,10 @@ export default function Banking() {
   const [loading, setLoading] = useState(true)
   const [uploading, setUploading] = useState(false)
   const [editing, setEditing] = useState(null)      // the transaction being explained
+  const [view, setView] = useState('who')           // who it was with, or every line
+  const [groups, setGroups] = useState([])
+  const [groupInfo, setGroupInfo] = useState(null)
+  const [sorting, setSorting] = useState(null)      // the name being sorted in one go
   const t = useServerTable({ sort: 'txn_date', dir: 'desc', limit: 50 })
 
   useEffect(() => {
@@ -71,9 +75,10 @@ export default function Banking() {
   const load = async () => {
     setLoading(true)
     const q = new URLSearchParams(scope).toString()
-    const [s, list, st, opt] = await Promise.all([
+    const [s, list, who, st, opt] = await Promise.all([
       apiFetch(`/api/banking/summary?${q}`),
       apiFetch(`/api/banking/transactions?${t.query(scope)}`),
+      apiFetch(`/api/banking/counterparties?${q}&limit=300`),
       apiFetch('/api/banking/statements'),
       apiFetch('/api/banking/options'),
     ])
@@ -83,6 +88,7 @@ export default function Banking() {
       setTotals(list.totals || null)
       if (list.pagination) t.setPagination(list.pagination)
     }
+    if (who && !who.error) { setGroups(who.counterparties || []); setGroupInfo({ ...who.summary, unnamed: who.unnamed }) }
     if (st && !st.error) setStatements(st.statements || [])
     if (opt && !opt.error) setOptions(opt)
     setLoading(false)
@@ -107,6 +113,17 @@ export default function Banking() {
       ? `${res.applied} transactions like this one are now ${patch.category}`
       : 'Saved')
     setEditing(null)
+    load()
+  }
+
+  /** One decision for every payment with a name on it — and the rule that keeps it that way. */
+  const sortGroup = async (g, category, rename) => {
+    const res = await apiFetch('/api/banking/counterparties', {
+      method: 'POST', body: JSON.stringify({ name: g.key, category, ...(rename && rename !== g.name ? { rename } : {}) }),
+    })
+    if (!res || res.error) { toast.error(res?.error || 'Could not sort those'); return }
+    toast.success(`${res.updated} transaction${res.updated === 1 ? '' : 's'} with ${res.name} → ${category}. Next month's statement will sort itself.`)
+    setSorting(null)
     load()
   }
 
@@ -271,6 +288,81 @@ export default function Banking() {
         )}
       </div>
 
+      {/* Two ways of reading the same money: by who it was with, or line by line. Grouped first,
+          because that is the question a month of transactions is usually hiding. */}
+      <div className="scan-tabs" style={{ marginBottom: 14 }}>
+        <button className={view === 'who' ? 'active' : ''} onClick={() => setView('who')}>
+          Who it was with{groupInfo?.names ? <span className="tab-badge">{groupInfo.names}</span> : null}
+        </button>
+        <button className={view === 'lines' ? 'active' : ''} onClick={() => setView('lines')}>
+          Every transaction{t.pagination?.total ? <span className="tab-badge">{t.pagination.total}</span> : null}
+        </button>
+      </div>
+
+      {view === 'who' ? (
+        <div className="data-table-wrapper">
+          {loading ? <div className="loader"><div className="spinner" /></div> : !groups.length ? (
+            <div className="empty-state">
+              <div className="empty-icon">🤝</div>
+              <h3>Nobody to show</h3>
+              <p>Load a statement, or widen the window.</p>
+            </div>
+          ) : (
+            <div style={{ overflowX: 'auto' }}>
+              <table className="data-table">
+                <thead><tr>
+                  <th>Who</th>
+                  <th>Category</th>
+                  <th style={{ textAlign: 'right' }}>Paid out</th>
+                  <th style={{ textAlign: 'right' }}>Received</th>
+                  <th style={{ textAlign: 'center' }}>Times</th>
+                  <th>Last</th>
+                  {canEdit && <th />}
+                </tr></thead>
+                <tbody>
+                  {groups.map(g => (
+                    <tr key={g.key} className="bank-row" onClick={() => { setSearch(g.name); setView('lines') }}>
+                      <td data-label="Who">
+                        <span className="cell-primary">{g.name}</span>
+                        {g.channel && <span className="bank-chip">{g.channel}</span>}
+                        {g.txns > 1 && <div className="packed-sub">{g.first === g.last ? g.first : `since ${day(g.first)}`}</div>}
+                      </td>
+                      <td data-label="Category">
+                        <span className={`status-badge ${g.unsorted ? 'pending' : 'info'}`}>{g.category}</span>
+                        {g.categories > 1 && <div className="packed-sub">+{g.categories - 1} other</div>}
+                      </td>
+                      <td data-label="Paid out" className="bank-amount bank-out">{g.out > 0 ? inrExact(g.out) : ''}</td>
+                      <td data-label="Received" className="bank-amount bank-in">{g.in > 0 ? inrExact(g.in) : ''}</td>
+                      <td data-label="Times" style={{ textAlign: 'center' }}>
+                        {g.txns > 1 ? <b className="bank-repeat">{g.txns}</b> : g.txns}
+                      </td>
+                      <td data-label="Last" className="support-nowrap">{day(g.last)}</td>
+                      {canEdit && (
+                        <td data-label="">
+                          <button type="button" className="mini-btn"
+                            onClick={e => { e.stopPropagation(); setSorting({ ...g, category: g.category, rename: g.name }) }}>
+                            {g.unsorted ? 'Sort these' : 'Change'}
+                          </button>
+                        </td>
+                      )}
+                    </tr>
+                  ))}
+                  {!!groupInfo?.unnamed?.txns && (
+                    <tr className="bank-row" onClick={() => { setSearch(''); setView('lines') }}>
+                      <td data-label="Who"><span style={{ color: 'var(--text-muted)' }}>No name on the transaction</span></td>
+                      <td />
+                      <td className="bank-amount bank-out">{groupInfo.unnamed.out > 0 ? inrExact(groupInfo.unnamed.out) : ''}</td>
+                      <td className="bank-amount bank-in">{groupInfo.unnamed.in > 0 ? inrExact(groupInfo.unnamed.in) : ''}</td>
+                      <td style={{ textAlign: 'center' }}>{groupInfo.unnamed.txns}</td>
+                      <td colSpan={canEdit ? 2 : 1} />
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      ) : (
       <div className="data-table-wrapper">
         {loading ? <div className="loader"><div className="spinner" /></div> : !rows.length ? (
           <div className="empty-state">
@@ -316,7 +408,8 @@ export default function Banking() {
           </div>
         )}
       </div>
-      <Pagination table={t} noun="transactions" />
+      )}
+      {view === 'lines' && <Pagination table={t} noun="transactions" />}
 
       {!!statements.length && (
         <div className="bank-statements">
@@ -341,6 +434,43 @@ export default function Banking() {
       )}
 
       {uploading && <UploadDrawer onClose={() => setUploading(false)} onLoaded={() => { setUploading(false); load() }} />}
+
+      {sorting && (
+        <div className="confirm-overlay" onClick={() => setSorting(null)}>
+          <div className="confirm-card" style={{ maxWidth: 560 }} onClick={e => e.stopPropagation()} role="dialog" aria-modal="true">
+            <h3 className="confirm-title">{sorting.name}</h3>
+            <p className="confirm-message">
+              {sorting.txns} transaction{sorting.txns === 1 ? '' : 's'} ·
+              {sorting.out > 0 ? ` ${inrExact(sorting.out)} paid out` : ''}
+              {sorting.in > 0 ? `${sorting.out > 0 ? ' ·' : ''} ${inrExact(sorting.in)} received` : ''}
+              {' '}· {day(sorting.first)} to {day(sorting.last)}
+            </p>
+            <div className="form-row">
+              <div className="input-group">
+                <label>What are these?</label>
+                <select value={sorting.category} onChange={e => setSorting({ ...sorting, category: e.target.value })}>
+                  {(options.categories || []).map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+              <div className="input-group">
+                {/* Two spellings of one supplier are one supplier: renaming here merges them. */}
+                <label>Name <span className="label-hint">rename to merge spellings</span></label>
+                <input value={sorting.rename} onChange={e => setSorting({ ...sorting, rename: e.target.value })} />
+              </div>
+            </div>
+            <p className="bank-note">
+              Every transaction with this name is sorted at once, and the next statement you load
+              will sort itself the same way.
+            </p>
+            <div className="confirm-actions">
+              <button className="btn btn-secondary" onClick={() => setSorting(null)}>Cancel</button>
+              <button className="btn btn-primary" onClick={() => sortGroup(sorting, sorting.category, sorting.rename)}>
+                Sort all {sorting.txns}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {editing && (
         <div className="confirm-overlay" onClick={() => setEditing(null)}>

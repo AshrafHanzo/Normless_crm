@@ -16,7 +16,12 @@
 // The vocabulary the page groups by. Ordered the way a P&L reads, income first.
 const CATEGORIES = [
     'Sales settlements', 'Other income', 'Refunds to customers',
-    'Advertising', 'Inventory & production', 'Shipping & logistics', 'Packaging',
+    // Making the product, in the order it is made: cloth, cutting and stitching, the finished
+    // garment, then what goes on it and around it. Split this way because they are different
+    // suppliers and different questions — "what did fabric cost this month" is not "what did
+    // stitching cost".
+    'Fabric', 'Stitching', 'Garments & blanks', 'Printing & embroidery', 'Packaging',
+    'Advertising', 'Shipping & logistics',
     'Salaries & contractors', 'Rent & utilities', 'Software & subscriptions',
     'Taxes & statutory', 'Bank charges', 'Interest', 'Loan & EMI',
     'Owner drawings', 'Transfer between own accounts', 'Cash withdrawal',
@@ -31,6 +36,16 @@ const SEED_RULES = [
     [/shopify payments|shopify.*payout/i, 'Sales settlements', 'Shopify Payments'],
     [/payu|cashfree|phonepe\s*merchant|paytm\s*merchant|ccavenue/i, 'Sales settlements', null],
     [/\bint\.?\s*pd\b|interest paid|int credit/i, 'Interest', 'Bank interest'],
+
+    // The trade. Printing before anything with "wear" in it, or "Printwear" becomes a garment
+    // supplier; packaging before fabric, or a packing supplier with "poly" in its name becomes
+    // one. Only words that can only mean one thing — a guess here quietly collects a column of
+    // unrelated payments under the wrong heading.
+    [/\b(print(ers?|ing|wear)?|dtf|embroid\w*|screen ?print|sublimation)\b/i, 'Printing & embroidery', null],
+    [/\b(packag\w*|packing|carton|corrugat\w*|poly ?(bag|cover)|labels?)\b/i, 'Packaging', null],
+    [/\b(fabric|fabrics|textile|textiles|mills?|yarn|cotton|dyeing|dyers?|processors?|handloom|suiting)\b/i, 'Fabric', null],
+    [/\b(stitch\w*|tailor\w*|sewing|job ?work)\b/i, 'Stitching', null],
+    [/\b(garments?|clothing|apparels?|hosiery|knitwears?|knits?)\b/i, 'Garments & blanks', null],
 
     // What the money goes on
     [/facebk|facebook|meta platforms|meta ads/i, 'Advertising', 'Meta'],

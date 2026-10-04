@@ -8,7 +8,7 @@
 
 const crypto = require('crypto');
 const { readLines, flatten, StatementError } = require('./extract');
-const { parseTransactions, reconcile, toDate, num, clean } = require('./parse');
+const { parseTransactions, parseSummary, reconcile, toDate, num, clean } = require('./parse');
 const { categorise } = require('./categorise');
 
 const BANKS = [
@@ -39,8 +39,6 @@ function readHeader(text) {
     const span = text.match(/from\s*:?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\s*(?:to|-|–)\s*:?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})/i)
         || text.match(/period\s*:?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\s*(?:to|-|–)\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})/i);
 
-    const opening = text.match(/opening balance\s*:?\s*([\d,]+\.?\d*)/i);
-    const closing = text.match(/closing balance\s*:?\s*([\d,]+\.?\d*)/i);
     const label = text.match(/^(.{0,60}?(?:savings|current|account)[^\n]{0,40})$/im);
 
     return {
@@ -49,10 +47,25 @@ function readHeader(text) {
         account_label: label ? clean(label[1]).slice(0, 80) : null,
         period_from: span ? toDate(span[1]) : null,
         period_to: span ? toDate(span[2]) : null,
-        // Only trusted as a starting figure; the running-balance check is what actually proves it.
-        stated_opening: opening ? num(opening[1]) : null,
-        stated_closing: closing ? num(closing[1]) : null,
     };
+}
+
+/** What went wrong, in the words of what was compared. */
+function reconcileNote(check) {
+    if (check.ok) return null;
+    const parts = [];
+    if (check.break_count) {
+        parts.push(`${check.break_count} row${check.break_count === 1 ? '' : 's'} do not match the printed running balance`);
+    }
+    const a = check.against;
+    if (a) {
+        if (a.debits) parts.push(`debits are out by ${a.debits}`);
+        if (a.credits) parts.push(`credits are out by ${a.credits}`);
+        if (a.dr_count) parts.push(`${Math.abs(a.dr_count)} debit line${Math.abs(a.dr_count) === 1 ? '' : 's'} ${a.dr_count > 0 ? 'too many' : 'missing'}`);
+        if (a.cr_count) parts.push(`${Math.abs(a.cr_count)} credit line${Math.abs(a.cr_count) === 1 ? '' : 's'} ${a.cr_count > 0 ? 'too many' : 'missing'}`);
+        if (a.closing) parts.push(`the closing balance is out by ${a.closing}`);
+    }
+    return parts.join(' · ') || 'This statement could not be checked against the bank\'s own totals';
 }
 
 /** The same document uploaded twice is one statement, whatever it was named the second time. */
@@ -80,13 +93,18 @@ async function readStatement(buffer, password, learnedRules = []) {
     if (!columns) throw new StatementError('Could not find the transaction table in this PDF — is it a bank statement?', 'NO_TABLE');
     if (!rows.length) throw new StatementError('No transactions were found in this statement', 'NO_ROWS');
 
-    const check = reconcile(rows, header.stated_opening);
+    // The bank's own tally, printed at the end of the statement. It is the only check on this
+    // parse that does not come from the parse itself, so it is read and compared rather than
+    // assumed — "every rupee accounted for" has to mean something a second source agrees with.
+    const summary = parseSummary(doc.pages);
+    const check = reconcile(rows, summary);
     const transactions = rows.map(r => {
         const { category, counterparty, channel } = categorise(r.narration, { credit: r.credit }, learnedRules);
         return { ...r, category, counterparty, channel, fingerprint: fingerprint(header.account_last4, r) };
     });
 
     return {
+        summary,
         statement: {
             ...header,
             opening_balance: check.opening_balance,
@@ -95,8 +113,10 @@ async function readStatement(buffer, password, learnedRules = []) {
             stated_credits: check.credits,
             txn_count: transactions.length,
             reconciled: check.ok,
-            reconcile_note: check.ok ? null
-                : `${check.breaks.length} row${check.breaks.length === 1 ? '' : 's'} do not match the printed running balance`,
+            reconcile_note: reconcileNote(check),
+            // Kept so the page can say whether the check was made against the bank's own figures
+            // or only against the running balance, which are different strengths of evidence.
+            checked_against_bank: !!check.against,
             page_count: doc.pageCount,
             // Dates are taken from the transactions when the covering letter did not state them.
             period_from: header.period_from || transactions[0].txn_date,

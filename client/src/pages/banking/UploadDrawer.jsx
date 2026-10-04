@@ -73,9 +73,22 @@ export default function UploadDrawer({ onClose, onLoaded }) {
                   <b>{c.ok ? 'Every rupee accounted for' : 'This statement does not add up'}</b>
                   <div>
                     {c.ok
-                      ? `${s.txn_count} transactions, and the running balance holds from the first line to the last. Debits and credits match the bank's own totals exactly.`
-                      : `${c.break_count} line${c.break_count === 1 ? '' : 's'} do not match the printed running balance. Loading it would under-report what you spent.`}
+                      ? `${s.txn_count} transactions, and the running balance holds from the first line to the last.`
+                      : s.reconcile_note}
                   </div>
+                  {/* Two different strengths of evidence, so the page says which one it has: the
+                      bank's own printed tally is an independent check, the running balance is not. */}
+                  {c.against ? (
+                    <div className="bank-check-break">
+                      Checked against the bank's own summary: {found.summary.dr_count} debits totalling {inr(found.summary.debits)},
+                      {' '}{found.summary.cr_count} credits totalling {inr(found.summary.credits)}, closing {inr(found.summary.closing_balance)}
+                      {c.ok ? ' — all matched exactly.' : ' — these do not match.'}
+                    </div>
+                  ) : (
+                    <div className="bank-check-break">
+                      This statement prints no summary to check against, so only the running balance was verified.
+                    </div>
+                  )}
                   {!c.ok && c.breaks?.slice(0, 3).map(b => (
                     <div key={b.row_no} className="bank-check-break">
                       Row {b.row_no} · {b.date} · printed {inr(b.printed)}, expected {inr(b.expected)} ({inr(b.diff)} out)
