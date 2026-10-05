@@ -138,6 +138,19 @@ async function fetchOnHoldOrderNames() {
 }
 
 /**
+ * How many of a line are actually on the order now.
+ *
+ * An order edit never deletes a line: Shopify keeps it with its original `quantity` and drops
+ * `current_quantity` instead (to 0 when the customer removed it — #11842). Reading `quantity`
+ * put removed items back on the scanner. But a refund lowers `current_quantity` too, and a line
+ * that already shipped was supplied whatever happened after, so it keeps its full count.
+ */
+function liveQuantity(li) {
+    if (li.fulfillment_status === 'fulfilled' || li.current_quantity == null) return li.quantity;
+    return li.current_quantity;
+}
+
+/**
  * Fetch all orders using REST API (status=any gets ALL orders including closed/archived)
  * GraphQL is limited to ~60 days by read_orders scope, but REST returns everything.
  */
@@ -169,7 +182,7 @@ async function fetchAllOrders() {
             cancelled_at: o.cancelled_at || null,
             line_items_json: JSON.stringify((o.line_items || []).map(li => ({
                 title: li.title,
-                quantity: li.quantity,
+                quantity: liveQuantity(li),
                 price: li.price || '0',
                 variant: li.variant_title || '',
                 shopify_variant_id: li.variant_id,
@@ -177,7 +190,7 @@ async function fetchAllOrders() {
                 options: (li.properties || []).map(p => ({ name: p.name, value: p.value })),
                 image: null,
                 all_images: []
-            }))),
+            })).filter(li => li.quantity > 0)),
             created_at: o.created_at,
         }));
 
