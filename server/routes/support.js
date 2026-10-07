@@ -15,6 +15,10 @@
  */
 
 const express = require('express');
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+const multer = require('multer');
 const db = require('../db/connection');
 const { hasPermission } = require('../utils/permissions');
 const { tableParams, pagination } = require('../utils/table');
@@ -58,6 +62,45 @@ const canEdit = async (req, res, next) => {
     } catch (err) { next(err); }
 };
 
+/* ── Proof photographs ───────────────────────────────────────────────────────────────────────
+   A support request is usually an argument about a physical thing — a torn seam, the wrong colour
+   in the parcel, a screenshot of what the customer sent on WhatsApp. The words are an account of
+   it; the photograph is the thing itself, and it has to live on the ticket rather than in
+   somebody's phone. Stored beside the Crewfit order images and served the same way. */
+const UPLOAD_ROOT = path.join(__dirname, '..', 'uploads', 'support');
+const MAX_UPLOAD_MB = 10;
+const MAX_IMAGES = 8;
+
+const upload = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => {
+            const dir = path.join(UPLOAD_ROOT, String(req.params.id));
+            fs.mkdirSync(dir, { recursive: true });
+            cb(null, dir);
+        },
+        filename: (req, file, cb) => {
+            const ext = path.extname(file.originalname).toLowerCase().replace(/[^a-z0-9.]/g, '');
+            cb(null, `${Date.now()}-${crypto.randomBytes(6).toString('hex')}${ext}`);
+        },
+    }),
+    limits: { fileSize: MAX_UPLOAD_MB * 1024 * 1024, files: MAX_IMAGES },
+    fileFilter: (req, file, cb) => {
+        if (/^image\/(jpeg|png|webp|heic|heif)$/.test(file.mimetype)) cb(null, true);
+        else cb(new Error('Only JPG, PNG or WEBP images can be attached'));
+    },
+});
+
+// multer's own errors arrive through next(err) and would surface as a 500; they are things the
+// person uploading can fix, so they are answered as 400s that name the limit.
+const uploadImages = (req, res, next) => upload.array('images', MAX_IMAGES)(req, res, (err) => {
+    if (!err) return next();
+    const known = {
+        LIMIT_FILE_SIZE: `Each image must be under ${MAX_UPLOAD_MB}MB`,
+        LIMIT_FILE_COUNT: `Up to ${MAX_IMAGES} images per ticket`,
+    };
+    res.status(400).json({ error: known[err.code] || err.message || 'Could not read those images' });
+});
+
 const trim = (v) => { const t = String(v ?? '').trim(); return t || null; };
 const safeJson = (v, fallback) => { try { return typeof v === 'string' ? (JSON.parse(v || 'null') ?? fallback) : (v || fallback); } catch { return fallback; } };
 const isoDate = (v) => { const t = trim(v); return t ? t.slice(0, 10) : null; };
@@ -82,10 +125,12 @@ const SORTS = {
 const AGING = `(COALESCE(resolved_on, CURRENT_DATE) - raised_on)`;
 const FIELDS = `id, ref_no, order_number, shopify_order_id, customer_name, customer_phone,
                 customer_email, source, nature, reason, payment_status, request, status, progress,
-                action, ops_note, forward_awb, return_awb, assigned_to,
+                action, ops_note, forward_awb, return_awb, assigned_to, images,
                 TO_CHAR(raised_on,'YYYY-MM-DD') AS raised_on,
                 TO_CHAR(resolved_on,'YYYY-MM-DD') AS resolved_on,
                 created_by, created_at, updated_at, ${AGING} AS aging`;
+
+const hydrate = (row) => (row ? { ...row, images: safeJson(row.images, []) } : row);
 
 /** The vocabulary, for the drawer's dropdowns. */
 router.get('/options', (req, res) => {
@@ -139,7 +184,7 @@ router.get('/tickets', async (req, res) => {
                     COUNT(*)::int AS total
                FROM support_tickets`)).rows[0];
 
-        res.json({ tickets: rows, summary: s, pagination: pagination(total, t) });
+        res.json({ tickets: rows.map(hydrate), summary: s, pagination: pagination(total, t) });
     } catch (err) {
         console.error('support list error:', err);
         res.status(500).json({ error: 'Could not read the support tickets' });
@@ -209,7 +254,7 @@ router.get('/order/:number', async (req, res) => {
             // replacement request read differently from a first.
             history: (await db.query(
                 `SELECT ${FIELDS} FROM support_tickets WHERE order_number = $1 ORDER BY raised_on DESC, id DESC`,
-                [orderNumber])).rows,
+                [orderNumber])).rows.map(hydrate),
         });
     } catch (err) {
         console.error('support order lookup error:', err);
@@ -221,7 +266,7 @@ router.get('/tickets/:id', async (req, res) => {
     try {
         const r = await db.query(`SELECT ${FIELDS} FROM support_tickets WHERE id = $1`, [parseInt(req.params.id, 10) || 0]);
         if (!r.rows[0]) return res.status(404).json({ error: 'That ticket is gone' });
-        res.json({ ticket: r.rows[0] });
+        res.json({ ticket: hydrate(r.rows[0]) });
     } catch (err) {
         console.error('support get error:', err);
         res.status(500).json({ error: 'Could not read that ticket' });
@@ -274,7 +319,7 @@ router.post('/tickets', canEdit, async (req, res) => {
             return r.rows[0].id;
         });
         const row = (await db.query(`SELECT ${FIELDS} FROM support_tickets WHERE id = $1`, [ticket])).rows[0];
-        res.status(201).json({ ticket: row });
+        res.status(201).json({ ticket: hydrate(row) });
     } catch (err) {
         console.error('support create error:', err);
         res.status(500).json({ error: 'Could not raise the ticket' });
@@ -316,10 +361,69 @@ router.patch('/tickets/:id', canEdit, async (req, res) => {
               WHERE id = $1`,
             [id, ...cols.map(c => patch[c])]);
         const row = (await db.query(`SELECT ${FIELDS} FROM support_tickets WHERE id = $1`, [id])).rows[0];
-        res.json({ ticket: row });
+        res.json({ ticket: hydrate(row) });
     } catch (err) {
         console.error('support update error:', err);
         res.status(500).json({ error: 'Could not save that change' });
+    }
+});
+
+/**
+ * POST /api/support/tickets/:id/images — attach proof photographs.
+ *
+ * Uploaded against a saved ticket, because the files are stored in a folder named after it. A
+ * ticket being raised holds its pictures in the browser and sends them the moment it has an id.
+ */
+router.post('/tickets/:id/images', canEdit, uploadImages, async (req, res) => {
+    const scrap = () => (req.files || []).forEach(f => fs.unlink(f.path, () => {}));
+    try {
+        const id = parseInt(req.params.id, 10) || 0;
+        const row = (await db.query('SELECT id, images FROM support_tickets WHERE id = $1', [id])).rows[0];
+        if (!row) { scrap(); return res.status(404).json({ error: 'That ticket is gone' }); }
+        if (!req.files?.length) return res.status(400).json({ error: 'No images were attached' });
+
+        const existing = safeJson(row.images, []);
+        const incoming = req.files.map(f => `/uploads/support/${id}/${f.filename}`);
+        if (existing.length + incoming.length > MAX_IMAGES) {
+            scrap();
+            return res.status(400).json({ error: `Up to ${MAX_IMAGES} images per ticket — ${existing.length} already attached` });
+        }
+        const images = [...existing, ...incoming];
+        await db.query('UPDATE support_tickets SET images = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+            [JSON.stringify(images), id]);
+        res.json({ images, added: incoming.length });
+    } catch (err) {
+        console.error('support image upload error:', err);
+        scrap();
+        res.status(500).json({ error: 'Could not attach those images' });
+    }
+});
+
+/**
+ * DELETE /api/support/tickets/:id/images — body { url }.
+ *
+ * The file goes with the record. Only paths this ticket actually holds are touched, so a crafted
+ * url cannot reach anything else on disk.
+ */
+router.delete('/tickets/:id/images', canEdit, async (req, res) => {
+    try {
+        const id = parseInt(req.params.id, 10) || 0;
+        const url = trim(req.body?.url);
+        if (!url) return res.status(400).json({ error: 'Which image?' });
+
+        const row = (await db.query('SELECT id, images FROM support_tickets WHERE id = $1', [id])).rows[0];
+        if (!row) return res.status(404).json({ error: 'That ticket is gone' });
+        const existing = safeJson(row.images, []);
+        if (!existing.includes(url)) return res.status(404).json({ error: 'That image is not on this ticket' });
+
+        const images = existing.filter(u => u !== url);
+        await db.query('UPDATE support_tickets SET images = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+            [JSON.stringify(images), id]);
+        fs.unlink(path.join(UPLOAD_ROOT, String(id), path.basename(url)), () => { /* the record is what matters */ });
+        res.json({ images });
+    } catch (err) {
+        console.error('support image delete error:', err);
+        res.status(500).json({ error: 'Could not remove that image' });
     }
 });
 
@@ -333,6 +437,7 @@ router.delete('/tickets/:id', canEdit, async (req, res) => {
         const r = await db.query('DELETE FROM support_tickets WHERE id = $1 RETURNING ref_no', [id]);
         if (!r.rows[0]) return res.status(404).json({ error: 'That ticket is already gone' });
         await db.query(`DELETE FROM comments WHERE entity = 'support_ticket' AND entity_id = $1`, [id]);
+        fs.rm(path.join(UPLOAD_ROOT, String(id)), { recursive: true, force: true }, () => { /* best effort */ });
         res.json({ deleted: true, ref_no: r.rows[0].ref_no });
     } catch (err) {
         console.error('support delete error:', err);

@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react'
-import { useApi } from '../../App'
+import { useApi, useAuth } from '../../App'
 import { useToast } from '../../components/Toast'
 import Icon from '../../components/Icon'
 import AutoTextarea from '../../components/AutoTextarea'
 import OrderComments from '../../components/OrderComments'
+import ImageUploadGrid from '../../components/ImageUploadGrid'
 import useDirtyGuard from '../../hooks/useDirtyGuard'
 import { refOf, blankTicket, asForm, trackingFor } from './ticket'
 
@@ -55,12 +56,19 @@ function AwbField({ label, hint, value, disabled, link, onChange }) {
 export default function TicketDrawer({ ticket, options, onClose, onSaved, onDelete, canEdit }) {
   const apiFetch = useApi()
   const toast = useToast()
+  const { API_URL } = useAuth()
   const isNew = !ticket?.id
 
   const [form, setForm] = useState(() => asForm(ticket?.id ? ticket : { ...blankTicket(), ...ticket }))
   const [busy, setBusy] = useState(false)
   const [lookup, setLookup] = useState(null)     // { order, dispatch, history }
   const [looking, setLooking] = useState(false)
+  // Proof photographs. A ticket being raised has nowhere to put them yet, so its picks are held
+  // here with a local preview and sent the moment it has an id.
+  const [images, setImages] = useState(ticket?.images || [])
+  const [pending, setPending] = useState([])
+  const [uploading, setUploading] = useState(false)
+  const [viewing, setViewing] = useState(null)   // index into the thumbnails
   const setF = (patch) => setForm(f => ({ ...f, ...patch }))
 
   const guard = useDirtyGuard({
@@ -100,6 +108,57 @@ export default function TicketDrawer({ ticket, options, onClose, onSaved, onDele
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ticket?.id])
 
+  const MAX_IMAGES = 8
+  const thumbs = [
+    ...images.map(url => ({ src: `${API_URL}${url}`, pending: false, ref: url })),
+    ...pending.map(p => ({ src: p.previewUrl, pending: true, ref: p })),
+  ]
+
+  /** Send a batch to a ticket that exists; hold it otherwise. */
+  const sendImages = async (id, files) => {
+    const body = new FormData()
+    files.forEach(f => body.append('images', f))
+    const res = await apiFetch(`/api/support/tickets/${id}/images`, { method: 'POST', body })
+    if (!res || res.error) { toast.error(res?.error || 'Could not attach those images'); return null }
+    return res.images
+  }
+
+  const pickImages = async (fileList) => {
+    const files = [...(fileList || [])]
+    if (!files.length) return
+    const room = MAX_IMAGES - thumbs.length
+    if (room <= 0) { toast.error(`Up to ${MAX_IMAGES} images on a ticket`); return }
+    const batch = files.slice(0, room)
+    if (batch.length < files.length) toast.warning(`Only ${room} more image${room === 1 ? '' : 's'} fit on this ticket`)
+
+    if (isNew) {
+      setPending(list => [...list, ...batch.map(f => ({ file: f, previewUrl: URL.createObjectURL(f) }))])
+      return
+    }
+    setUploading(true)
+    const saved = await sendImages(ticket.id, batch)
+    setUploading(false)
+    if (saved) { setImages(saved); toast.success(`${batch.length} image${batch.length === 1 ? '' : 's'} attached`) }
+  }
+
+  const removeImage = async (thumb) => {
+    if (thumb.pending) {
+      URL.revokeObjectURL(thumb.ref.previewUrl)
+      setPending(list => list.filter(p => p !== thumb.ref))
+      setViewing(null)
+      return
+    }
+    const res = await apiFetch(`/api/support/tickets/${ticket.id}/images`, {
+      method: 'DELETE', body: JSON.stringify({ url: thumb.ref }),
+    })
+    if (!res || res.error) { toast.error(res?.error || 'Could not remove that image'); return }
+    setImages(res.images)
+    setViewing(null)
+  }
+
+  // Blob previews are a browser resource, not React state; they have to be handed back.
+  useEffect(() => () => pending.forEach(p => URL.revokeObjectURL(p.previewUrl)), [pending])
+
   const save = async (e) => {
     e?.preventDefault?.()
     if (!form.order_number.trim() && !form.customer_name.trim() && !form.customer_phone.trim()) {
@@ -113,6 +172,15 @@ export default function TicketDrawer({ ticket, options, onClose, onSaved, onDele
       : await apiFetch(`/api/support/tickets/${ticket.id}`, { method: 'PATCH', body: JSON.stringify(body) })
     setBusy(false)
     if (!res || res.error) { toast.error(res?.error || 'Could not save the ticket'); return }
+    // Everything held while there was nowhere to put it now has somewhere to go.
+    if (isNew && pending.length) {
+      setUploading(true)
+      const saved = await sendImages(res.ticket.id, pending.map(p => p.file))
+      setUploading(false)
+      if (saved) { res.ticket.images = saved; setImages(saved) }
+      pending.forEach(p => URL.revokeObjectURL(p.previewUrl))
+      setPending([])
+    }
     toast.success(isNew ? `${refOf(res.ticket)} raised` : `${refOf(res.ticket)} saved`)
     guard.reset(asForm(res.ticket))
     // A new ticket is finished with: it goes back to the list, where it can now be seen. An edit
@@ -228,6 +296,17 @@ export default function TicketDrawer({ ticket, options, onClose, onSaved, onDele
                 onChange={e => setF({ request: e.target.value })} />
             </div>
 
+            {/* The proof. Most of these requests are an argument about a physical thing, and the
+                photograph the customer sent is the thing itself — it belongs on the ticket, not in
+                somebody's phone. */}
+            {(canEdit || thumbs.length > 0) && (
+              <ImageUploadGrid
+                icon="📷" label="Proof photos" max={MAX_IMAGES} thumbs={thumbs} busy={uploading}
+                onUpload={canEdit ? pickImages : undefined}
+                onView={(i) => setViewing(i)}
+              />
+            )}
+
             <div className="form-section">What we did</div>
             <div className="form-row">
               <div className="input-group">
@@ -306,6 +385,36 @@ export default function TicketDrawer({ ticket, options, onClose, onSaved, onDele
             </>
           )}
         </div>
+
+        {viewing !== null && thumbs[viewing] && (
+          <div className="image-modal-overlay" onClick={() => setViewing(null)}>
+            <div className="image-modal-content" onClick={e => e.stopPropagation()}>
+              <button className="image-modal-close" onClick={() => setViewing(null)}>✕</button>
+              <div className="image-modal-toolbar">
+                {!thumbs[viewing].pending && (
+                  <a className="image-modal-action" href={thumbs[viewing].src} target="_blank" rel="noreferrer">⬇ Open full size</a>
+                )}
+                {canEdit && (
+                  <button className="image-modal-action image-modal-action-danger"
+                    onClick={() => removeImage(thumbs[viewing])}>🗑 Remove</button>
+                )}
+              </div>
+              {thumbs[viewing].pending && (
+                <div className="image-modal-pending-tag">Not sent yet — it goes up when the ticket is raised</div>
+              )}
+              <img src={thumbs[viewing].src} alt="Proof" className="full-image" />
+              {thumbs.length > 1 && (
+                <>
+                  <button className="modal-carousel-nav-btn modal-carousel-prev"
+                    onClick={() => setViewing(v => (v - 1 + thumbs.length) % thumbs.length)}>‹</button>
+                  <button className="modal-carousel-nav-btn modal-carousel-next"
+                    onClick={() => setViewing(v => (v + 1) % thumbs.length)}>›</button>
+                  <div className="modal-carousel-counter">{viewing + 1} / {thumbs.length}</div>
+                </>
+              )}
+            </div>
+          </div>
+        )}
 
         <div className="drawer-footer">
           {!isNew && onDelete && (

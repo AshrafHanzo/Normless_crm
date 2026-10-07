@@ -1369,6 +1369,10 @@ async function ensureSupportSchema() {
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
+            -- Photographs of the problem: a torn seam, the wrong colour in the parcel, a
+            -- screenshot of what the customer sent. Paths under /uploads/support/<ticket>/, the
+            -- same shape the Crewfit order images use.
+            ALTER TABLE support_tickets ADD COLUMN IF NOT EXISTS images TEXT;
             CREATE UNIQUE INDEX IF NOT EXISTS support_tickets_ref_idx ON support_tickets (ref_no);
             CREATE INDEX IF NOT EXISTS support_tickets_order_idx ON support_tickets (order_number);
             CREATE INDEX IF NOT EXISTS support_tickets_raised_idx ON support_tickets (raised_on DESC);

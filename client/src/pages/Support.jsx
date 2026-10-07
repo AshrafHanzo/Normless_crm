@@ -209,6 +209,13 @@ export default function Support() {
                       </td>
                       <td data-label="Request">
                         {x.nature || '—'}
+                        {/* Said in the list, because a ticket with a photograph of the damage is a
+                            different thing to pick up than one without. */}
+                        {x.images?.length > 0 && (
+                          <span className="bank-chip" title={`${x.images.length} proof photo${x.images.length === 1 ? '' : 's'}`}>
+                            📷 {x.images.length}
+                          </span>
+                        )}
                         <div className="packed-sub">{[x.reason, x.request].filter(Boolean).join(' · ') || '—'}</div>
                       </td>
                       <td data-label="What we did">

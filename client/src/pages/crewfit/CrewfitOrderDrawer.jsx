@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, Children, isValidElement, Fragment } from 
 import useDirtyGuard from '../../hooks/useDirtyGuard'
 import AutoTextarea from '../../components/AutoTextarea'
 import OrderComments from '../../components/OrderComments'
+import ImageUploadGrid from '../../components/ImageUploadGrid'
 import { useApi, useAuth } from '../../App'
 import { useToast } from '../../components/Toast'
 import { cleanMobile, mobileError, isValidMobile, mobileInputProps } from '../../utils/phone'
@@ -319,42 +320,6 @@ function imageThumbs(item, kind, apiUrl) {
   const uploaded = (item[uploadedKey] || []).map(url => ({ src: `${apiUrl}${url}`, pending: false, ref: url }))
   const pending = (item[pendingKey] || []).map(p => ({ src: p.previewUrl, pending: true, ref: p }))
   return [...uploaded, ...pending]
-}
-
-// Instagram-style tile grid: existing thumbnails + a dashed "add" tile, up to `max`. Uploads are
-// always available, even before the order is first saved — new orders queue picks as "pending"
-// (dashed amber outline) and they're pushed to the server right after the order is created.
-// Clicking a thumbnail hands off to the parent's lightbox instead of opening a new tab.
-function ImageUploadGrid({ icon, label, thumbs, max = 5, busy, onUpload, onView, onDownloadAll, downloadBusy }) {
-  const uploadedCount = thumbs.filter(t => !t.pending).length
-  return (
-    <div className="img-upload-block">
-      <div className="img-upload-head">
-        <span className="img-upload-label">{icon} {label}</span>
-        <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          {uploadedCount > 1 && (
-            <button type="button" className="mini-btn" onClick={onDownloadAll} disabled={downloadBusy}>{downloadBusy ? 'Downloading…' : '⬇ Download all'}</button>
-          )}
-          <span className="img-count-badge">{thumbs.length}/{max}</span>
-        </span>
-      </div>
-      <div className="img-thumb-grid">
-        {thumbs.map((t, i) => (
-          <div className={`img-thumb ${t.pending ? 'img-thumb-pending' : ''}`} key={t.pending ? t.src : t.ref} onClick={() => onView(i)} title={t.pending ? 'Pending upload — click to view' : 'Click to view'}>
-            <img src={t.src} alt={label} />
-            {t.pending && <span className="img-pending-badge" title="Will upload once the order is saved" />}
-          </div>
-        ))}
-        {thumbs.length < max && (
-          <label className={`img-thumb img-thumb-add ${busy ? 'img-thumb-busy' : ''}`}>
-            {busy ? <span className="img-spinner" /> : <span className="img-thumb-add-icon">+</span>}
-            <input type="file" accept="image/png,image/jpeg,image/webp" multiple hidden disabled={busy}
-              onChange={e => { onUpload(e.target.files); e.target.value = '' }} />
-          </label>
-        )}
-      </div>
-    </div>
-  )
 }
 
 // One half of an order's payment: generate the Razorpay link, share it, then watch it settle.
