@@ -144,6 +144,13 @@ function itemsTable(doc, order, y) {
     doc.text(money(it.product_total), 460, y, { width: 95, align: 'right' });
     y += 16;
   });
+  // Charged on to the customer, so it is named on the bill rather than folded into a product rate
+  // nobody can reconcile. Printed by the proforma and the tax invoice alike, which share this table.
+  if (Number(order.designer_charge)) {
+    doc.text('Embroidery Designer Charge', 65, y, { width: 190 });
+    doc.text(money(order.designer_charge), 460, y, { width: 95, align: 'right' });
+    y += 16;
+  }
   if (order.shipping) {
     doc.text('Shipping & Handling', 65, y, { width: 190 });
     doc.text(money(order.shipping), 460, y, { width: 95, align: 'right' });

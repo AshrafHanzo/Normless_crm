@@ -564,7 +564,7 @@ router.get('/orders/:id', async (req, res) => {
 });
 
 const EXTRA = ['printing', 'printing_type', 'delivery_location', 'billing_name', 'contact_person', 'billing_mobile', 'billing_email',
-  'gst_number', 'billing_address', 'unit_price', 'product_total', 'shipping', 'gst_amount', 'grand_total', 'advance', 'balance',
+  'gst_number', 'billing_address', 'unit_price', 'product_total', 'shipping', 'designer_charge', 'gst_amount', 'grand_total', 'advance', 'balance',
   'line_items', 'whatsapp_number', 'tracking_sent_at', 'photos_sent_at', 'place_of_supply'];
 
 // Anything a change to which can move the place of supply.
@@ -781,9 +781,18 @@ router.delete('/orders/:id', ownerOnly, async (req, res) => {
   }
 });
 
-/** Pre-GST base, tax rate and full-value figures for an order. */
+/**
+ * Pre-GST base, tax rate and full-value figures for an order.
+ *
+ * The designer charge sits inside the taxable value rather than on top of it: it is billed as part
+ * of the same supply and carries the same rate as the goods, exactly as shipping does. Keeping it
+ * here means the invoice, the GST register and the payment links all agree without any of them
+ * doing their own arithmetic.
+ */
 function orderFigures(order) {
-  const taxable = (Number(order.product_total) || 0) + (Number(order.shipping) || 0);
+  const taxable = (Number(order.product_total) || 0)
+    + (Number(order.designer_charge) || 0)
+    + (Number(order.shipping) || 0);
   const gstAmount = Number(order.gst_amount) || 0;
   const gross = Number(order.grand_total) || 0;
   const gstPct = taxable > 0 ? Math.round(gstAmount / taxable * 100) : 0;

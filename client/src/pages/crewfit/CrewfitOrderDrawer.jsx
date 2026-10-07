@@ -134,9 +134,17 @@ export function blankOrder() {
   return {
     status: 'Pending', payment_status: 'Pending', layout_status: 'Pending', customer_type: 'New',
     order_date: todayStr(),
+    // What the embroidery designer is paid to digitise the artwork. Nearly every order carries
+    // it, so it starts filled in rather than being remembered — and it is a field on the form,
+    // not a hidden default, so an order without embroidery can be zeroed on sight.
+    designer_charge: DEFAULT_DESIGNER_CHARGE,
     _gstPct: 5, shipping: '', ship_region: 'Tamil Nadu', whatsapp_number: '', line_items: [blankItem()],
   }
 }
+// What the designer is paid to digitise embroidery artwork. A starting figure, not a rule: the
+// field is editable on every order, and an order with no embroidery is set to zero.
+const DEFAULT_DESIGNER_CHARGE = 800
+
 const waSource = (order) => order.whatsapp_number || order.contact_number || order.billing_mobile
 
 // order-level totals: qty & product subtotal are summed straight from the line items as given
@@ -146,9 +154,11 @@ function recompute(f) {
   const qty = items.reduce((s, it) => s + (parseInt(it.qty) || 0), 0)
   const pt = items.reduce((s, it) => s + (it.product_total !== undefined && it.product_total !== '' ? Number(it.product_total) : 0), 0)
   const ship = Number(f.shipping) || 0
+  // Taxed with the goods, like shipping: it is part of the same supply, not a fee beside it.
+  const design = Number(f.designer_charge) || 0
   const gstPct = f._gstPct ?? 0
-  const gst = Math.round((pt + ship) * gstPct / 100)
-  const grand = pt + ship + gst
+  const gst = Math.round((pt + design + ship) * gstPct / 100)
+  const grand = pt + design + ship + gst
   const advance = Math.round(grand / 2)
   return { product_total: pt, gst_amount: gst, grand_total: grand, advance, balance: grand - advance, total_cost: grand, qty }
 }
@@ -178,6 +188,7 @@ function buildDescription(f) {
   L.push(`📧 *Email Address:* ${dash(f.billing_email)}`)
   L.push(`🧾 *GST Number:* ${f.gst_number || 'NA'}`, '')
   L.push(`💰 *Product Subtotal:* ₹${f.product_total || 0}`)
+  if (Number(f.designer_charge)) L.push(`🧵 *Embroidery Designer Charge:* ₹${f.designer_charge}`)
   L.push(`🚚 *Shipping Charges:* ₹${f.shipping || 0}`)
   L.push(`🧾 *GST (${f._gstPct ?? 0}%):* ₹${f.gst_amount || 0}`)
   L.push(`💵 *Grand Total:* ₹${f.grand_total || 0}`, '')
@@ -619,7 +630,7 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
   }, [form?.id, openLinkCount])
 
   const openEdit = (o) => {
-    const base = (Number(o.product_total) || 0) + (Number(o.shipping) || 0)
+    const base = (Number(o.product_total) || 0) + (Number(o.designer_charge) || 0) + (Number(o.shipping) || 0)
     let items = Array.isArray(o.line_items) && o.line_items.length ? o.line_items : null
     if (!items) {
       // legacy single-product order — synthesize one line item from the flat fields
@@ -1309,6 +1320,11 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
           <div className="form-row">
             <div className="input-group"><label>Shipping Region *</label><select required value={form.ship_region || 'Tamil Nadu'} onChange={e => onShipRegion(e.target.value)}>{SHIP_REGIONS.map(r => <option key={r}>{r}</option>)}</select></div>
             <div className="input-group"><label>Shipping (₹) *</label><input required type="number" value={form.shipping ?? ''} onChange={e => setF({ shipping: e.target.value }, true)} /></div>
+            <div className="input-group">
+              <label>Designer charge (₹) <span className="label-hint">embroidery artwork</span></label>
+              <input type="number" min="0" value={form.designer_charge ?? ''} placeholder="0"
+                onChange={e => setF({ designer_charge: e.target.value }, true)} />
+            </div>
             <div className="input-group"><label>GST *</label><select required value={form._gstPct ?? 0} onChange={e => setF({ _gstPct: Number(e.target.value) }, true)}><option value={0}>No GST</option><option value={5}>5%</option><option value={12}>12%</option><option value={18}>18%</option></select></div>
             <div className="input-group"><label>GST amount</label><input readOnly value={form.gst_amount ?? 0} /></div>
           </div>

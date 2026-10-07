@@ -510,6 +510,10 @@ async function ensureCrewfitSchema() {
                 ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS tracking_sent_at TIMESTAMP;
                 ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS product_total NUMERIC;
                 ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS shipping NUMERIC;
+                -- What the embroidery designer is paid to digitise the artwork. A real cost on
+                -- nearly every embroidered order, charged on to the customer and taxed with the
+                -- rest of the order, so it is a column rather than a number buried in a note.
+                ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS designer_charge NUMERIC;
                 ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS gst_amount NUMERIC;
                 ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS grand_total NUMERIC;
                 ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS advance NUMERIC;
