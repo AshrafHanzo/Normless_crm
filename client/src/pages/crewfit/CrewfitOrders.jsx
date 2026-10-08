@@ -70,9 +70,30 @@ export default function CrewfitOrders() {
     if (res?.counts) setCounts(res.counts)
     if (res?.pagination) t.setPagination(res.pagination)
     setLoading(false)
-    const focus = params.get('focus')
-    if (focus) { const f = list.find(o => String(o.id) === focus); if (f) setTarget(f); params.delete('focus'); setParams(params, { replace: true }) }
   }
+
+  /**
+   * A notification about an order opens that order.
+   *
+   * Fetched by id rather than looked for in the list, because the order being discussed is usually
+   * not the one in front of you: it is older than the page in view, or sits under a filter or a
+   * tab you are not on, or you were already on this page and the list never reloaded. Any of those
+   * meant clicking the notification did nothing at all.
+   */
+  useEffect(() => {
+    const focus = params.get('focus')
+    if (!focus) return
+    let live = true
+    apiFetch(`/api/crewfit/orders/${focus}`).then(order => {
+      if (!live) return
+      if (order && !order.error && order.id) setTarget(order)
+      else toast.error('That order is no longer here')
+      params.delete('focus')
+      setParams(params, { replace: true })
+    })
+    return () => { live = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params])
 
   const setFilter = (k, v) => { setFilters(f => ({ ...f, [k]: v })); t.resetPage() }
   // Kept in the URL so a tab survives a refresh and can be linked to from the dashboard.

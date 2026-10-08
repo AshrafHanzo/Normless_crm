@@ -255,7 +255,114 @@ const intraFrom = (gstin, fallback) => {
   return /^\d{2}$/.test(code) ? code === '33' : fallback
 }
 
-function PurchaseDrawer({ bill, suppliers, onClose, onSaved, apiFetch, toast }) {
+/**
+ * Adding a vendor without leaving the bill you are recording.
+ *
+ * The supplier list was whatever had been seeded, so a new fabric house or courier meant typing
+ * its name, GSTIN and address again on every bill — and the register ended up with four spellings
+ * of one supplier. Saved once here, it is in the list from then on, and its usual particulars,
+ * GST rate and rate per unit come with it the next time it is picked.
+ *
+ * Opens prefilled from whatever has already been typed on the bill, since that is usually the
+ * vendor being added.
+ */
+function VendorForm({ seed, onClose, onSaved, apiFetch, toast }) {
+  const [form, setForm] = useState({
+    name: seed?.company_name || '', gstin: seed?.gstin || '', location: seed?.location || '',
+    default_particulars: seed?.particulars || '', default_gst_pct: seed?.gst_pct ?? '', default_rate: seed?.rate ?? '',
+    intra_state: seed?.intra_state !== false,
+  })
+  const [busy, setBusy] = useState(false)
+  const set = (patch) => setForm(f => ({ ...f, ...patch }))
+  const intra = intraFrom(form.gstin, form.intra_state !== false)
+
+  const save = async () => {
+    if (!form.name.trim()) { toast.error("The vendor's name is required"); return }
+    setBusy(true)
+    const res = await apiFetch('/api/invoices/purchase/suppliers', {
+      method: 'POST',
+      body: JSON.stringify({
+        ...form,
+        name: form.name.trim(),
+        default_gst_pct: form.default_gst_pct === '' ? null : Number(form.default_gst_pct),
+        default_rate: form.default_rate === '' ? null : Number(form.default_rate),
+      }),
+    })
+    setBusy(false)
+    if (!res || res.error) { toast.error(res?.error || 'Could not save that vendor'); return }
+    toast.success(`${res.supplier.name} saved — it will be in the list from now on`)
+    onSaved(res.supplier)
+  }
+
+  return (
+    <div className="confirm-overlay" onClick={onClose}>
+      <div className="confirm-card" style={{ maxWidth: 620 }} onClick={e => e.stopPropagation()} role="dialog" aria-modal="true">
+        <h3 className="confirm-title">Add a vendor</h3>
+        <p className="confirm-message">Saved to the supplier list, with its usual bill details filled in for next time.</p>
+        <div className="support-form">
+          <div className="input-group">
+            <label>Vendor name *</label>
+            <input value={form.name} autoFocus placeholder="Registered name, as it appears on the bill"
+              onChange={e => set({ name: e.target.value })} />
+          </div>
+          <div className="form-row">
+            <div className="input-group">
+              <label>GST number <span className="label-hint">optional</span></label>
+              <input value={form.gstin} maxLength={15} placeholder="33AAICI1044H1ZX"
+                onChange={e => set({ gstin: e.target.value.toUpperCase() })} />
+              <div className={`gst-hint${!form.gstin ? ' warn' : ''}`}>
+                {form.gstin
+                  ? `State code ${form.gstin.slice(0, 2)} → ${intra ? 'within Tamil Nadu (CGST + SGST)' : 'outside Tamil Nadu (IGST)'}`
+                  : 'Unregistered — say which it is below'}
+              </div>
+            </div>
+            <div className="input-group">
+              <label>Location <span className="label-hint">optional</span></label>
+              <input value={form.location} placeholder="Madhavaram, Chennai - 600060"
+                onChange={e => set({ location: e.target.value })} />
+            </div>
+          </div>
+          {!form.gstin && (
+            <div className="input-group">
+              <label>Supply type</label>
+              <select value={form.intra_state ? 'intra' : 'inter'} onChange={e => set({ intra_state: e.target.value === 'intra' })}>
+                <option value="intra">Within Tamil Nadu — CGST + SGST</option>
+                <option value="inter">Outside Tamil Nadu — IGST</option>
+              </select>
+            </div>
+          )}
+          {/* What this vendor usually bills for. Filled into the next bill the moment they are
+              picked, which is the whole saving. */}
+          <div className="input-group">
+            <label>Usually bills for <span className="label-hint">optional</span></label>
+            <input value={form.default_particulars} placeholder="Fabric — 240 GSM cotton"
+              onChange={e => set({ default_particulars: e.target.value })} />
+          </div>
+          <div className="form-row">
+            <div className="input-group">
+              <label>Usual GST <span className="label-hint">as a decimal, e.g. 0.18</span></label>
+              <input type="number" step="0.01" min="0" max="1" value={form.default_gst_pct}
+                onChange={e => set({ default_gst_pct: e.target.value })} />
+            </div>
+            <div className="input-group">
+              <label>Usual rate <span className="label-hint">optional</span></label>
+              <input type="number" step="0.01" min="0" value={form.default_rate}
+                onChange={e => set({ default_rate: e.target.value })} />
+            </div>
+          </div>
+        </div>
+        <div className="confirm-actions">
+          <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
+          <button className="btn btn-primary" disabled={busy || !form.name.trim()} onClick={save}>
+            {busy ? 'Saving…' : 'Save vendor'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function PurchaseDrawer({ bill, suppliers, onClose, onSaved, onSupplierAdded, apiFetch, toast }) {
   const [form, setForm] = useState(bill)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -305,6 +412,8 @@ function PurchaseDrawer({ bill, suppliers, onClose, onSaved, apiFetch, toast }) 
     const gst = round2(taxable * pct)
     set({ gst_pct: v, gst_amount: gst, gross: round2(taxable + gst) })
   }
+
+  const [addingVendor, setAddingVendor] = useState(false)
 
   const pickSupplier = (id) => {
     const s = suppliers.find(x => String(x.id) === String(id))
@@ -364,7 +473,13 @@ function PurchaseDrawer({ bill, suppliers, onClose, onSaved, apiFetch, toast }) 
 
           <div className="form-section">Supplier</div>
           <div className="input-group">
-            <label>Pick a saved supplier</label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              Pick a saved supplier
+              {/* The list is not fixed: a vendor billing us for the first time is added here and
+                  is in it from then on. */}
+              <button type="button" className="mini-btn" style={{ marginLeft: 'auto' }}
+                onClick={() => setAddingVendor(true)}>+ Add vendor</button>
+            </label>
             <select value={form.supplier_id || ''} onChange={e => pickSupplier(e.target.value)}>
               <option value="">— New / one-off supplier —</option>
               {suppliers.map(s => (
@@ -470,6 +585,25 @@ function PurchaseDrawer({ bill, suppliers, onClose, onSaved, apiFetch, toast }) 
             <button className="btn" onClick={guard.requestClose}>Cancel</button>
             <button className="btn btn-primary" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save bill'}</button>
           </div>
+
+          {addingVendor && (
+            <VendorForm seed={form} apiFetch={apiFetch} toast={toast}
+              onClose={() => setAddingVendor(false)}
+              onSaved={async (supplier) => {
+                setAddingVendor(false)
+                // The picker's list belongs to the page, so it reloads there; the bill in hand
+                // takes the new vendor straight away rather than waiting for a second click.
+                await onSupplierAdded?.()
+                set({
+                  supplier_id: supplier.id, company_name: supplier.name, gstin: supplier.gstin || '',
+                  location: supplier.location || '',
+                  particulars: form.particulars || supplier.default_particulars || '',
+                  gst_pct: supplier.default_gst_pct != null ? Number(supplier.default_gst_pct) : form.gst_pct,
+                  rate: form.rate || (supplier.default_rate != null ? Number(supplier.default_rate) : ''),
+                  intra_state: supplier.intra_state,
+                })
+              }} />
+          )}
         </div>
       </div>
     </div>
@@ -664,6 +798,7 @@ function PurchaseTab({ apiFetch, toast, isAdmin, download }) {
       {editing && (
         <PurchaseDrawer bill={editing} suppliers={suppliers} apiFetch={apiFetch} toast={toast}
           onClose={() => setEditing(null)}
+          onSupplierAdded={loadSuppliers}
           onSaved={() => { setEditing(null); loadBills(); loadSuppliers() }} />
       )}
     </>
