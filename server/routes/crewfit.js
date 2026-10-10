@@ -1144,7 +1144,10 @@ router.get('/products', async (req, res) => {
   }
 });
 
-const PFIELDS = ['name', 'category', 'fit', 'gsm', 'material', 'from_price', 'blurb', 'features', 'colors', 'tiers', 'active', 'sort_order'];
+// `hsn` is here because the tax register and every invoice line read it: a product added through
+// the catalog with no HSN falls back to the t-shirt heading, which is wrong the moment the
+// catalog holds something that is not a t-shirt.
+const PFIELDS = ['name', 'category', 'fit', 'gsm', 'material', 'from_price', 'blurb', 'features', 'colors', 'tiers', 'active', 'sort_order', 'hsn'];
 const encodeP = (body) => {
   const out = {};
   for (const f of PFIELDS) {

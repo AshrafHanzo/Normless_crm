@@ -40,14 +40,14 @@ export default function CrewfitCatalog() {
     (!q || p.name.toLowerCase().includes(q.toLowerCase()) || (p.material || '').toLowerCase().includes(q.toLowerCase()))
   )
 
-  const openNew = () => setEdit({ name: '', category: 'Polos', fit: 'Unisex', gsm: '', material: '', from_price: '', blurb: '', _features: '', _colors: '', _tiers: '5–10 = \n11–20 = \n21–50 = \n51–100 = \n100+ = On request' })
+  const openNew = () => setEdit({ name: '', category: 'Polos', fit: 'Unisex', gsm: '', material: '', from_price: '', blurb: '', hsn: '', _features: '', _colors: '', _tiers: '5–10 = \n11–20 = \n21–50 = \n51–100 = \n100+ = On request' })
   const openEdit = (p) => setEdit({ ...p, _features: (p.features || []).join(', '), _colors: (p.colors || []).join(', '), _tiers: (p.tiers || []).map(([l, v]) => `${l} = ${v}`).join('\n') })
 
   const save = async () => {
     setSaving(true)
     const body = {
       name: edit.name, category: edit.category, fit: edit.fit, gsm: String(edit.gsm), material: edit.material,
-      from_price: parseFloat(edit.from_price) || 0, blurb: edit.blurb,
+      from_price: parseFloat(edit.from_price) || 0, blurb: edit.blurb, hsn: edit.hsn || null,
       features: edit._features.split(',').map(s => s.trim()).filter(Boolean),
       colors: edit._colors.split(',').map(s => s.trim()).filter(Boolean),
       tiers: edit._tiers.split('\n').map(l => l.split('=')).filter(a => a[0]?.trim()).map(([l, v]) => {
@@ -117,13 +117,19 @@ export default function CrewfitCatalog() {
             <div className="drawer-body">
               <div className="form-row">
                 <div className="input-group"><label>Name *</label><input value={edit.name} onChange={e => setEdit({ ...edit, name: e.target.value })} /></div>
-                <div className="input-group"><label>Category</label><select value={edit.category} onChange={e => setEdit({ ...edit, category: e.target.value })}>{['Polos', 'T-Shirts', 'Kids', 'Other'].map(c => <option key={c}>{c}</option>)}</select></div>
+                <div className="input-group"><label>Category</label><select value={edit.category} onChange={e => setEdit({ ...edit, category: e.target.value })}>{['Polos', 'T-Shirts', 'Kids', 'Caps', 'Other'].map(c => <option key={c}>{c}</option>)}</select></div>
                 <div className="input-group"><label>Fit</label><input value={edit.fit} onChange={e => setEdit({ ...edit, fit: e.target.value })} /></div>
                 <div className="input-group"><label>GSM</label><input value={edit.gsm} onChange={e => setEdit({ ...edit, gsm: e.target.value })} /></div>
               </div>
               <div className="input-group"><label>Material</label><input value={edit.material} onChange={e => setEdit({ ...edit, material: e.target.value })} /></div>
               <div className="input-group"><label>Blurb</label><input value={edit.blurb} onChange={e => setEdit({ ...edit, blurb: e.target.value })} /></div>
               <div className="input-group"><label>From price (₹/pc)</label><input type="number" value={edit.from_price} onChange={e => setEdit({ ...edit, from_price: e.target.value })} /></div>
+              {/* Printed on every invoice line and summed in the tax register. Left blank, the
+                  line is billed under the t-shirt heading, which a cap is not. */}
+              <div className="input-group">
+                <label>HSN code <span className="label-hint">as it should print on the invoice</span></label>
+                <input value={edit.hsn || ''} placeholder="61091000" onChange={e => setEdit({ ...edit, hsn: e.target.value.replace(/\D/g, '') })} />
+              </div>
               <div className="input-group"><label>Features (comma separated)</label><input value={edit._features} onChange={e => setEdit({ ...edit, _features: e.target.value })} /></div>
               <div className="input-group"><label>Colors (comma separated)</label><input value={edit._colors} onChange={e => setEdit({ ...edit, _colors: e.target.value })} /></div>
               <div className="input-group"><label>MOQ tiers (one per line: <code>label = price</code>)</label><AutoTextarea minRows={5} value={edit._tiers} onChange={e => setEdit({ ...edit, _tiers: e.target.value })} /></div>
