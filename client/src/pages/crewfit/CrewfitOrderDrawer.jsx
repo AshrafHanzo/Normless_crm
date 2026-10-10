@@ -54,6 +54,20 @@ function parseSimpleSizeBreakdown(text) {
 }
 const buildSizeBreakdown = (sizes) => STANDARD_SIZES.filter(s => Number(sizes[s]) > 0).map(s => `${s}-${sizes[s]}`).join(', ')
 
+/**
+ * A product that does not come in sizes.
+ *
+ * Caps are the first of them: there is no XS–5XL to break a quantity across, so the size grid has
+ * nothing to collect and the quantity has to be typed straight in. Read from the catalog rather
+ * than hardcoded to a name, so anything else sold in one size — a tote, a band — behaves the same
+ * the day it is added, as long as its fit says so.
+ */
+const ONE_SIZE_CATEGORIES = ['Caps', 'Accessories']
+function isOneSize(product) {
+  if (!product) return false
+  return ONE_SIZE_CATEGORIES.includes(product.category) || /free size|one size/i.test(product.fit || '')
+}
+
 function priceFor(product, qty) {
   if (!product || !qty) return null
   let price = null
@@ -690,7 +704,13 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
     const p = products.find(x => x.name === name)
     const qty = parseInt(item.qty) || 0
     const pp = priceFor(p, qty)
-    updateItem(idx, { product: name, ...(pp != null ? { unit_price: pp, product_total: pp * qty } : {}) })
+    // A one-size product has no breakdown to derive a quantity from, so the line switches to a
+    // typed quantity the moment one is picked — rather than leaving the field greyed out under a
+    // size grid that cannot be filled in. Switching back to a sized product restores the grid.
+    const sizing = isOneSize(p)
+      ? { _sizeMode: 'manual', _sizes: {}, size_breakdown: item.size_breakdown || 'Free size' }
+      : (isOneSize(products.find(x => x.name === item.product)) ? { _sizeMode: 'standard', _sizes: {}, size_breakdown: '' } : {})
+    updateItem(idx, { product: name, ...sizing, ...(pp != null ? { unit_price: pp, product_total: pp * qty } : {}) })
   }
   const onItemQty = (idx, q, extra = {}) => {
     const item = form.line_items[idx]
@@ -1184,6 +1204,7 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
             const itemProduct = products.find(p => p.name === item.product)
             const itemColorOptions = itemProduct?.colors || null
             const itemCatalogPrice = priceFor(itemProduct, parseInt(item.qty))
+            const itemOneSize = isOneSize(itemProduct)
             return (
               <div key={idx} ref={el => { itemRefs.current[idx] = el }} className={`line-item-card${flashItem === idx ? ' just-added' : ''}`}>
                 <div className="line-item-header">
@@ -1202,7 +1223,12 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
                     {itemColorOptions ? <select required value={item.color || ''} onChange={e => updateItem(idx, { color: e.target.value })}><option value="">—</option>{itemColorOptions.map(c => <option key={c}>{c}</option>)}</select>
                       : <input required value={item.color || ''} onChange={e => updateItem(idx, { color: e.target.value })} placeholder="Color" />}
                   </div>
-                  <div className="input-group"><label>Qty *</label><input required type="number" readOnly={item._sizeMode !== 'manual'} value={item.qty || ''} onChange={e => onItemQty(idx, e.target.value)} title={item._sizeMode !== 'manual' ? 'Derived from the size breakdown below' : ''} /></div>
+                  <div className="input-group"><label>Qty *</label>
+                    <input required type="number" value={item.qty || ''}
+                      readOnly={!itemOneSize && item._sizeMode !== 'manual'}
+                      onChange={e => onItemQty(idx, e.target.value)}
+                      title={!itemOneSize && item._sizeMode !== 'manual' ? 'Derived from the size breakdown below' : ''} />
+                  </div>
                   <div className="input-group"><label>Printing type *</label>
                     <select required value={item.printing_type || ''} onChange={e => updateItem(idx, { printing_type: e.target.value })}>
                       <option value="">—</option>{PRINTING_TYPES.map(v => <option key={v}>{v}</option>)}
@@ -1226,6 +1252,19 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
                     })}
                   </div>
                 </div>
+                {/* Nothing to break down on a one-size product: the quantity above is the whole
+                    answer, and a grid of sizes that cannot be filled in only invites the question
+                    of which box to type in. */}
+                {itemOneSize ? (
+                  <div className="input-group">
+                    <label>Size</label>
+                    <input value={item.size_breakdown || 'Free size'}
+                      onChange={e => updateItem(idx, { size_breakdown: e.target.value })} />
+                    <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 6 }}>
+                      One size — set the quantity above.
+                    </div>
+                  </div>
+                ) : (
                 <div className="input-group">
                   <label>Size breakdown *
                     <span style={{ marginLeft: 10 }}>
@@ -1249,6 +1288,7 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
                     </>
                   )}
                 </div>
+                )}
                 <div className="form-row">
                   <div className="input-group"><label>Price per piece (₹) *{itemCatalogPrice ? <span className="unit-hint"> catalog: ₹{itemCatalogPrice}</span> : ''}</label><input required type="number" value={item.unit_price ?? ''} onChange={e => onItemUnitPrice(idx, e.target.value)} placeholder={itemCatalogPrice ? String(itemCatalogPrice) : ''} /></div>
                   <div className="input-group"><label>Line Total (₹) *</label><input required type="number" value={item.product_total ?? ''} onChange={e => updateItem(idx, { product_total: e.target.value })} /></div>
