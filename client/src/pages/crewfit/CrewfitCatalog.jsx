@@ -117,7 +117,7 @@ export default function CrewfitCatalog() {
             <div className="drawer-body">
               <div className="form-row">
                 <div className="input-group"><label>Name *</label><input value={edit.name} onChange={e => setEdit({ ...edit, name: e.target.value })} /></div>
-                <div className="input-group"><label>Category</label><select value={edit.category} onChange={e => setEdit({ ...edit, category: e.target.value })}>{['Polos', 'T-Shirts', 'Kids', 'Caps', 'Other'].map(c => <option key={c}>{c}</option>)}</select></div>
+                <div className="input-group"><label>Category</label><select value={edit.category} onChange={e => setEdit({ ...edit, category: e.target.value })}>{['Polos', 'T-Shirts', 'Kids', 'Caps', 'Accessories', 'Other'].map(c => <option key={c}>{c}</option>)}</select></div>
                 <div className="input-group"><label>Fit</label><input value={edit.fit} onChange={e => setEdit({ ...edit, fit: e.target.value })} /></div>
                 <div className="input-group"><label>GSM</label><input value={edit.gsm} onChange={e => setEdit({ ...edit, gsm: e.target.value })} /></div>
               </div>
