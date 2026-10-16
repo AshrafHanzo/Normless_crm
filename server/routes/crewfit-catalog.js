@@ -100,8 +100,11 @@ router.get('/pdf/:id/file', async (req, res) => {
 
         const full = path.join(PDF_DIR, path.basename(row.file_path));
         if (!fs.existsSync(full)) return res.status(404).json({ error: 'That catalogue file is missing from the server' });
+        // `?inline=1` is the in-app preview: the same bytes, shown rather than saved.
+        const inline = String(req.query.inline || '') === '1';
         res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition', `attachment; filename="${row.file_name.replace(/"/g, '')}"`);
+        res.setHeader('Content-Disposition',
+            `${inline ? 'inline' : 'attachment'}; filename="${row.file_name.replace(/"/g, '')}"`);
         fs.createReadStream(full).pipe(res);
     } catch (err) {
         console.error('catalog pdf download error:', err);
@@ -131,10 +134,9 @@ router.post('/pdf', canUploadPdf, (req, res, next) => pdfUpload.single('file')(r
     }
 });
 
-/** Only the owner removes a version, and the file goes with the record. */
+/** Removing a version is part of maintaining the catalogue, so it rides on the same grant. */
 router.delete('/pdf/:id', canUploadPdf, async (req, res) => {
     try {
-        if (req.user?.role !== 'owner') return res.status(403).json({ error: 'Only the owner can remove a catalogue version' });
         const row = (await db.query('DELETE FROM crewfit_catalog_files WHERE id = $1 RETURNING file_path, version',
             [parseInt(req.params.id, 10) || 0])).rows[0];
         if (!row) return res.status(404).json({ error: 'That version is already gone' });
@@ -277,7 +279,6 @@ router.post('/samples', canUploadSamples, (req, res, next) => sampleUpload.array
 /** Remove an uploaded sample. Order photos are not touched from here — they belong to the order. */
 router.delete('/samples/:id', canUploadSamples, async (req, res) => {
     try {
-        if (req.user?.role !== 'owner') return res.status(403).json({ error: 'Only the owner can remove a sample' });
         const row = (await db.query('DELETE FROM crewfit_samples WHERE id = $1 RETURNING file_path',
             [parseInt(req.params.id, 10) || 0])).rows[0];
         if (!row) return res.status(404).json({ error: 'That sample is already gone' });

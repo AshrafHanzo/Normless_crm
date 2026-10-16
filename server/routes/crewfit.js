@@ -38,8 +38,10 @@ const upload = multer({
   }),
   limits: { fileSize: MAX_UPLOAD_MB * 1024 * 1024, files: MAX_UPLOAD_FILES },
   fileFilter: (req, file, cb) => {
-    if (/^image\/(jpeg|png|webp)$/.test(file.mimetype)) cb(null, true);
-    else cb(new Error('Only JPG, PNG or WEBP images are allowed'));
+    // Artwork arrives as a PDF as often as a picture — a cap asset is usually the file the
+    // embroiderer or printer was given, not a photograph of one.
+    if (/^image\/(jpeg|png|webp)$/.test(file.mimetype) || file.mimetype === 'application/pdf') cb(null, true);
+    else cb(new Error('Only JPG, PNG, WEBP or PDF files are allowed'));
   },
 });
 // multer's own errors land in next(err) — surface them as a normal 400 instead of a 500 crash.
@@ -1058,6 +1060,9 @@ const IMAGE_KINDS = {
   prod: { field: 'prodImages', label: 'production' },
   emb: { field: 'embImages', label: 'embroidery file' },
   embm: { field: 'embMeasureImages', label: 'embroidery measurement' },
+  // Caps and the other one-size pieces are made from a supplied artwork file rather than a size
+  // breakdown, so the file itself belongs on the line it was ordered against.
+  asset: { field: 'assetImages', label: 'asset file' },
 };
 
 // POST /api/crewfit/orders/:id/images — attach up to 5 images per product line item.

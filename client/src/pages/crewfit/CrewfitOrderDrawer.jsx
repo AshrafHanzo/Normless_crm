@@ -114,6 +114,7 @@ const IMAGE_KINDS = {
   prod: { uploaded: 'prodImages', pending: '_pendingProd', label: 'production' },
   emb: { uploaded: 'embImages', pending: '_pendingEmb', label: 'embroidery file' },
   embm: { uploaded: 'embMeasureImages', pending: '_pendingEmbM', label: 'embroidery measurement' },
+  asset: { uploaded: 'assetImages', pending: '_pendingAsset', label: 'asset file' },
 }
 const PENDING_KEYS = Object.values(IMAGE_KINDS).map(k => k.pending)
 
@@ -1341,6 +1342,24 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
                       onView={i => openLightbox(idx, 'embm', imageThumbs(item, 'embm', API_URL), i)}
                       onDownloadAll={() => downloadImages(item.embMeasureImages || [], `${idx}-embm-all`)}
                       downloadBusy={bulkDownloading === `${idx}-embm-all`}
+                    />
+                  </div>
+                )}
+
+                {/* A cap or an apron is made from a supplied file rather than a size breakdown,
+                    so the artwork belongs on the line it was ordered against — where the vendor
+                    looks — instead of in a chat thread. A PDF is as likely as a picture. */}
+                {itemOneSize && (
+                  <div className="item-media-row">
+                    <ImageUploadGrid
+                      icon="🗂" label={`${itemProduct?.category === 'Caps' ? 'Cap' : 'Product'} asset files`}
+                      accept="image/png,image/jpeg,image/webp,application/pdf"
+                      thumbs={imageThumbs(item, 'asset', API_URL)}
+                      busy={imgBusy === `${idx}-asset`}
+                      onUpload={files => uploadItemImages(idx, 'asset', files)}
+                      onView={i => openLightbox(idx, 'asset', imageThumbs(item, 'asset', API_URL), i)}
+                      onDownloadAll={() => downloadImages(item.assetImages || [], `${idx}-asset-all`)}
+                      downloadBusy={bulkDownloading === `${idx}-asset-all`}
                     />
                   </div>
                 )}

@@ -2,8 +2,13 @@ import { useState, useEffect, useMemo } from 'react'
 import { useApi, useAuth } from '../../App'
 import { useToast } from '../../components/Toast'
 import Icon from '../../components/Icon'
+import FileDrop from '../../components/FileDrop'
 
 const SOURCES = ['Production', 'Mock', 'Uploaded']
+// nginx caps a request at 55MB and phone photographs are three or four megabytes each, so a batch
+// is checked here — where it can be said plainly — rather than coming back as a wall of HTML from
+// a server that rejected it.
+const BATCH_LIMIT_MB = 45
 const day = (v) => (v ? new Date(v).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit' }) : '')
 
 /**
@@ -82,11 +87,6 @@ export default function SampleLibraryTab() {
     URL.revokeObjectURL(url)
     toast.success(`${urls.length} image${urls.length === 1 ? '' : 's'} downloaded`)
   }
-
-  // nginx caps a request at 55MB, and phone photographs are three or four megabytes each — so a
-  // batch is checked here, where it can be said plainly, rather than coming back as a wall of
-  // HTML from a server that rejected it.
-  const BATCH_LIMIT_MB = 45
 
   const upload = async () => {
     if (!form?.files?.length) { toast.error('Choose the images'); return }
@@ -191,11 +191,12 @@ export default function SampleLibraryTab() {
                 onChange={e => setForm(f => ({ ...f, title: e.target.value }))} />
             </div>
           </div>
-          <div className="input-group">
-            <label>Images *</label>
-            <input type="file" accept="image/png,image/jpeg,image/webp" multiple
-              onChange={e => setForm(f => ({ ...f, files: [...(e.target.files || [])] }))} />
-          </div>
+          <FileDrop
+            icon="🖼" accept="image/png,image/jpeg,image/webp" multiple busy={busy}
+            files={form.files || []}
+            onFiles={files => setForm(f => ({ ...f, files }))}
+            label="Drag the photographs here, or click to choose"
+            hint={`Up to 12 at a time, under ${BATCH_LIMIT_MB}MB altogether`} />
           <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
             <button className="btn btn-secondary" onClick={() => setForm(null)}>Cancel</button>
             <button className="btn btn-primary" disabled={busy || !form.files?.length} onClick={upload}>

@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useApi } from '../../App'
 import { useToast } from '../../components/Toast'
 import Icon from '../../components/Icon'
+import FileDrop from '../../components/FileDrop'
 
 const inr = (v) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 2 }).format(Number(v) || 0)
 const day = (v) => (v ? new Date(v).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—')
@@ -54,11 +55,12 @@ export default function UploadDrawer({ onClose, onLoaded }) {
 
         <div className="drawer-body">
           <div className="support-form">
-            <div className="input-group">
-              <label>The statement, as the bank sent it <span className="label-hint">PDF</span></label>
-              <input type="file" accept="application/pdf"
-                onChange={e => { setFile(e.target.files?.[0] || null); setFound(null) }} />
-            </div>
+            <FileDrop
+              icon="🏦" accept="application/pdf" busy={busy}
+              files={file ? [file] : []}
+              onFiles={files => { setFile(files[0] || null); setFound(null) }}
+              label="Drag the statement here, or click to choose"
+              hint="The PDF as the bank sent it, password and all" />
             <div className="input-group">
               <label>Password <span className="label-hint">used to open the file, never stored</span></label>
               <input type="password" value={password} autoComplete="off" placeholder="The one the bank mails with it"
