@@ -334,16 +334,33 @@ app.use('/api', (req, res) => {
     res.status(404).json({ error: `API route not found: ${req.url}` });
 });
 
-// Uploaded design mocks / production photos (Crewfit orders)
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+// Uploaded design mocks / production photos (Crewfit orders).
+//
+// An upload is immutable — every file is written under a timestamped, random name and a replaced
+// photo is a new name — so a browser that has one never needs to ask about it again. Without this
+// every thumbnail on a page costs a round trip to be told "not modified", which on a gallery of
+// fifty is fifty round trips for nothing.
+app.use('/uploads', express.static(path.join(__dirname, 'uploads'), {
+    maxAge: '30d',
+    immutable: true,
+}));
 
 // Serve React frontend in production
 const clientBuildPath = path.join(__dirname, '..', 'client', 'dist');
-app.use(express.static(clientBuildPath));
+// The built assets carry a content hash in their names, so they can be held for a year: a new
+// build is a new filename. index.html is the one file that must never be cached, since it is what
+// points at those names — it is served by the catch-all below with no max-age.
+app.use('/assets', express.static(path.join(clientBuildPath, 'assets'), {
+    maxAge: '1y',
+    immutable: true,
+}));
+app.use(express.static(clientBuildPath, { index: false, maxAge: '1h' }));
 
 // Catch-all for SPA routing
 app.use((req, res, next) => {
   if (!req.path.startsWith('/api')) {
+    // Never cached: it names the hashed bundles, so a stale copy pins everyone to the old build.
+    res.setHeader('Cache-Control', 'no-cache');
     res.sendFile(path.join(clientBuildPath, 'index.html'), (err) => {
       if (err) next();
     });
