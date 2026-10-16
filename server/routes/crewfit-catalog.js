@@ -34,9 +34,31 @@ const MAX_PDF_MB = 40;
 const MAX_IMAGE_MB = 15;
 // Twelve rather than twenty: nginx takes 55MB in a request and these are phone photographs.
 const MAX_IMAGES = 12;
-// A zip is streamed, so memory is not the limit — patience is. Past this many files the browser
-// is better off being told to narrow the selection.
+// Originals stream straight off the disk, so the only limit is patience.
 const MAX_ZIP_FILES = 400;
+/**
+ * Resized copies are a different matter. Decoding one 9MB phone photograph costs jimp around
+ * 590MB of resident memory on this server — measured, not guessed — and it is pure JavaScript
+ * because the CPU here cannot run a native image library. So the work is done one image at a
+ * time, released between each, and capped: eighty is a few minutes of work with bytes flowing the
+ * whole way, which is what keeps the proxy from giving up.
+ */
+const MAX_WEB_ZIP_FILES = 80;
+
+/**
+ * One resize at a time, across every request.
+ *
+ * Two people zipping at once would otherwise want a gigabyte between them and take the process
+ * down with them — which is exactly what happened the first time this ran against real
+ * photographs. The queue costs a little waiting and buys the server staying up.
+ */
+let resizeQueue = Promise.resolve();
+const resizeInTurn = (fn) => {
+    const run = resizeQueue.then(fn, fn);
+    // Keep the chain alive whatever happens inside, or one failure stalls every later caller.
+    resizeQueue = run.catch(() => {});
+    return run;
+};
 
 /* ── Gates ──────────────────────────────────────────────────────────────────────────────────── */
 
@@ -306,10 +328,15 @@ router.post('/samples/zip', async (req, res) => {
             // Only the two places images live. A path from anywhere else is somebody probing.
             .filter(u => /^\/uploads\/(crewfit|crewfit-samples)\//.test(u) && !u.includes('..'));
         if (!urls.length) return res.status(400).json({ error: 'Nothing was selected' });
-        if (urls.length > MAX_ZIP_FILES) {
-            return res.status(400).json({ error: `That is ${urls.length} images — narrow it to ${MAX_ZIP_FILES} or fewer` });
-        }
         const web = String(req.body?.size || 'original') === 'web';
+        const cap = web ? MAX_WEB_ZIP_FILES : MAX_ZIP_FILES;
+        if (urls.length > cap) {
+            return res.status(400).json({
+                error: web
+                    ? `That is ${urls.length} images to resize — take ${MAX_WEB_ZIP_FILES} or fewer, or download the originals`
+                    : `That is ${urls.length} images — narrow it to ${MAX_ZIP_FILES} or fewer`,
+            });
+        }
         const label = (trim(req.body?.name) || 'crewfit-samples').replace(/[^a-z0-9._-]+/gi, '-').toLowerCase();
 
         // Resolved before a single header goes out. A zip is streamed, so once it has started
@@ -331,6 +358,11 @@ router.post('/samples/zip', async (req, res) => {
         const zip = new yazl.ZipFile();
         res.setHeader('Content-Type', 'application/zip');
         res.setHeader('Content-Disposition', `attachment; filename="${label}-${web ? 'web' : 'originals'}.zip"`);
+        // A browser that goes away mid-download, or a write that fails, must not reach the top
+        // level: an unhandled stream error takes the whole process with it.
+        let gone = false;
+        res.on('close', () => { gone = true; });
+        zip.outputStream.on('error', (e) => { console.error('samples zip stream error:', e.message); res.destroy(); });
         zip.outputStream.pipe(res);
 
         const used = new Set();
@@ -341,14 +373,24 @@ router.post('/samples/zip', async (req, res) => {
             used.add(name);
 
             if (!web) { zip.addFile(full, name); continue; }
+            // Nobody is waiting for this any more; stop burning the server on it.
+            if (gone) { zip.end(); return; }
             try {
-                const img = await jimp.read(full);
-                if (Math.max(img.bitmap.width, img.bitmap.height) > 1600) img.scaleToFit(1600, 1600);
-                const buf = await img.quality(82).getBufferAsync(jimp.MIME_JPEG);
-                // A "smaller" copy that came out bigger is not a smaller copy: flat artwork
-                // compresses better as PNG than as JPEG, and the point of this option is the size.
-                if (buf.length >= fs.statSync(full).size) zip.addFile(full, name);
-                else zip.addBuffer(buf, name.replace(/\.(png|webp|heic|heif)$/i, '.jpg'));
+                await resizeInTurn(async () => {
+                    let img = await jimp.read(full);
+                    if (Math.max(img.bitmap.width, img.bitmap.height) > 1600) img.scaleToFit(1600, 1600);
+                    let buf = await img.quality(82).getBufferAsync(jimp.MIME_JPEG);
+                    // A "smaller" copy that came out bigger is not a smaller copy: flat artwork
+                    // compresses better as PNG than as JPEG, and the point of this is the size.
+                    if (buf.length >= fs.statSync(full).size) zip.addFile(full, name);
+                    else zip.addBuffer(buf, name.replace(/\.(png|webp|heic|heif)$/i, '.jpg'));
+                    // Let the decoded bitmap go before the next one is read, or six photographs
+                    // hold six bitmaps and the process is killed for it.
+                    img.bitmap.data = null;
+                    img = null;
+                    buf = null;
+                    await new Promise(r => setImmediate(r));
+                });
             } catch (e) {
                 // A picture that will not resize is still a picture: send it as it is rather than
                 // dropping it out of a download somebody is relying on being complete.

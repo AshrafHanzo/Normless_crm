@@ -18,7 +18,11 @@ module.exports = {
       merge_logs: true,
       autorestart: true,
       watch: false,
-      max_memory_restart: '600M'
+      // Resizing one phone photograph costs jimp ~600MB of resident memory on this box — it is
+      // pure JavaScript because the CPU cannot run a native image library. At 600M pm2 killed the
+      // process mid-download. The server has 8GB; this leaves room for one resize plus headroom
+      // without letting a genuine leak run away.
+      max_memory_restart: '1500M'
     }
   ]
 };

@@ -71,9 +71,17 @@ export default function SampleLibraryTab() {
   // What the download button is about to send, named after whatever narrowed the list.
   const label = useMemo(() => product || term || 'crewfit-samples', [product, term])
 
+  // Resizing is the slow, memory-hungry half, so its limit is lower than the one for originals.
+  const WEB_ZIP_LIMIT = 80
+
   const downloadZip = async (size) => {
     const urls = picked.size ? [...picked] : images.map(i => i.url)
     if (!urls.length) { toast.error('Nothing to download'); return }
+    if (size === 'web' && urls.length > WEB_ZIP_LIMIT) {
+      toast.error(`${urls.length} images is too many to resize at once — select up to ${WEB_ZIP_LIMIT}, or take the originals`)
+      return
+    }
+    if (size === "web" && urls.length > 20) toast.info(`Resizing ${urls.length} photographs — this takes a minute`)
     setBusy(true)
     const res = await apiFetch('/api/crewfit/catalog/samples/zip', {
       method: 'POST', responseType: 'blob', body: JSON.stringify({ urls, size, name: label }),
