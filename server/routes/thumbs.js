@@ -19,6 +19,7 @@ const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
+const resize = require('../services/resize');
 
 const router = express.Router();
 
@@ -90,23 +91,18 @@ router.get('/', async (req, res) => {
         fs.createReadStream(cached).pipe(res);
     };
 
-    // Straight to the original when there is no resizer: slow beats broken.
-    const Jimp = loadResizer();
-    if (!Jimp) return res.redirect(String(req.query.src).split('?')[0]);
+    // Straight to the original when there is no resizer at all: slow beats broken.
+    if (!loadResizer()) return res.redirect(String(req.query.src).split('?')[0]);
 
     try {
         if (fs.existsSync(cached)) return send();
         if (!fs.existsSync(file)) return res.status(404).json({ error: 'That image is not here' });
 
         await fsp.mkdir(path.dirname(cached), { recursive: true });
-        const img = await Jimp.read(file);
-        // Never enlarged: a small image blown up is just a blurry small image.
-        if (img.getWidth() > width) img.scaleToFit(width, Jimp.AUTO);
-        // Written to a temporary name and moved into place, so two requests for the same new
-        // thumbnail at the same moment cannot serve each other a half-written file.
-        const tmp = `${cached}.${process.pid}.tmp`;
-        await img.quality(72).writeAsync(tmp);
-        await fsp.rename(tmp, cached);
+        // Rendered on the resizer thread rather than here. jimp is a second of solid arithmetic
+        // per photograph, and on this thread it stops the server answering anything at all — a
+        // page asking for a few hundred thumbnails made even the cached ones take six seconds.
+        await resize.toFile(file, width, cached);
         send();
     } catch (err) {
         console.error('thumb failed for', file, '-', err.message);

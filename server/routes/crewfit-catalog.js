@@ -45,20 +45,9 @@ const MAX_ZIP_FILES = 400;
  */
 const MAX_WEB_ZIP_FILES = 80;
 
-/**
- * One resize at a time, across every request.
- *
- * Two people zipping at once would otherwise want a gigabyte between them and take the process
- * down with them — which is exactly what happened the first time this ran against real
- * photographs. The queue costs a little waiting and buys the server staying up.
- */
-let resizeQueue = Promise.resolve();
-const resizeInTurn = (fn) => {
-    const run = resizeQueue.then(fn, fn);
-    // Keep the chain alive whatever happens inside, or one failure stalls every later caller.
-    resizeQueue = run.catch(() => {});
-    return run;
-};
+// Every resize in the application goes through one worker thread, one job at a time — see
+// services/resize.js for why that is not negotiable on this hardware.
+const resize = require('../services/resize');
 
 /* ── Gates ──────────────────────────────────────────────────────────────────────────────────── */
 
@@ -351,10 +340,6 @@ router.post('/samples/zip', async (req, res) => {
         const missing = urls.length - found.length;
         if (missing) console.warn(`samples zip: ${missing} of ${urls.length} files are missing from disk`);
 
-        // jimp is loaded only when a resize is actually asked for: it is the heaviest thing in the
-        // process and a download of originals should not pay for it.
-        const jimp = web ? require('jimp') : null;
-
         const zip = new yazl.ZipFile();
         res.setHeader('Content-Type', 'application/zip');
         res.setHeader('Content-Disposition', `attachment; filename="${label}-${web ? 'web' : 'originals'}.zip"`);
@@ -376,21 +361,11 @@ router.post('/samples/zip', async (req, res) => {
             // Nobody is waiting for this any more; stop burning the server on it.
             if (gone) { zip.end(); return; }
             try {
-                await resizeInTurn(async () => {
-                    let img = await jimp.read(full);
-                    if (Math.max(img.bitmap.width, img.bitmap.height) > 1600) img.scaleToFit(1600, 1600);
-                    let buf = await img.quality(82).getBufferAsync(jimp.MIME_JPEG);
-                    // A "smaller" copy that came out bigger is not a smaller copy: flat artwork
-                    // compresses better as PNG than as JPEG, and the point of this is the size.
-                    if (buf.length >= fs.statSync(full).size) zip.addFile(full, name);
-                    else zip.addBuffer(buf, name.replace(/\.(png|webp|heic|heif)$/i, '.jpg'));
-                    // Let the decoded bitmap go before the next one is read, or six photographs
-                    // hold six bitmaps and the process is killed for it.
-                    img.bitmap.data = null;
-                    img = null;
-                    buf = null;
-                    await new Promise(r => setImmediate(r));
-                });
+                const buf = await resize.toBuffer(full, 1600, 82);
+                // A "smaller" copy that came out bigger is not a smaller copy: flat artwork
+                // compresses better as PNG than as JPEG, and the point of this is the size.
+                if (buf.length >= fs.statSync(full).size) zip.addFile(full, name);
+                else zip.addBuffer(buf, name.replace(/\.(png|webp|heic|heif)$/i, '.jpg'));
             } catch (e) {
                 // A picture that will not resize is still a picture: send it as it is rather than
                 // dropping it out of a download somebody is relying on being complete.

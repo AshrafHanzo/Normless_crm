@@ -751,6 +751,7 @@ select { cursor: pointer; appearance: none;
 
 .samples-products { margin-bottom: 14px; }
 .samples-products .chip b { margin-left: 6px; opacity: 0.7; font-size: 11px; }
+.samples-more { display: block; width: 100%; margin-top: 16px; }
 .samples-bar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;
   margin-bottom: 14px; font-size: 13px; color: var(--text-secondary); }
 .samples-bar-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }

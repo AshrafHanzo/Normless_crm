@@ -5,6 +5,9 @@ import Icon from '../../components/Icon'
 import FileDrop from '../../components/FileDrop'
 
 const SOURCES = ['Production', 'Mock', 'Uploaded']
+const PAGE = 48
+// Resizing is the slow, memory-hungry half, so its limit is lower than the one for originals.
+const WEB_ZIP_LIMIT = 80
 // nginx caps a request at 55MB and phone photographs are three or four megabytes each, so a batch
 // is checked here — where it can be said plainly — rather than coming back as a wall of HTML from
 // a server that rejected it.
@@ -39,6 +42,10 @@ export default function SampleLibraryTab() {
   const [busy, setBusy] = useState(false)
   const [form, setForm] = useState(null)      // { product, title, files }
   const [viewing, setViewing] = useState(null)
+  // Every tile is a thumbnail request, and a thumbnail that has not been rendered yet is a second
+  // of work on the server. Four hundred and eighty at once is what made this page sit and spin,
+  // so it arrives a screenful at a time.
+  const [shown, setShown] = useState(PAGE)
 
   useEffect(() => {
     const t = setTimeout(() => setTerm(search), 300)
@@ -54,10 +61,12 @@ export default function SampleLibraryTab() {
     setLoading(false)
   }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { load() }, [term, product, source])
+  useEffect(() => { load(); setShown(PAGE); setPicked(new Set()) }, [term, product, source])
 
   const images = data?.images || []
-  const thumb = (url) => `${API_URL}/api/thumb?src=${encodeURIComponent(url)}&w=220`
+  // 220 was not one of the sizes the thumbnailer renders, so every tile silently fell back to a
+  // 96-pixel one blown up — blurry, and a fresh render of each photograph for nothing.
+  const thumb = (url) => `${API_URL}/api/thumb?src=${encodeURIComponent(url)}&w=320`
   const full = (url) => `${API_URL}${url}`
 
   const toggle = (img) => setPicked(prev => {
@@ -65,16 +74,15 @@ export default function SampleLibraryTab() {
     if (next.has(img.url)) next.delete(img.url); else next.add(img.url)
     return next
   })
-  const pickAllShown = () => setPicked(new Set(images.map(i => i.url)))
+  const pickAllShown = () => setPicked(new Set(images.slice(0, shown).map(i => i.url)))
   const clearPicked = () => setPicked(new Set())
 
   // What the download button is about to send, named after whatever narrowed the list.
   const label = useMemo(() => product || term || 'crewfit-samples', [product, term])
 
-  // Resizing is the slow, memory-hungry half, so its limit is lower than the one for originals.
-  const WEB_ZIP_LIMIT = 80
-
   const downloadZip = async (size) => {
+    // Nothing ticked means "everything this search found", not just the tiles rendered so far —
+    // the set somebody means is the one the filter describes.
     const urls = picked.size ? [...picked] : images.map(i => i.url)
     if (!urls.length) { toast.error('Nothing to download'); return }
     if (size === 'web' && urls.length > WEB_ZIP_LIMIT) {
@@ -165,6 +173,7 @@ export default function SampleLibraryTab() {
       <div className="samples-bar">
         <span>
           {loading ? 'Looking…' : `${images.length} image${images.length === 1 ? '' : 's'}`}
+          {!loading && images.length > shown && ` · showing ${shown}`}
           {picked.size > 0 && <> · <b>{picked.size} selected</b></>}
         </span>
         <span className="samples-bar-actions">
@@ -173,7 +182,10 @@ export default function SampleLibraryTab() {
             : <button type="button" className="mini-btn" onClick={pickAllShown}>Select all shown</button>)}
           {/* Two buttons rather than a menu: which one you want is decided by where the pictures
               are going, and it is a different answer every time. */}
-          <button type="button" className="mini-btn" disabled={busy || !images.length} onClick={() => downloadZip('web')}>
+          <button type="button" className="mini-btn" disabled={busy || !images.length} onClick={() => downloadZip('web')}
+            title={chosen > WEB_ZIP_LIMIT
+              ? `Resizing is capped at ${WEB_ZIP_LIMIT} at a time — select the ones you want, or take the originals`
+              : 'Resized copies, small enough to send'}>
             {busy ? 'Zipping…' : `⬇ Web-size zip (${chosen})`}
           </button>
           <button type="button" className="mini-btn" disabled={busy || !images.length} onClick={() => downloadZip('original')}>
@@ -222,7 +234,7 @@ export default function SampleLibraryTab() {
         </div>
       ) : (
         <div className="samples-grid">
-          {images.map(img => (
+          {images.slice(0, shown).map(img => (
             <div key={img.id} className={`sample-tile${picked.has(img.url) ? ' sample-tile-on' : ''}`}>
               <button type="button" className="sample-shot" onClick={() => setViewing(img)} title="Open">
                 <img src={thumb(img.url)} alt={img.product || 'Sample'} loading="lazy" />
@@ -242,6 +254,12 @@ export default function SampleLibraryTab() {
             </div>
           ))}
         </div>
+      )}
+
+      {images.length > shown && (
+        <button type="button" className="btn btn-secondary samples-more" onClick={() => setShown(n => n + PAGE)}>
+          Show {Math.min(PAGE, images.length - shown)} more · {images.length - shown} still to come
+        </button>
       )}
 
       {viewing && (
