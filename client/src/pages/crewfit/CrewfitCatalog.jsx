@@ -4,6 +4,8 @@ import AutoTextarea from '../../components/AutoTextarea'
 import { useApi, useAuth } from '../../App'
 import { useToast } from '../../components/Toast'
 import { CATALOG, COLOR_HEX, CONTACT } from './catalog'
+import CatalogPdfTab from './CatalogPdfTab'
+import SampleLibraryTab from './SampleLibraryTab'
 
 const CATS = ['All', 'Polos', 'T-Shirts', 'Kids']
 const catGradient = {
@@ -20,6 +22,7 @@ export default function CrewfitCatalog() {
   // Catalog pricing is commercially sensitive — only the owner may add, edit or remove
   // products. The server enforces the same rule; this just keeps the buttons honest.
   const isOwner = user?.role === 'owner'
+  const [tab, setTab] = useState('products')
   const [cat, setCat] = useState('All')
   const [q, setQ] = useState('')
   const [products, setProducts] = useState(null)
@@ -68,10 +71,24 @@ export default function CrewfitCatalog() {
   return (
     <div className="page-enter">
       <div className="dash-toolbar">
-        <div><h1>Crewfit · Catalog</h1><p style={{ color: 'var(--text-muted)' }}>{list.length} products · prices include printing</p></div>
-        {isOwner && <button className="btn btn-primary" onClick={openNew}>+ Add Product</button>}
+        <div><h1>Crewfit · Catalog</h1><p style={{ color: 'var(--text-muted)' }}>
+          {tab === 'products' ? `${list.length} products · prices include printing`
+            : tab === 'pdf' ? 'The PDF customers are sent, and the versions before it'
+              : 'Every photograph we hold of our own work'}
+        </p></div>
+        {tab === 'products' && isOwner && <button className="btn btn-primary" onClick={openNew}>+ Add Product</button>}
       </div>
 
+      {/* Three faces of the same thing: what we sell, the sheet that says so, and the pictures
+          that prove it. All of it is what goes out to a customer. */}
+      <div className="scan-tabs" style={{ marginBottom: 16 }}>
+        <button className={tab === 'products' ? 'active' : ''} onClick={() => setTab('products')}>👕 Products</button>
+        <button className={tab === 'pdf' ? 'active' : ''} onClick={() => setTab('pdf')}>📄 Catalogue PDF</button>
+        <button className={tab === 'samples' ? 'active' : ''} onClick={() => setTab('samples')}>🖼 Sample images</button>
+      </div>
+
+      {tab === 'pdf' ? <CatalogPdfTab /> : tab === 'samples' ? <SampleLibraryTab /> : (
+      <>
       <div className="filters-row">
         <div className="search-bar"><span className="search-icon">🔍</span><input placeholder="Search products or fabric…" value={q} onChange={e => setQ(e.target.value)} /></div>
         <div className="cat-chips">{CATS.map(c => <button key={c} className={`cat-chip ${cat === c ? 'active' : ''}`} onClick={() => setCat(c)}>{c}</button>)}</div>
@@ -108,6 +125,9 @@ export default function CrewfitCatalog() {
         <div><strong>Crew Fit</strong> · Premium bulk customized apparel</div>
         <div className="contact-row"><span>📞 {CONTACT.phone}</span><span>✉️ {CONTACT.email}</span><span>📍 {CONTACT.address}</span></div>
       </div>
+
+      </>
+      )}
 
       {edit && (
         <>

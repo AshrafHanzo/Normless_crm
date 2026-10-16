@@ -290,6 +290,10 @@ app.use('/api/crewfit/payments', authMiddleware, crewfitPaymentsRoutes);
 app.use('/api/crewfit/customers', authMiddleware, crewfitCustomersRoutes);
 app.use('/api/crewfit/vendor-orders', authMiddleware, crewfitVendorOrderRoutes);
 app.use('/api/crewfit/invoices', authMiddleware, require('./routes/crewfit-invoices'));
+// The catalogue PDF customers are sent, and the sample photo library behind it. Mounted above
+// the general crewfit router for the same reason marketing/samples is: that one owns
+// '/api/crewfit/*' and would answer for these paths itself.
+app.use('/api/crewfit/catalog', authMiddleware, require('./routes/crewfit-catalog'));
 app.use('/api/inventory', authMiddleware, require('./routes/inventory'));
 app.use('/api/crewfit', authMiddleware, crewfitRoutes);
 // Mounted before the marketing router: that one owns '/api/marketing/*' and would answer for
@@ -444,6 +448,11 @@ async function ensureCrewfitSchema() {
                 ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_crewfit_followups BOOLEAN DEFAULT false;
                 ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_crewfit_orders BOOLEAN DEFAULT false;
                 ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_crewfit_catalog BOOLEAN DEFAULT false;
+                -- Uploading is separate from looking: the catalogue PDF is what goes out to every
+                -- customer, and the sample library is what gets sent as "this is our work". Two
+                -- grants because the two are usually owned by different people.
+                ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_upload_crewfit_catalog BOOLEAN DEFAULT false;
+                ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_upload_crewfit_samples BOOLEAN DEFAULT false;
                 ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_crewfit_analytics BOOLEAN DEFAULT false;
                 ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_crewfit_calculator BOOLEAN DEFAULT false;
                 ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_crewfit_payments BOOLEAN DEFAULT false;
@@ -656,6 +665,38 @@ async function ensureCrewfitSchema() {
                 CREATE UNIQUE INDEX IF NOT EXISTS crewfit_vendors_name_idx ON crewfit_vendors (LOWER(name));
             `);
         } catch (e) { console.error('crewfit_vendor_orders ensure:', e.message); }
+
+        await db.exec(`
+            -- The catalogue as customers receive it: a PDF, replaced whenever prices or products
+            -- move. Kept as versions rather than overwritten, because a quote sent last month was
+            -- priced off last month's catalogue and somebody will ask.
+            CREATE TABLE IF NOT EXISTS crewfit_catalog_files (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                version INTEGER NOT NULL,
+                title TEXT,
+                note TEXT,
+                file_name TEXT NOT NULL,
+                file_path TEXT NOT NULL,     -- under server/storage/crewfit/catalog, never served publicly
+                size_bytes BIGINT,
+                uploaded_by TEXT,
+                uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS crewfit_catalog_files_version_idx ON crewfit_catalog_files (version);
+
+            -- Sample photographs uploaded on purpose, as opposed to the ones that happen to be on
+            -- an order. Named by product so the library can be searched the way anyone asks for
+            -- one: "do we have polo pictures".
+            CREATE TABLE IF NOT EXISTS crewfit_samples (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                product TEXT,
+                title TEXT,
+                file_path TEXT NOT NULL,     -- under server/uploads, so a thumbnail can be drawn
+                size_bytes BIGINT,
+                uploaded_by TEXT,
+                uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS crewfit_samples_product_idx ON crewfit_samples (LOWER(product));
+        `);
 
         const c = await db.query('SELECT COUNT(*) AS n FROM crewfit_products');
         if (parseInt(c.rows[0].n, 10) === 0) {

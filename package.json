@@ -45,7 +45,8 @@
     "pg": "^8.11.3",
     "razorpay": "^2.9.8",
     "tar": "^7.5.22",
-    "telegram": "^2.26.22"
+    "telegram": "^2.26.22",
+    "yazl": "^3.3.1"
   },
   "devDependencies": {
     "nodemon": "^3.1.14"
