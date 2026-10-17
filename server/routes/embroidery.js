@@ -61,7 +61,8 @@ const hydrate = (r) => (r ? {
 } : r);
 
 const FIELDS = `id, name, note, width_mm, height_mm, stitch_count, thread_colors, colors_setting,
-                underlay, warnings, source_name, preview_path, dst_bytes, created_by, created_at`;
+                underlay, stitch_type, fill_used, underlay_used, warnings, source_name,
+                preview_path, dst_bytes, created_by, created_at`;
 
 /** A filename somebody will recognise in their downloads folder. */
 const slug = (v) => String(v || 'design').replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'design';
@@ -92,6 +93,8 @@ router.post('/convert', (req, res, next) => upload.single('file')(req, res, (err
         if (!Number.isFinite(widthMm) || widthMm < 10 || widthMm > 400) {
             return res.status(400).json({ error: 'The finished width must be between 10mm and 400mm' });
         }
+        const STITCHES = ['auto', 'satin', 'tatami', 'satin_border', 'run'];
+        const stitchType = STITCHES.includes(trim(req.body?.stitch_type)) ? trim(req.body.stitch_type) : 'auto';
         const colors = trim(req.body?.colors) || 'auto';
         const underlay = String(req.body?.underlay ?? 'true') !== 'false';
         const name = trim(req.body?.name) || path.parse(req.file.originalname).name;
@@ -101,6 +104,7 @@ router.post('/convert', (req, res, next) => upload.single('file')(req, res, (err
         form.append('width_mm', String(widthMm));
         form.append('colors', colors);
         form.append('underlay', String(underlay));
+        form.append('stitch_type', stitchType);
 
         let answer;
         try {
@@ -144,11 +148,15 @@ router.post('/convert', (req, res, next) => upload.single('file')(req, res, (err
         const row = (await db.query(
             `INSERT INTO embroidery_designs
                (name, note, width_mm, height_mm, stitch_count, thread_colors, colors_setting,
-                underlay, warnings, source_name, source_path, dst_path, preview_path, dst_bytes, created_by)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+                underlay, stitch_type, fill_used, underlay_used, warnings, source_name,
+                source_path, dst_path, preview_path, dst_bytes, created_by)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
              RETURNING ${FIELDS}`,
             [name, trim(req.body?.note), info.width_mm ?? widthMm, info.height_mm ?? null,
                 info.stitch_count ?? null, JSON.stringify(info.thread_colors || []), colors, underlay,
+                // Asked for, and done: a shape too wide for satin is filled instead, and the two
+                // columns are how anyone sees that happened.
+                info.stitch_type || stitchType, info.fill || null, info.underlay || null,
                 JSON.stringify(info.warnings || []), req.file.originalname,
                 `${stamp}/source${ext}`, `${stamp}/design.dst`, `/uploads/embroidery/${stamp}/preview.png`, dst.length,
                 req.user?.username || null])).rows[0];

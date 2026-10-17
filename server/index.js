@@ -743,6 +743,11 @@ async function ensureCrewfitSchema() {
                 created_by TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
+            -- What was asked for, and what the engine actually did. They differ whenever a shape
+            -- was too wide for satin, and the difference is what the machine operator sees.
+            ALTER TABLE embroidery_designs ADD COLUMN IF NOT EXISTS stitch_type TEXT;
+            ALTER TABLE embroidery_designs ADD COLUMN IF NOT EXISTS fill_used TEXT;
+            ALTER TABLE embroidery_designs ADD COLUMN IF NOT EXISTS underlay_used TEXT;
             CREATE INDEX IF NOT EXISTS embroidery_designs_name_idx ON embroidery_designs (LOWER(name));
             CREATE INDEX IF NOT EXISTS embroidery_designs_made_idx ON embroidery_designs (created_at DESC);
         `);

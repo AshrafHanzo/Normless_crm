@@ -11,6 +11,15 @@ const PRESETS = [
   { label: 'Sleeve', mm: 70, hint: 'upper arm' },
   { label: 'Full back', mm: 250, hint: 'across the shoulders' },
 ]
+// The stitches a machine can lay, in the words the trade uses for them.
+const STITCHES = [
+  { key: 'auto', label: 'Auto', hint: 'satin where it fits, fill where it does not' },
+  { key: 'satin', label: 'Satin', hint: 'thread straight across — letters, bars, borders' },
+  { key: 'tatami', label: 'Fill', hint: 'tatami, for anything wide' },
+  { key: 'satin_border', label: 'Fill + satin edge', hint: 'filled, with a clean stitched outline' },
+  { key: 'run', label: 'Outline', hint: 'a single run along the edge' },
+]
+const STITCH_LABEL = Object.fromEntries(STITCHES.map(s => [s.key, s.label]))
 const when = (v) => (v ? new Date(v).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : '')
 const num = (v) => new Intl.NumberFormat('en-IN').format(Math.round(Number(v) || 0))
 
@@ -37,6 +46,9 @@ export default function DesignStudio() {
   const [widthMm, setWidthMm] = useState(95)
   const [colors, setColors] = useState('auto')
   const [underlay, setUnderlay] = useState(true)
+  // Satin is what this shop mostly uses, but a panel wider than a centimetre cannot have it —
+  // so the default lets the engine choose per shape rather than making the wrong promise.
+  const [stitchType, setStitchType] = useState('auto')
   const [busy, setBusy] = useState(false)
   const [made, setMade] = useState(null)            // the conversion just finished
 
@@ -46,6 +58,7 @@ export default function DesignStudio() {
   const [term, setTerm] = useState('')
   const [loading, setLoading] = useState(true)
   const [renaming, setRenaming] = useState(null)
+  const [opened, setOpened] = useState(null)   // a design from the library, looked at properly
 
   useEffect(() => {
     apiFetch('/api/crewfit/embroidery/health').then(r => { if (r && !r.error) setService(r) })
@@ -87,6 +100,7 @@ export default function DesignStudio() {
     body.append('width_mm', String(widthMm))
     body.append('colors', colors)
     body.append('underlay', String(underlay))
+    body.append('stitch_type', stitchType)
     if (name.trim()) body.append('name', name.trim())
     if (note.trim()) body.append('note', note.trim())
 
@@ -169,6 +183,18 @@ export default function DesignStudio() {
             </div>
           </div>
 
+          <div className="input-group">
+            <label>Stitch <span className="label-hint">how the thread is laid down</span></label>
+            <div className="chip-picker" role="group" aria-label="Stitch type">
+              {STITCHES.map(st => (
+                <button type="button" key={st.key} title={st.hint}
+                  className={`chip${stitchType === st.key ? ' chip-on' : ''}`}
+                  onClick={() => setStitchType(st.key)}>{st.label}</button>
+              ))}
+            </div>
+            <div className="studio-stitch-hint">{STITCHES.find(s => s.key === stitchType)?.hint}</div>
+          </div>
+
           <div className="form-row">
             <div className="input-group">
               <label>Thread colours</label>
@@ -221,6 +247,8 @@ export default function DesignStudio() {
               <div><span>Size</span><b>{Math.round(made.width_mm)} × {Math.round(made.height_mm)} mm</b></div>
               <div><span>Stitches</span><b>{num(made.stitch_count)}</b></div>
               <div><span>Threads</span><b>{made.thread_colors.length}</b></div>
+              {/* What it was actually stitched with, which is not always what was asked for. */}
+              <div><span>Stitched as</span><b>{made.fill_used || STITCH_LABEL[made.stitch_type] || '—'}</b></div>
             </div>
             {/* A DST says nothing about colour, so this list is the only instruction the machine
                 operator gets. In stitching order. */}
@@ -266,9 +294,14 @@ export default function DesignStudio() {
         <div className="studio-grid">
           {designs.map(d => (
             <div className="studio-card" key={d.id}>
-              <img src={previewUrl(d)} alt={d.name} loading="lazy" decoding="async" />
+              {/* The whole card opens it: a stitch file is judged by looking at it, and the row
+                  of small buttons was all there was to go on. */}
+              <button type="button" className="studio-card-open" onClick={() => setOpened(d)} title={`Open ${d.name}`}>
+                <img src={previewUrl(d)} alt={d.name} loading="lazy" decoding="async" />
+              </button>
               <div className="studio-card-body">
                 <b title={d.name}>{d.name}</b>
+                <span className="studio-card-stitch">{d.fill_used || STITCH_LABEL[d.stitch_type] || ''}</span>
                 <span>{Math.round(d.width_mm)}mm · {num(d.stitch_count)} stitches · {d.thread_colors.length} thread{d.thread_colors.length === 1 ? '' : 's'}</span>
                 {d.note && <span className="studio-card-note">{d.note}</span>}
                 <span className="studio-card-when">{when(d.created_at)}{d.created_by ? ` · ${String(d.created_by).split('@')[0]}` : ''}</span>
@@ -277,14 +310,68 @@ export default function DesignStudio() {
                 </div>
               </div>
               <div className="studio-card-actions">
+                <button type="button" className="mini-btn" onClick={() => setOpened(d)}>Open</button>
                 <button type="button" className="mini-btn" onClick={() => download(d, 'dst')}>⬇ DST</button>
-                <button type="button" className="mini-btn" onClick={() => setRenaming({ ...d })}>Rename</button>
                 <button type="button" className="mini-btn" style={{ color: 'var(--danger)' }} onClick={() => remove(d)}>
                   <Icon name="trash" size={13} />
                 </button>
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* One design, large: the preview to judge it by, what it is made of, and the three files.
+          This is the view somebody opens months later when the same customer reorders. */}
+      {opened && (
+        <div className="image-modal-overlay" onClick={() => setOpened(null)}>
+          <div className="studio-open" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true">
+            <div className="studio-result-head">
+              <div>
+                <h3>{opened.name}</h3>
+                <div className="packed-sub">
+                  {when(opened.created_at)}{opened.created_by ? ` · ${String(opened.created_by).split('@')[0]}` : ''}
+                  {opened.source_name ? ` · from ${opened.source_name}` : ''}
+                </div>
+              </div>
+              <button type="button" className="btn-icon" onClick={() => setOpened(null)}><Icon name="close" size={16} /></button>
+            </div>
+
+            <div className="studio-open-body">
+              <img className="studio-preview" src={previewUrl(opened)} alt={`${opened.name} stitch preview`} />
+              <div className="studio-open-side">
+                <div className="bank-facts">
+                  <div><span>Size</span><b>{Math.round(opened.width_mm)} × {Math.round(opened.height_mm)} mm</b></div>
+                  <div><span>Stitches</span><b>{num(opened.stitch_count)}</b></div>
+                  <div><span>Stitched as</span><b>{opened.fill_used || STITCH_LABEL[opened.stitch_type] || '—'}</b></div>
+                  <div><span>Underlay</span><b>{opened.underlay_used || (opened.underlay ? 'yes' : 'none')}</b></div>
+                </div>
+                {/* The thread list is the only colour instruction a DST can carry — which is to
+                    say, none. It has to be read off here. */}
+                <div className="studio-threads">
+                  {opened.thread_colors.map((c, i) => (
+                    <span className="studio-thread" key={`${c}-${i}`}><i style={{ background: c }} /> {i + 1}. {c}</span>
+                  ))}
+                </div>
+                {opened.note && <p className="studio-open-note">{opened.note}</p>}
+                {!!opened.warnings?.length && (
+                  <div className="bank-check bank-check-bad">
+                    <b>Worth reading before you stitch it</b>
+                    {opened.warnings.map((w, i) => <div key={i}>{w}</div>)}
+                  </div>
+                )}
+                <div className="studio-actions">
+                  <button className="btn btn-primary" onClick={() => download(opened, 'dst')}>⬇ Download the DST</button>
+                  <button className="btn btn-secondary" onClick={() => download(opened, 'source')}>⬇ Download the logo</button>
+                  <button className="btn btn-secondary" onClick={() => download(opened, 'preview')}>⬇ Preview</button>
+                </div>
+                <div className="studio-actions">
+                  <button className="mini-btn" onClick={() => { setRenaming({ ...opened }); setOpened(null) }}>Rename</button>
+                  <button className="mini-btn" style={{ color: 'var(--danger)' }} onClick={() => remove(opened)}>Delete</button>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 

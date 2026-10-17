@@ -30,4 +30,14 @@ echo "♻️  Reloading app (zero-downtime)..."
 pm2 reload ecosystem.config.js --update-env || pm2 start ecosystem.config.js
 pm2 save
 
+# The embroidery converter is a separate service with its own Python code, so a pull that changes
+# it needs it restarted — otherwise the CRM is new and the digitizer is still last week's.
+if systemctl list-unit-files embroidery.service >/dev/null 2>&1 && systemctl is-enabled --quiet embroidery 2>/dev/null; then
+  echo "🪡  Restarting the embroidery converter..."
+  ./embroidery-service/venv/bin/pip install -q --no-cache-dir -r embroidery-service/requirements.txt 2>/dev/null || true
+  systemctl restart embroidery
+  sleep 3
+  curl -sf http://127.0.0.1:8090/health >/dev/null && echo "   converter OK" || echo "   ⚠️  converter did not come back — check: systemctl status embroidery"
+fi
+
 echo "✅ Deploy complete. Logs: pm2 logs normless-crm"
