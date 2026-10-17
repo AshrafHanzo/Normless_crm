@@ -55,7 +55,10 @@ const CACHE_ROOT = path.join(__dirname, '..', 'storage', 'thumbs');
 
 // Fixed sizes rather than anything the caller asks for: an open-ended width is an invitation to
 // fill the disk with a thousand near-identical renders of the same photo.
-const WIDTHS = new Set([72, 96, 160, 320]);
+// 1280 is the viewer's size. Looking at a photograph should not mean decoding the 2560-pixel
+// original — that is 26MB of bitmap per picture, held by the browser long after the viewer is
+// closed, and it is what made the whole application sluggish after a visit to the sample library.
+const WIDTHS = new Set([72, 96, 160, 320, 1280]);
 const DEFAULT_WIDTH = 96;
 
 const IMAGE = /\.(jpe?g|png|webp|gif|avif|heic|heif)$/i;

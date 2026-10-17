@@ -109,9 +109,13 @@ export default function TicketDrawer({ ticket, options, onClose, onSaved, onDele
   }, [ticket?.id])
 
   const MAX_IMAGES = 8
+  // Proof photographs come off a phone at several megabytes. The grid shows a resized copy and the
+  // viewer a 1280px one, so looking at a ticket does not leave the browser holding the originals
+  // decoded at full size. "Open full size" still reaches for the real file.
+  const sized = (url, w) => `${API_URL}/api/thumb?src=${encodeURIComponent(url)}&w=${w}`
   const thumbs = [
-    ...images.map(url => ({ src: `${API_URL}${url}`, pending: false, ref: url })),
-    ...pending.map(p => ({ src: p.previewUrl, pending: true, ref: p })),
+    ...images.map(url => ({ src: sized(url, 320), preview: sized(url, 1280), full: `${API_URL}${url}`, pending: false, ref: url })),
+    ...pending.map(p => ({ src: p.previewUrl, preview: p.previewUrl, full: p.previewUrl, pending: true, ref: p })),
   ]
 
   /** Send a batch to a ticket that exists; hold it otherwise. */
@@ -392,7 +396,7 @@ export default function TicketDrawer({ ticket, options, onClose, onSaved, onDele
               <button className="image-modal-close" onClick={() => setViewing(null)}>✕</button>
               <div className="image-modal-toolbar">
                 {!thumbs[viewing].pending && (
-                  <a className="image-modal-action" href={thumbs[viewing].src} target="_blank" rel="noreferrer">⬇ Open full size</a>
+                  <a className="image-modal-action" href={thumbs[viewing].full} target="_blank" rel="noreferrer">⬇ Open full size</a>
                 )}
                 {canEdit && (
                   <button className="image-modal-action image-modal-action-danger"
@@ -402,7 +406,7 @@ export default function TicketDrawer({ ticket, options, onClose, onSaved, onDele
               {thumbs[viewing].pending && (
                 <div className="image-modal-pending-tag">Not sent yet — it goes up when the ticket is raised</div>
               )}
-              <img src={thumbs[viewing].src} alt="Proof" className="full-image" />
+              <img src={thumbs[viewing].preview} alt="Proof" className="full-image" />
               {thumbs.length > 1 && (
                 <>
                   <button className="modal-carousel-nav-btn modal-carousel-prev"

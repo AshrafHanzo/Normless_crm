@@ -343,8 +343,16 @@ export async function openShippingLabel(apiFetch, order, toast) {
 // product line item's set — a homogeneous shape the grid and lightbox share.
 function imageThumbs(item, kind, apiUrl) {
   const { uploaded: uploadedKey, pending: pendingKey } = IMAGE_KINDS[kind]
-  const uploaded = (item[uploadedKey] || []).map(url => ({ src: `${apiUrl}${url}`, pending: false, ref: url }))
-  const pending = (item[pendingKey] || []).map(p => ({ src: p.previewUrl, pending: true, ref: p }))
+  // A tile is ninety pixels across and these are phone photographs — up to nine megabytes each,
+  // which the browser then holds decoded at full size. Ten of them on an order drawer was tens of
+  // megabytes of bitmap for a row of postage stamps, and it stayed in memory long after the
+  // drawer was closed. The grid gets a resized copy; the viewer a 1280px one; only a download
+  // reaches for the original, which is what `ref` is for.
+  const sized = (url, w) => (/\.(pdf|ai|eps|cdr|zip)$/i.test(url) ? `${apiUrl}${url}` : `${apiUrl}/api/thumb?src=${encodeURIComponent(url)}&w=${w}`)
+  const uploaded = (item[uploadedKey] || []).map(url => ({
+    src: sized(url, 320), preview: sized(url, 1280), pending: false, ref: url,
+  }))
+  const pending = (item[pendingKey] || []).map(p => ({ src: p.previewUrl, preview: p.previewUrl, pending: true, ref: p }))
   return [...uploaded, ...pending]
 }
 
@@ -1643,7 +1651,7 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
               <button className="image-modal-action image-modal-action-danger" onClick={removeLightboxImage}>🗑 Remove</button>
             </div>
             {lightbox.images[lightbox.index].pending && <div className="image-modal-pending-tag">Pending upload — will be saved with the order</div>}
-            <img src={lightbox.images[lightbox.index].src} alt="Preview" className="full-image" />
+            <img src={lightbox.images[lightbox.index].preview || lightbox.images[lightbox.index].src} alt="Preview" className="full-image" />
             {lightbox.images.length > 1 && (
               <>
                 <button className="modal-carousel-nav-btn modal-carousel-prev" onClick={() => setLightbox(l => ({ ...l, index: (l.index - 1 + l.images.length) % l.images.length }))}>‹</button>

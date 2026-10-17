@@ -67,6 +67,10 @@ export default function SampleLibraryTab() {
   // 220 was not one of the sizes the thumbnailer renders, so every tile silently fell back to a
   // 96-pixel one blown up — blurry, and a fresh render of each photograph for nothing.
   const thumb = (url) => `${API_URL}/api/thumb?src=${encodeURIComponent(url)}&w=320`
+  // What the viewer shows: a 1280px copy, not the original. A phone photograph is 2560 pixels
+  // square — 26MB once the browser has decoded it, and it keeps that long after the viewer is
+  // closed. The original is still one click away, on "Open full size".
+  const preview = (url) => `${API_URL}/api/thumb?src=${encodeURIComponent(url)}&w=1280`
   const full = (url) => `${API_URL}${url}`
 
   const toggle = (img) => setPicked(prev => {
@@ -237,7 +241,8 @@ export default function SampleLibraryTab() {
           {images.slice(0, shown).map(img => (
             <div key={img.id} className={`sample-tile${picked.has(img.url) ? ' sample-tile-on' : ''}`}>
               <button type="button" className="sample-shot" onClick={() => setViewing(img)} title="Open">
-                <img src={thumb(img.url)} alt={img.product || 'Sample'} loading="lazy" />
+                {/* Decoded off the main thread, and only when it is actually near the viewport. */}
+                <img src={thumb(img.url)} alt={img.product || 'Sample'} loading="lazy" decoding="async" />
               </button>
               <button type="button" className="sample-pick" aria-pressed={picked.has(img.url)}
                 onClick={() => toggle(img)} title={picked.has(img.url) ? 'Deselect' : 'Select'}>
@@ -275,7 +280,7 @@ export default function SampleLibraryTab() {
                 <button className="image-modal-action image-modal-action-danger" onClick={() => removeSample(viewing)}>🗑 Remove</button>
               )}
             </div>
-            <img src={full(viewing.url)} alt={viewing.product || 'Sample'} className="full-image" />
+            <img src={preview(viewing.url)} alt={viewing.product || 'Sample'} className="full-image" />
             <div className="modal-carousel-counter">
               {viewing.product || 'Not named'}
               {viewing.source !== 'Uploaded' ? ` · CF-${viewing.order_no}${viewing.customer_name ? ` · ${viewing.customer_name}` : ''}` : ''}
