@@ -1,0 +1,11 @@
+# Pinned, and not casually: the CRM server is a QEMU virtual CPU without SSE4.2 or POPCNT, so it
+# does not meet the x86-64-v2 baseline NumPy 2.x is built for — it raises on import there, before
+# anything else gets a chance to run. NumPy 1.26 is the last line built for plain x86-64, and
+# OpenCV 4.10 is the last release that works against it. Verified on the server itself: a 900px
+# logo converts in 2.7 seconds.
+fastapi>=0.110
+uvicorn[standard]>=0.29
+python-multipart>=0.0.9
+pyembroidery==1.5.1
+numpy==1.26.4
+opencv-python-headless==4.10.0.84

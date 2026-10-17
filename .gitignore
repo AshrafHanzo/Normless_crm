@@ -33,3 +33,7 @@ server/uploads/
 server/storage/
 GST Sales*.xlsx
 GST Purchase*.xlsx
+
+# The converter's virtualenv — built on the server from requirements.txt, never committed
+embroidery-service/venv/
+__pycache__/

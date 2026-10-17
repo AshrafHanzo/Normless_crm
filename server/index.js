@@ -294,6 +294,8 @@ app.use('/api/crewfit/invoices', authMiddleware, require('./routes/crewfit-invoi
 // the general crewfit router for the same reason marketing/samples is: that one owns
 // '/api/crewfit/*' and would answer for these paths itself.
 app.use('/api/crewfit/catalog', authMiddleware, require('./routes/crewfit-catalog'));
+// The design studio: a logo in, a stitch file out. Proxies to the converter on localhost.
+app.use('/api/crewfit/embroidery', authMiddleware, require('./routes/embroidery'));
 app.use('/api/inventory', authMiddleware, require('./routes/inventory'));
 app.use('/api/crewfit', authMiddleware, crewfitRoutes);
 // Mounted before the marketing router: that one owns '/api/marketing/*' and would answer for
@@ -470,6 +472,9 @@ async function ensureCrewfitSchema() {
                 -- grants because the two are usually owned by different people.
                 ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_upload_crewfit_catalog BOOLEAN DEFAULT false;
                 ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_upload_crewfit_samples BOOLEAN DEFAULT false;
+                -- The design studio: turning a customer's logo into a stitch file. Its own grant
+                -- because each conversion is a few seconds of the server's whole attention.
+                ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_use_design_studio BOOLEAN DEFAULT false;
                 ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_crewfit_analytics BOOLEAN DEFAULT false;
                 ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_crewfit_calculator BOOLEAN DEFAULT false;
                 ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_crewfit_payments BOOLEAN DEFAULT false;
@@ -713,6 +718,33 @@ async function ensureCrewfitSchema() {
                 uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             CREATE INDEX IF NOT EXISTS crewfit_samples_product_idx ON crewfit_samples (LOWER(product));
+
+            -- Every logo that has been digitised, with what came out of it.
+            --
+            -- The stitch count and thread colours are kept beside the file because a DST carries
+            -- no colour information of its own: the machine operator needs to be told which
+            -- threads to load, and the job sheet is the only place that can say so.
+            CREATE TABLE IF NOT EXISTS embroidery_designs (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                name TEXT NOT NULL,
+                note TEXT,
+                width_mm NUMERIC,
+                height_mm NUMERIC,
+                stitch_count INTEGER,
+                thread_colors TEXT,          -- JSON array of hex colours, in stitching order
+                colors_setting TEXT,         -- what was asked for: a number, or 'auto'
+                underlay BOOLEAN DEFAULT true,
+                warnings TEXT,               -- JSON array, straight from the converter
+                source_name TEXT,            -- the logo as it was uploaded
+                source_path TEXT,            -- all three under server/storage/embroidery
+                dst_path TEXT,
+                preview_path TEXT,
+                dst_bytes INTEGER,
+                created_by TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS embroidery_designs_name_idx ON embroidery_designs (LOWER(name));
+            CREATE INDEX IF NOT EXISTS embroidery_designs_made_idx ON embroidery_designs (created_at DESC);
         `);
 
         const c = await db.query('SELECT COUNT(*) AS n FROM crewfit_products');

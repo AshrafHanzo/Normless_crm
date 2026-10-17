@@ -1,0 +1,82 @@
+<!--
+  Embroidery converter widget — drop into any CRM page.
+  Set ENDPOINT to your CRM backend route that proxies to the converter service
+  (recommended, keeps the API key on the server), e.g. "/api/embroidery/convert".
+  Optional: define window.onEmbroideryConverted = (result) => {...} to save the
+  DST to the current order/record. `result` = { filename, info, dst_base64, preview_png_base64 }.
+-->
+<div class="emb-widget">
+  <h3>Make DST embroidery file</h3>
+  <div class="emb-row">
+    <label>Logo (PNG/JPG)<input type="file" id="emb-file" accept="image/png,image/jpeg"></label>
+    <label>Width (cm)<input type="number" id="emb-width" value="10" min="1" max="40" step="0.5"></label>
+    <label>Colours
+      <select id="emb-colors">
+        <option value="auto">Auto</option>
+        <option>1</option><option>2</option><option>3</option><option>4</option><option>5</option><option>6</option>
+      </select>
+    </label>
+    <label class="emb-check"><input type="checkbox" id="emb-underlay" checked> Zigzag underlay</label>
+    <button id="emb-go" type="button">Convert</button>
+  </div>
+  <p id="emb-status"></p>
+  <div id="emb-result" hidden>
+    <img id="emb-preview" alt="Stitch preview">
+    <ul id="emb-info"></ul>
+    <a id="emb-download" class="emb-btn">Download DST</a>
+  </div>
+</div>
+<style>
+  .emb-widget{font-family:system-ui,sans-serif;border:1px solid #ddd;border-radius:10px;padding:16px;max-width:720px}
+  .emb-widget h3{margin:0 0 12px}
+  .emb-row{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end}
+  .emb-row label{display:flex;flex-direction:column;font-size:13px;gap:4px}
+  .emb-row .emb-check{flex-direction:row;align-items:center}
+  .emb-widget input[type=number]{width:80px}
+  .emb-widget button,.emb-btn{background:#00478C;color:#fff;border:0;border-radius:6px;padding:8px 16px;cursor:pointer;text-decoration:none;display:inline-block}
+  .emb-widget button:disabled{opacity:.5;cursor:wait}
+  #emb-preview{max-width:100%;border:1px solid #eee;margin-top:12px;background:#fff}
+  #emb-info{font-size:13px;padding-left:18px}
+  #emb-status{font-size:13px;color:#555;min-height:1em}
+  .emb-swatch{display:inline-block;width:12px;height:12px;border-radius:2px;vertical-align:middle;margin:0 4px 0 6px;border:1px solid #0002}
+</style>
+<script>
+(function () {
+  const ENDPOINT = "/api/embroidery/convert";   // <-- your CRM backend proxy route
+  const $ = (id) => document.getElementById(id);
+  $("emb-go").addEventListener("click", async () => {
+    const file = $("emb-file").files[0];
+    if (!file) { $("emb-status").textContent = "Choose a logo image first."; return; }
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("width_mm", String(parseFloat($("emb-width").value || "10") * 10));
+    fd.append("colors", $("emb-colors").value);
+    fd.append("underlay", $("emb-underlay").checked ? "true" : "false");
+    $("emb-go").disabled = true; $("emb-status").textContent = "Digitizing…"; $("emb-result").hidden = true;
+    try {
+      const res = await fetch(ENDPOINT, { method: "POST", body: fd });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || ("Error " + res.status));
+      const i = data.info;
+      $("emb-preview").src = "data:image/png;base64," + data.preview_png_base64;
+      const bytes = Uint8Array.from(atob(data.dst_base64), (c) => c.charCodeAt(0));
+      const a = $("emb-download");
+      if (a.href.startsWith("blob:")) URL.revokeObjectURL(a.href);
+      a.href = URL.createObjectURL(new Blob([bytes], { type: "application/octet-stream" }));
+      a.download = data.filename;
+      $("emb-info").innerHTML =
+        `<li>Size: ${i.width_mm} × ${i.height_mm} mm</li>` +
+        `<li>Stitches: ${i.stitch_count.toLocaleString()}</li>` +
+        `<li>Threads (sewing order):${i.thread_colors.map((c) => `<span class="emb-swatch" style="background:${c}"></span>${c}`).join("")}</li>` +
+        `<li>Fill: ${i.fill}, underlay: ${i.underlay}</li>` +
+        i.warnings.map((w) => `<li style="color:#b45309">${w}</li>`).join("");
+      $("emb-result").hidden = false; $("emb-status").textContent = "";
+      if (typeof window.onEmbroideryConverted === "function") window.onEmbroideryConverted(data);
+    } catch (e) {
+      $("emb-status").textContent = "Conversion failed: " + e.message;
+    } finally {
+      $("emb-go").disabled = false;
+    }
+  });
+})();
+</script>

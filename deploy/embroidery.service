@@ -1,0 +1,30 @@
+# The embroidery converter, as a service.
+#
+# Not Docker: the CRM server has no Docker, and it would not help if it did — the reason this
+# needs care is the CPU's missing instruction set, which a container shares. A virtualenv with
+# pinned versions is the whole trick.
+#
+# Install:
+#   cd /root/normless_crm/embroidery-service
+#   python3 -m venv venv && ./venv/bin/pip install -r requirements.txt
+#   cp /root/normless_crm/deploy/embroidery.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now embroidery
+#   curl http://127.0.0.1:8090/health      # -> {"ok":true}
+[Unit]
+Description=Embroidery converter (PNG to DST)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/normless_crm/embroidery-service
+# The key is read from the CRM's own .env, so there is one place to change it.
+EnvironmentFile=/root/normless_crm/.env
+# Bound to localhost: only the CRM backend can reach it, never the open internet.
+ExecStart=/root/normless_crm/embroidery-service/venv/bin/uvicorn app:app --host 127.0.0.1 --port 8090 --workers 2
+Restart=always
+RestartSec=5
+# One conversion holds a decoded image; two workers, so this is the ceiling for both.
+MemoryMax=1500M
+
+[Install]
+WantedBy=multi-user.target

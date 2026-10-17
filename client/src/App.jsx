@@ -33,6 +33,7 @@ import CrewfitActivity from './pages/crewfit/CrewfitActivity'
 import Inventory from './pages/Inventory'
 import OfflineSales from './pages/OfflineSales'
 import Backup from './pages/Backup'
+import DesignStudio from './pages/crewfit/DesignStudio'
 
 // API base. In dev, VITE_API_URL (from .env.development.local) points at the
 // production backend + Postgres so previews use the real database.
@@ -211,6 +212,7 @@ function App() {
             <Route path="/crewfit/dashboard" element={<ProtectedRoute permission="can_view_crewfit_analytics"><AppLayout><CrewfitAnalytics /></AppLayout></ProtectedRoute>} />
             <Route path="/crewfit/orders" element={<ProtectedRoute permission="can_view_crewfit_orders"><AppLayout><CrewfitOrders /></AppLayout></ProtectedRoute>} />
             <Route path="/crewfit/catalog" element={<ProtectedRoute permission="can_view_crewfit_catalog"><AppLayout><CrewfitCatalog /></AppLayout></ProtectedRoute>} />
+            <Route path="/crewfit/design-studio" element={<ProtectedRoute permission="can_use_design_studio"><AppLayout><DesignStudio /></AppLayout></ProtectedRoute>} />
             <Route path="/crewfit/quotes" element={<ProtectedRoute permission="can_view_crewfit_calculator"><AppLayout><CrewfitQuotes /></AppLayout></ProtectedRoute>} />
             <Route path="/crewfit/payments" element={<ProtectedRoute permission="can_view_crewfit_payments"><AppLayout><CrewfitPayments /></AppLayout></ProtectedRoute>} />
             <Route path="/crewfit/customers" element={<ProtectedRoute permission="can_view_crewfit_customers"><AppLayout><CrewfitCustomers /></AppLayout></ProtectedRoute>} />
