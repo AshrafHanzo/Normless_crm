@@ -61,7 +61,7 @@ const hydrate = (r) => (r ? {
 } : r);
 
 const FIELDS = `id, name, note, width_mm, height_mm, stitch_count, thread_colors, colors_setting,
-                underlay, stitch_type, fill_used, underlay_used, warnings, source_name,
+                underlay, stitch_type, fill_used, underlay_used, coverage_pct, warnings, source_name,
                 preview_path, dst_bytes, created_by, created_at`;
 
 /** A filename somebody will recognise in their downloads folder. */
@@ -148,16 +148,16 @@ router.post('/convert', (req, res, next) => upload.single('file')(req, res, (err
         const row = (await db.query(
             `INSERT INTO embroidery_designs
                (name, note, width_mm, height_mm, stitch_count, thread_colors, colors_setting,
-                underlay, stitch_type, fill_used, underlay_used, warnings, source_name,
+                underlay, stitch_type, fill_used, underlay_used, coverage_pct, warnings, source_name,
                 source_path, dst_path, preview_path, dst_bytes, created_by)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
              RETURNING ${FIELDS}`,
             [name, trim(req.body?.note), info.width_mm ?? widthMm, info.height_mm ?? null,
                 info.stitch_count ?? null, JSON.stringify(info.thread_colors || []), colors, underlay,
                 // Asked for, and done: a shape too wide for satin is filled instead, and the two
                 // columns are how anyone sees that happened.
                 info.stitch_type || stitchType, info.fill || null, info.underlay || null,
-                JSON.stringify(info.warnings || []), req.file.originalname,
+                info.coverage_pct ?? null, JSON.stringify(info.warnings || []), req.file.originalname,
                 `${stamp}/source${ext}`, `${stamp}/design.dst`, `/uploads/embroidery/${stamp}/preview.png`, dst.length,
                 req.user?.username || null])).rows[0];
 

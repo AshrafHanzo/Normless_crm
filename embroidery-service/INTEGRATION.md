@@ -1,6 +1,13 @@
 # Embroidery Converter: CRM integration
 
-Converts a logo PNG/JPG into a machine-ready **DST** file (tatami fill, zigzag underlay, automatic thread colours) and returns a stitch preview.
+Converts a logo PNG/JPG into a machine-ready **DST** file and returns a preview of how it will
+look sewn.
+
+Every shape is measured across its narrow axis first, and that measurement picks the stitch: a
+hairline gets a run, a column up to 10mm gets satin laid across it, anything wider gets a tatami
+fill with an edge run to sharpen it. Underlay goes down before each fill, thread colours are
+separated automatically, and the response says how much of the artwork the thread actually
+reaches (`coverage_pct`) along with anything the artwork is too fine to hold.
 
 ## What's in this folder
 

@@ -256,6 +256,11 @@ export default function DesignStudio() {
               <div><span>Threads</span><b>{made.thread_colors.length}</b></div>
               {/* What it was actually stitched with, which is not always what was asked for. */}
               <div><span>Stitched as</span><b>{made.fill_used || STITCH_LABEL[made.stitch_type] || '—'}</b></div>
+              {/* Measured off the finished file: how much of the artwork the thread reaches.
+                  Anything short of it is detail too fine for thread to hold. */}
+              {made.coverage_pct != null && (
+                <div><span>Artwork covered</span><b>{Number(made.coverage_pct).toFixed(1)}%</b></div>
+              )}
             </div>
             {/* A DST says nothing about colour, so this list is the only instruction the machine
                 operator gets. In stitching order. */}
@@ -352,6 +357,9 @@ export default function DesignStudio() {
                   <div><span>Stitches</span><b>{num(opened.stitch_count)}</b></div>
                   <div><span>Stitched as</span><b>{opened.fill_used || STITCH_LABEL[opened.stitch_type] || '—'}</b></div>
                   <div><span>Underlay</span><b>{opened.underlay_used || (opened.underlay ? 'yes' : 'none')}</b></div>
+                  {opened.coverage_pct != null && (
+                    <div><span>Artwork covered</span><b>{Number(opened.coverage_pct).toFixed(1)}%</b></div>
+                  )}
                 </div>
                 {/* The thread list is the only colour instruction a DST can carry — which is to
                     say, none. It has to be read off here. */}

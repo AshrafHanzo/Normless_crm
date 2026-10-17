@@ -748,6 +748,8 @@ async function ensureCrewfitSchema() {
             ALTER TABLE embroidery_designs ADD COLUMN IF NOT EXISTS stitch_type TEXT;
             ALTER TABLE embroidery_designs ADD COLUMN IF NOT EXISTS fill_used TEXT;
             ALTER TABLE embroidery_designs ADD COLUMN IF NOT EXISTS underlay_used TEXT;
+            -- How much of the artwork the thread actually reaches, measured off the finished file.
+            ALTER TABLE embroidery_designs ADD COLUMN IF NOT EXISTS coverage_pct NUMERIC;
             CREATE INDEX IF NOT EXISTS embroidery_designs_name_idx ON embroidery_designs (LOWER(name));
             CREATE INDEX IF NOT EXISTS embroidery_designs_made_idx ON embroidery_designs (created_at DESC);
         `);
