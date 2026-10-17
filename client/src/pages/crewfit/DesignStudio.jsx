@@ -235,8 +235,15 @@ export default function DesignStudio() {
           </p>
         </div>
 
-        {/* What just came out, big enough to judge before anyone threads a machine. */}
-        {made && (
+        {/* What just came out, big enough to judge before anyone threads a machine. Before the
+            first run the column says so rather than sitting there as a hole beside the form. */}
+        {!made ? (
+          <div className="studio-await">
+            <div className="studio-await-mark">🪡</div>
+            <b>The stitch file appears here</b>
+            <span>Its preview, thread list and downloads, beside the settings that made it.</span>
+          </div>
+        ) : (
           <div className="studio-result">
             <div className="studio-result-head">
               <h3>{made.name}</h3>
