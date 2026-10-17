@@ -64,9 +64,10 @@ def convert(image_bytes: bytes, width_mm: float = 100, colors="auto", underlay: 
     # Working at the artwork's own resolution is wasteful and, worse, uneven: a 4000px logo
     # scanned every 14px behaves differently from a 400px one scanned every 1.4px. Everything
     # below works at a fixed resolution in millimetres instead.
-    px_per_mm = 8.0
-    # Plenty: rows are 0.4mm apart, so eight pixels to the millimetre is already finer than any
-    # stitch. Past a few million pixels it only costs time and memory, so large sizes step down.
+    px_per_mm = 12.0
+    # Fine enough to find the middle of a half-millimetre stroke, which is what small lettering
+    # comes down to. Past a few million pixels it only costs time and memory, so large sizes
+    # step down from here.
     shape_ratio = fg.shape[0] / fg.shape[1]
     if (width_mm * px_per_mm) ** 2 * shape_ratio > 3.2e6:
         px_per_mm = max(3.5, (3.2e6 / shape_ratio) ** 0.5 / width_mm)
@@ -116,9 +117,13 @@ def convert(image_bytes: bytes, width_mm: float = 100, colors="auto", underlay: 
         # edge, opening takes off the speckle. The other order eats thin strokes.
         m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
         m = cv2.morphologyEx(m, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
-        # Fabric draws in under the needle, so every colour is grown slightly: neighbours then
-        # meet under each other instead of leaving a line of cloth showing between them.
-        m = cv2.dilate(m, np.ones((grow, grow), np.uint8))
+        # Fabric draws in under the needle, so colours are grown slightly and meet under each
+        # other instead of leaving a line of cloth showing between them. Only the solid parts,
+        # though: growing a half-millimetre letter stroke closes the counters of the letter and
+        # a word turns into a row of blobs.
+        thick = cv2.erode(m, np.ones((grow + 2, grow + 2), np.uint8))
+        m = m | (cv2.dilate(m, np.ones((grow, grow), np.uint8)) &
+                 cv2.dilate(thick, np.ones((grow * 2 + 1,) * 2, np.uint8)))
         if int(m.sum()) * mm * mm < MIN_AREA_MM2:
             continue
         c = cv2.cvtColor(np.uint8([[cent[i]]]), cv2.COLOR_LAB2BGR)[0, 0]
@@ -192,6 +197,79 @@ def convert(image_bytes: bytes, width_mm: float = 100, colors="auto", underlay: 
             y += step
         return [c for c in cols if c]
 
+    def skeleton(m):
+        """Thin a shape down to the single line running through the middle of it.
+
+        Zhang-Suen: pixels are taken off the edges, in two alternating passes, as long as doing
+        so does not break the shape apart or shorten a limb. What is left is one pixel wide and
+        follows the stroke, which is the line a thin letter has to be sewn along.
+        """
+        img = (m > 0).astype(np.uint8)
+        for _ in range(80):
+            gone = False
+            for step in (0, 1):
+                P = np.pad(img, 1)
+                p2, p3, p4 = P[:-2, 1:-1], P[:-2, 2:], P[1:-1, 2:]
+                p5, p6, p7 = P[2:, 2:], P[2:, 1:-1], P[2:, :-2]
+                p8, p9 = P[1:-1, :-2], P[:-2, :-2]
+                ring = [p2, p3, p4, p5, p6, p7, p8, p9, p2]
+                neighbours = p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9
+                crossings = sum(((ring[i] == 0) & (ring[i + 1] == 1)).astype(np.uint8) for i in range(8))
+                corner = ((p2 * p4 * p6 == 0) & (p4 * p6 * p8 == 0)) if step == 0 else \
+                         ((p2 * p4 * p8 == 0) & (p2 * p6 * p8 == 0))
+                take = (img == 1) & (neighbours >= 2) & (neighbours <= 6) & (crossings == 1) & corner
+                if take.any():
+                    img[take] = 0
+                    gone = True
+            if not gone:
+                break
+        return img
+
+    def spine(m):
+        """The thinned shape, walked out into lines that can be sewn one after another."""
+        sk = skeleton(m)
+        left = {(int(y), int(x)) for y, x in zip(*np.where(sk > 0))}
+        if not left:
+            return []
+        whole = set(left)
+        near = lambda q, pool: [(q[0] + dy, q[1] + dx) for dy in (-1, 0, 1) for dx in (-1, 0, 1)
+                                if (dy or dx) and (q[0] + dy, q[1] + dx) in pool]
+        degree = {q: len(near(q, whole)) for q in whole}
+
+        def follow(q, prev):
+            """Walk away from a point, carrying straight on wherever the line forks."""
+            out = []
+            while True:
+                step = [n for n in near(q, left)]
+                if not step:
+                    return out
+                if prev is not None:
+                    dy, dx = q[0] - prev[0], q[1] - prev[1]
+                    step.sort(key=lambda n: -((n[0] - q[0]) * dy + (n[1] - q[1]) * dx))
+                nxt = step[0]
+                left.discard(nxt)
+                out.append(nxt)
+                prev, q = q, nxt
+
+        # Ends first, so a stroke is sewn from one tip to the other rather than from its middle.
+        paths = []
+        for seed in sorted(whole, key=lambda q: (degree[q] != 1, q)):
+            if seed not in left:
+                continue
+            left.discard(seed)
+            # Out both ways: a seed in the middle of a stroke would otherwise leave half of it
+            # behind as a separate broken piece, which is how the lettering came apart.
+            ahead = follow(seed, None)
+            back = follow(seed, ahead[0] if ahead else None)
+            chain = back[::-1] + [seed] + ahead
+            if len(chain) * mm < 0.5:
+                continue                       # a whisker off the side of a stroke, not a stroke
+            pts = cv2.approxPolyDP(np.array([(x, y) for y, x in chain], np.int32).reshape(-1, 1, 2),
+                                   max(0.1 / mm, 0.6), False).reshape(-1, 2).astype(float)
+            if len(pts) >= 2:
+                paths.append(pts)
+        return paths
+
     def to_grain(m):
         """Turn a shape so its narrow axis is horizontal, and give back the way home.
 
@@ -264,7 +342,18 @@ def convert(image_bytes: bytes, width_mm: float = 100, colors="auto", underlay: 
         rows, out, cur, last = {}, [], [], None
         for y, s, e in strip:
             rows.setdefault(y, []).append((s, e))
-        for i, y in enumerate(sorted(rows)):
+        ys = sorted(rows)
+        # Where each row of a satin column starts and ends comes off a bitmap, so it wanders by
+        # a pixel either way and the edge of a letter comes out scalloped. Averaging each edge
+        # over its neighbours puts the line back without moving it.
+        if kind == "satin" and len(ys) >= 5 and all(len(rows[y]) == 1 for y in ys):
+            k = 3
+            smooth = lambda v: np.convolve(np.pad(np.asarray(v, float), k // 2, mode="edge"),
+                                           np.ones(k) / k, "valid")
+            a = smooth([rows[y][0][0] for y in ys])
+            b = smooth([rows[y][0][1] for y in ys])
+            rows = {y: [(a[i], b[i])] for i, y in enumerate(ys)}
+        for i, y in enumerate(ys):
             rev = i % 2 == 1
             for s, e in sorted(rows[y], key=lambda t: t[0], reverse=rev):
                 a, b = (e, s) if rev else (s, e)
@@ -367,11 +456,26 @@ def convert(image_bytes: bytes, width_mm: float = 100, colors="auto", underlay: 
         shapes = []
         n, labels, stats, _ = cv2.connectedComponentsWithStats(m, 8)
         for ci in range(1, n):
-            jobs = []
-            part = (labels == ci).astype(np.uint8)
             if stats[ci, cv2.CC_STAT_AREA] * mm * mm < MIN_AREA_MM2:
                 dropped += 1
                 continue
+            # Each shape is worked on inside its own box rather than across the whole picture.
+            # A letter is a few thousand pixels in a design of several million, and measuring,
+            # turning and thinning it at full size is most of what the converter used to spend
+            # its time on.
+            pad = 3
+            x0 = max(0, stats[ci, cv2.CC_STAT_LEFT] - pad)
+            y0 = max(0, stats[ci, cv2.CC_STAT_TOP] - pad)
+            x1 = min(m.shape[1], stats[ci, cv2.CC_STAT_LEFT] + stats[ci, cv2.CC_STAT_WIDTH] + pad)
+            y1 = min(m.shape[0], stats[ci, cv2.CC_STAT_TOP] + stats[ci, cv2.CC_STAT_HEIGHT] + pad)
+            part = (labels[y0:y1, x0:x1] == ci).astype(np.uint8)
+            jobs = []
+
+            def done():
+                """Put this shape's work back where it belongs on the design."""
+                shapes.append([(t, k, [(x + x0, y + y0) for x, y in pts])
+                               for t, k, pts in jobs if len(pts) >= 2])
+
             # The widest the shape ever gets, measured from the inside out. This is the number
             # that decides everything: thread can only lie the way a shape has room for.
             wide_mm = float(cv2.distanceTransform(part, cv2.DIST_L2, 3).max()) * 2 * mm
@@ -379,20 +483,20 @@ def convert(image_bytes: bytes, width_mm: float = 100, colors="auto", underlay: 
             if stitch_type == "run":
                 for path in contours(part):
                     jobs.append((1, "run", run_path(path)))
-                shapes.append([j for j in jobs if len(j[2]) >= 2])
+                done()
                 continue
 
             if wide_mm < MIN_SATIN_MM and stitch_type in ("auto", "satin", "satin_border"):
-                # A stroke thinner than a satin column can hold. A line of running stitch is
-                # what it is: one thread wide, which is as close as embroidery gets to a hairline.
-                # Its own outline, walked in short steps. Scanning such a stroke in rows gives
-                # two or three rows per letter and the letter falls apart into dashes; its
-                # outline is the letter, and at this width the two sides of it are a thread
-                # apart, so what goes down reads as the line the artwork drew.
+                # One line of thread down the middle of it. Going round its outline instead lays
+                # two lines half a millimetre apart, and at that spacing the thread closes up the
+                # inside of the letter: GLOBAL came out as GI OHAI.
                 hairlines.append(wide_mm)
-                for path in contours(part):
-                    jobs.append((1, "run", run_path(path, cap=1.2)))
-                shapes.append([j for j in jobs if len(j[2]) >= 2])
+                for path in spine(part):
+                    pts = [tuple(path[0])]
+                    for q in path[1:]:
+                        walk(pts[-1], tuple(q), pts, cap=1.2)
+                    jobs.append((1, "run", pts))
+                done()
                 continue
 
             wants_satin = stitch_type in ("satin", "auto")
@@ -413,7 +517,7 @@ def convert(image_bytes: bytes, width_mm: float = 100, colors="auto", underlay: 
                                 jobs.append((0, "satin", unrotate(pts, Minv)))
                         for pts in fill(col, rot, "satin", widen):
                             jobs.append((1, "satin", unrotate(pts, Minv)))
-                    shapes.append([j for j in jobs if len(j[2]) >= 2])
+                    done()
                     continue
                 curved += 1
             elif wants_satin:
@@ -432,7 +536,7 @@ def convert(image_bytes: bytes, width_mm: float = 100, colors="auto", underlay: 
             if stitch_type == "satin_border":
                 for path in contours(part):
                     jobs.append((2, "satin border", satin_border(path)))
-            shapes.append([j for j in jobs if len(j[2]) >= 2])
+            done()
         return shapes
 
     # ---- the pattern ---------------------------------------------------------------------------
