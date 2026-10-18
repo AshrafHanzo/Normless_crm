@@ -317,6 +317,11 @@ app.use('/api/scanner', authMiddleware, require('./routes/packing'));
 app.use('/api/banking', authMiddleware, require('./routes/banking'));
 // Customer support: returns, replacements and refunds arranged by hand.
 app.use('/api/support', authMiddleware, require('./routes/support'));
+// WhatsApp. The webhook is public because Meta calls it with no credentials of ours — it proves
+// itself with a signature over the raw body instead, which is why it is mounted here, after the
+// JSON parser that stashes those bytes but ahead of the sign-in the inbox routes sit behind.
+app.use('/api/whatsapp/webhook', require('./routes/whatsapp').webhook);
+app.use('/api/whatsapp', authMiddleware, require('./routes/whatsapp'));
 // Your own inbox: mentions and replies. Scoped to the caller inside the route.
 app.use('/api/notifications', authMiddleware, require('./routes/notifications'));
 // One comment thread implementation for every kind of thing that has one.
@@ -750,9 +755,291 @@ async function ensureCrewfitSchema() {
             ALTER TABLE embroidery_designs ADD COLUMN IF NOT EXISTS underlay_used TEXT;
             -- How much of the artwork the thread actually reaches, measured off the finished file.
             ALTER TABLE embroidery_designs ADD COLUMN IF NOT EXISTS coverage_pct NUMERIC;
+            -- Who may open the WhatsApp inbox, and who may run it: a rep answers the
+            -- conversations they are given, a manager sees every thread and moves them about.
+            ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_whatsapp BOOLEAN DEFAULT false;
+            ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_manage_whatsapp BOOLEAN DEFAULT false;
             CREATE INDEX IF NOT EXISTS embroidery_designs_name_idx ON embroidery_designs (LOWER(name));
             CREATE INDEX IF NOT EXISTS embroidery_designs_made_idx ON embroidery_designs (created_at DESC);
         `);
+
+        /* ── WhatsApp ────────────────────────────────────────────────────────────────────────
+           Enquiries arrive on WhatsApp and are answered on a phone, which means they are not
+           in the CRM at all: nobody knows which rep replied, what was promised, or how many
+           asked this week. These four tables put that conversation where the orders are.
+
+           A contact is a phone number. A conversation is the thread with it, and carries who it
+           belongs to and whether a person, a menu or the AI is answering. A message is one
+           WhatsApp message, kept with the id WhatsApp gave it so a retried delivery cannot be
+           written down twice. A lead is what an enquiry becomes — its own record rather than a
+           quote, because most enquiries never reach a quotation and a quote list that is really
+           an enquiry list can answer neither question. */
+        await db.exec(`
+            CREATE TABLE IF NOT EXISTS wa_contacts (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                phone TEXT UNIQUE NOT NULL,          -- E.164, no '+': what WhatsApp sends
+                profile_name TEXT,                   -- the name they set on WhatsApp
+                lead_id INTEGER,
+                customer_id INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS wa_conversations (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                contact_id INTEGER NOT NULL REFERENCES wa_contacts(id) ON DELETE CASCADE,
+                assigned_to TEXT,                    -- admin_users.username, as the rest of the CRM does it
+                status TEXT NOT NULL DEFAULT 'open', -- 'open' | 'closed'
+                mode TEXT NOT NULL DEFAULT 'human',  -- 'human' | 'flow' | 'ai'
+                flow_id TEXT, flow_step TEXT, flow_data TEXT,
+                -- The 24-hour window WhatsApp allows free replies in is counted from this.
+                last_inbound_at TIMESTAMP,
+                last_message_at TIMESTAMP,
+                last_message_preview TEXT,
+                unread_count INTEGER NOT NULL DEFAULT 0,
+                ad_referral TEXT,                    -- the Click-to-WhatsApp ad, where there was one
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS wa_messages (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                conversation_id INTEGER NOT NULL REFERENCES wa_conversations(id) ON DELETE CASCADE,
+                -- WhatsApp's own id. Unique, because Meta resends anything it is not sure we
+                -- received, and a resend must never become a second message in the thread.
+                wamid TEXT UNIQUE,
+                direction TEXT NOT NULL,             -- 'in' | 'out'
+                sender_type TEXT NOT NULL,           -- 'customer' | 'user' | 'bot' | 'ai'
+                sender_user TEXT,
+                type TEXT NOT NULL DEFAULT 'text',
+                body TEXT,
+                media_url TEXT, media_mime TEXT, media_name TEXT,
+                interactive_payload TEXT,
+                status TEXT,                         -- 'sent' | 'delivered' | 'read' | 'failed'
+                error TEXT,
+                sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS crewfit_leads (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                name TEXT, company TEXT, phone TEXT, email TEXT,
+                source TEXT DEFAULT 'whatsapp',      -- where the enquiry came from
+                ad_referral TEXT,
+                product_interest TEXT, quantity TEXT, branding TEXT,
+                -- 'new' until somebody has read it; the rest are moved by hand.
+                status TEXT NOT NULL DEFAULT 'new',  -- 'new' | 'working' | 'quoted' | 'won' | 'lost'
+                assigned_to TEXT,
+                notes TEXT,
+                quote_id INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE INDEX IF NOT EXISTS wa_messages_thread_idx ON wa_messages (conversation_id, id);
+            -- One thread per number. Four messages arriving together each found no conversation
+            -- and each made one, so a single customer appeared five times in the inbox; the
+            -- constraint is what makes the insert that follows safe to run concurrently.
+            CREATE UNIQUE INDEX IF NOT EXISTS wa_conversations_contact_idx ON wa_conversations (contact_id);
+            CREATE INDEX IF NOT EXISTS wa_conversations_recent_idx ON wa_conversations (last_message_at DESC);
+            CREATE INDEX IF NOT EXISTS wa_conversations_mine_idx ON wa_conversations (LOWER(assigned_to));
+            CREATE INDEX IF NOT EXISTS crewfit_leads_phone_idx ON crewfit_leads (phone);
+
+            -- Who new enquiries are shared out between. Separate from "may open the inbox":
+            -- a manager watches every thread without wanting a share of the new ones.
+            ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS is_sales_agent BOOLEAN DEFAULT false;
+
+            -- The sentences that get typed twenty times a week: the quote format, the bank
+            -- details, the lead time. Kept as rows rather than in each rep's head, so every
+            -- customer is told the same thing.
+            CREATE TABLE IF NOT EXISTS wa_quick_replies (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                title TEXT NOT NULL,
+                body TEXT NOT NULL,
+                sort_order INTEGER DEFAULT 0,
+                created_by TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            -- What the team says to each other about a conversation. Deliberately a different
+            -- table from wa_messages: nothing here can ever be sent to a customer by accident,
+            -- because the sending code reads the other table.
+            CREATE TABLE IF NOT EXISTS wa_notes (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                conversation_id INTEGER NOT NULL REFERENCES wa_conversations(id) ON DELETE CASCADE,
+                author TEXT,
+                body TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS wa_notes_thread_idx ON wa_notes (conversation_id, id DESC);
+
+            -- The menu, as data. Kept in a row rather than in code so the wording and the order
+            -- of the questions can change without a deploy, and so a second flow can sit beside
+            -- the first without either knowing about the other.
+            CREATE TABLE IF NOT EXISTS wa_flows (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                key TEXT UNIQUE NOT NULL,
+                name TEXT NOT NULL,
+                definition TEXT NOT NULL,         -- JSON: { start, steps }
+                is_active BOOLEAN DEFAULT false,  -- off until somebody turns it on
+                updated_by TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            -- Where the logo a customer sends during the menu ends up.
+            ALTER TABLE crewfit_leads ADD COLUMN IF NOT EXISTS logo_url TEXT;
+
+            -- Switches that belong to the module rather than to a person: whether the assistant
+            -- is answering, chiefly. A row, so it survives a restart and is one place to look.
+            -- The messages Meta has approved, copied here so the inbox can offer them without
+            -- asking Meta every time a rep opens a thread. Synced on demand, never edited here:
+            -- the approved text is Meta's, and editing it locally would mean offering a rep
+            -- something the send would then be refused for.
+            CREATE TABLE IF NOT EXISTS wa_templates (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                name TEXT NOT NULL,
+                language TEXT NOT NULL,
+                category TEXT,
+                status TEXT,
+                body_text TEXT,
+                variables INTEGER DEFAULT 0,
+                header_kind TEXT,
+                synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (name, language)
+            );
+
+            CREATE TABLE IF NOT EXISTS wa_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT,
+                updated_by TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            -- The stages an enquiry moves through, as rows: the shop names them, colours them
+            -- and puts them in order, and the inbox filters by them. A lead stores the key, so
+            -- renaming a status relabels every lead in it without touching them.
+            CREATE TABLE IF NOT EXISTS wa_lead_statuses (
+                key TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                color TEXT NOT NULL DEFAULT '#60a5fa',
+                description TEXT,
+                stage TEXT NOT NULL DEFAULT 'open',   -- 'open' | 'won' | 'lost'
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                is_default BOOLEAN NOT NULL DEFAULT false
+            );
+
+            -- What the side panel tracks on an enquiry beyond what the menu asks.
+            ALTER TABLE crewfit_leads ADD COLUMN IF NOT EXISTS needed_by DATE;
+            ALTER TABLE crewfit_leads ADD COLUMN IF NOT EXISTS quoted_amount NUMERIC;
+            ALTER TABLE crewfit_leads ADD COLUMN IF NOT EXISTS received_amount NUMERIC;
+
+            -- Teams a conversation can be routed to: sales, design, accounts. Membership is by
+            -- username, the way the rest of the CRM refers to people.
+            CREATE TABLE IF NOT EXISTS wa_teams (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                name TEXT UNIQUE NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS wa_team_members (
+                team_id INTEGER NOT NULL REFERENCES wa_teams(id) ON DELETE CASCADE,
+                username TEXT NOT NULL,
+                PRIMARY KEY (team_id, username)
+            );
+            -- How many open chats a person can carry before the rota skips them. Null is no cap.
+            ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS wa_max_open INTEGER;
+
+            -- Which team a new or changing conversation goes to. Checked top to bottom; the
+            -- first match wins. field: 'source' (ad | direct), 'menu_option' (a button or row
+            -- id from the menu), 'lead_status' (a status key).
+            CREATE TABLE IF NOT EXISTS wa_assign_rules (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                field TEXT NOT NULL,
+                value TEXT NOT NULL,
+                team_id INTEGER NOT NULL REFERENCES wa_teams(id) ON DELETE CASCADE,
+                is_active BOOLEAN NOT NULL DEFAULT true,
+                sort_order INTEGER NOT NULL DEFAULT 0
+            );
+
+            -- What fills each {{n}} of a template when a rep picks it: the customer's name, the
+            -- quantity, the quote. JSON array, position n-1 for {{n}}. Kept through a sync.
+            ALTER TABLE wa_templates ADD COLUMN IF NOT EXISTS var_map TEXT;
+
+            -- The enquiry an order came from, so the lead panel can list its orders and the order
+            -- can find its chat to send the payment links, invoices and tracking through.
+            ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS wa_lead_id INTEGER;
+            CREATE INDEX IF NOT EXISTS crewfit_orders_wa_lead_idx ON crewfit_orders (wa_lead_id);
+
+            -- What happened to an enquiry, in order: status moves, hand-offs, orders raised,
+            -- money in, and every message the CRM sent on its own. The lead panel's timeline.
+            CREATE TABLE IF NOT EXISTS wa_activity (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                conversation_id INTEGER REFERENCES wa_conversations(id) ON DELETE CASCADE,
+                order_id INTEGER,
+                kind TEXT NOT NULL,
+                body TEXT NOT NULL,
+                actor TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS wa_activity_thread_idx ON wa_activity (conversation_id, id DESC);
+
+            -- When the "we are closed" message last went to this chat, so it goes once, not on
+            -- every message a customer sends at night.
+            ALTER TABLE wa_conversations ADD COLUMN IF NOT EXISTS away_sent_at TIMESTAMP;
+            -- The billing details collected in the chat, for the order form to pick up.
+            ALTER TABLE crewfit_leads ADD COLUMN IF NOT EXISTS billing_name TEXT;
+            ALTER TABLE crewfit_leads ADD COLUMN IF NOT EXISTS billing_address TEXT;
+            ALTER TABLE crewfit_leads ADD COLUMN IF NOT EXISTS delivery_address TEXT;
+            ALTER TABLE crewfit_leads ADD COLUMN IF NOT EXISTS contact_person TEXT;
+            ALTER TABLE crewfit_leads ADD COLUMN IF NOT EXISTS billing_mobile TEXT;
+            ALTER TABLE crewfit_leads ADD COLUMN IF NOT EXISTS billing_email TEXT;
+            ALTER TABLE crewfit_leads ADD COLUMN IF NOT EXISTS gst_number TEXT;
+            -- Design mockups a designer uploads against an enquiry, to send for approval. Kept per
+            -- lead rather than per order: the mockup usually comes before there is an order.
+            CREATE TABLE IF NOT EXISTS wa_mockups (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                conversation_id INTEGER NOT NULL REFERENCES wa_conversations(id) ON DELETE CASCADE,
+                url TEXT NOT NULL,
+                file_name TEXT,
+                mime TEXT,
+                uploaded_by TEXT,
+                sent_at TIMESTAMP,
+                sent_by TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS wa_mockups_thread_idx ON wa_mockups (conversation_id, id);
+            -- The chat a quote was built in, so the inbox lists it beside the orders.
+            ALTER TABLE crewfit_quotes ADD COLUMN IF NOT EXISTS wa_lead_id INTEGER;
+            -- Which order message an activity line records, so the inbox can say "already sent".
+            ALTER TABLE wa_activity ADD COLUMN IF NOT EXISTS detail TEXT;
+            -- A photo per product, sent with its details when a rep shares it from a chat.
+            ALTER TABLE crewfit_products ADD COLUMN IF NOT EXISTS image_url TEXT;
+
+            -- Whether a product can be sent from a chat. Hiding one keeps it in the catalog
+            -- page and the quotes, just not in the inbox.
+            ALTER TABLE crewfit_products ADD COLUMN IF NOT EXISTS wa_visible BOOLEAN DEFAULT true;
+        `);
+        // The six stages the shop works in, seeded once and then the shop's to change.
+        const seeded = await db.query('SELECT COUNT(*)::int AS n FROM wa_lead_statuses');
+        if (!seeded.rows[0].n) {
+            const STATUSES = [
+                ['new', 'New', '#60a5fa', 'First message in, nobody has replied yet', 'open', true],
+                ['enquiry', 'Enquiry', '#c3c9d4', 'Asking about products or prices, no order in mind yet', 'open', false],
+                ['qualified', 'Qualified', '#a89dff', 'Has a real order: product, quantity and a date', 'open', false],
+                ['need_mockup', 'Need mockup', '#fbbf24', 'Waiting on design to show their logo on the product', 'open', false],
+                ['partially_paid', 'Partially paid', '#fb923c', 'Advance received, balance due before dispatch', 'won', false],
+                ['paid', 'Paid', '#34d399', 'Fully paid', 'won', false],
+            ];
+            for (const [i, s] of STATUSES.entries()) {
+                await db.query(
+                    `INSERT INTO wa_lead_statuses (key, name, color, description, stage, is_default, sort_order)
+                     VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (key) DO NOTHING`, [...s, i]);
+            }
+            // The statuses this table replaces, moved to their nearest stage.
+            await db.query(`UPDATE crewfit_leads SET status = CASE status
+                                WHEN 'working' THEN 'enquiry' WHEN 'quoted' THEN 'qualified'
+                                WHEN 'won' THEN 'paid' ELSE status END
+                             WHERE status IN ('working','quoted','won')`);
+        }
 
         const c = await db.query('SELECT COUNT(*) AS n FROM crewfit_products');
         if (parseInt(c.rows[0].n, 10) === 0) {
@@ -1699,6 +1986,10 @@ app.listen(PORT, async () => {
     await ensureAdminUser();
     // Ensure Crewfit catalog schema + seed
     await ensureCrewfitSchema();
+    // The WhatsApp menu, put in place once. Seeded switched off: nobody should discover that a
+    // robot started answering their customers because a deploy happened.
+    try { await require('./services/wa-flow').ensureStarterFlow(); }
+    catch (e) { console.error('whatsapp flow seed:', e.message); }
     // Ensure GST sales invoicing schema
     await ensureGstSchema();
     await ensureInventorySchema();

@@ -29,6 +29,7 @@ const NAV = {
   crewfit: [
     { to: '/crewfit/dashboard', icon: 'dashboard', label: 'Dashboard', perm: 'can_view_crewfit_analytics' },
     { to: '/crewfit', end: true, icon: 'bell', label: 'Follow-ups', perm: 'can_view_crewfit_followups' },
+    { to: '/crewfit/whatsapp', icon: 'whatsapp', label: 'WhatsApp', perm: 'can_view_whatsapp' },
     { to: '/crewfit/orders', icon: 'box', label: 'Bulk Orders', perm: 'can_view_crewfit_orders' },
     { to: '/crewfit/customers', icon: 'users', label: 'Customers', perm: 'can_view_crewfit_customers' },
     { to: '/crewfit/catalog', icon: 'shirt', label: 'Catalog', perm: 'can_view_crewfit_catalog' },
@@ -42,12 +43,16 @@ const NAV = {
   ],
 }
 
-export default function Sidebar({ collapsed = false, onToggleCollapse }) {
+export default function Sidebar({ collapsed = false, onToggleCollapse, open: openProp, onOpenChange }) {
   const { user, logout, brand, setBrand } = useAuth()
   const { isDark, toggleTheme } = useTheme()
   const apiFetch = useApi()
   const navigate = useNavigate()
-  const [open, setOpen] = useState(false)
+  // Open on a phone, or on a full-screen page that opens it from its own button (then the layout
+  // holds the state and passes it in).
+  const [ownOpen, setOwnOpen] = useState(false)
+  const open = openProp ?? ownOpen
+  const setOpen = onOpenChange ?? setOwnOpen
   // Orders that could be served from the RTO shelf. It lives here rather than on the Inventory
   // page because the whole value is being told before you open the page — the alternative is
   // printing a second garment for something already sitting in the building.

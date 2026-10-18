@@ -4,6 +4,8 @@ import AutoTextarea from '../../components/AutoTextarea'
 import OrderComments from '../../components/OrderComments'
 import ImageUploadGrid from '../../components/ImageUploadGrid'
 import { useApi, useAuth } from '../../App'
+import { Link, useLocation } from 'react-router-dom'
+import Icon from '../../components/Icon'
 import { useToast } from '../../components/Toast'
 import { cleanMobile, mobileError, isValidMobile, mobileInputProps } from '../../utils/phone'
 
@@ -312,13 +314,14 @@ function buildDispatchMessage(order) {
 // client can tap open — same limitation the order-summary/dispatch templates work within.
 function buildPhotosMessage(order, apiUrl) {
   const items = (order.line_items || []).filter(it => (it.prodImages || []).length)
-  const L = [`Hi ${order.customer_name || 'there'}! 👕`, '', `Here are the production photos for your Crewfit order (Ref: CF-${order.sl_no}):`, '']
+  const L = [`Hi ${order.customer_name || 'there'}! 👕`, '', `Here are the photos of your finished Crewfit order (Ref: CF-${order.sl_no}):`, '']
   items.forEach((it, i) => {
     L.push(`*${it.product || `Product ${i + 1}`}*`)
     it.prodImages.forEach(u => L.push(`${apiUrl}${u}`))
     L.push('')
   })
-  L.push('Please have a look — once you\'re happy with these, kindly complete the balance payment so we can proceed with dispatch. 🙌')
+  // Production is finished by now: the message reports it, it does not ask for approval.
+  L.push('Your order is production complete ✅ Kindly complete the balance payment so we can proceed with dispatch. 🙌')
   return L.join('\n')
 }
 
@@ -527,6 +530,8 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
   // Read-only operators open every order and change none. The server enforces this too — this
   // just stops them filling in a form that was never going to save.
   const canEdit = isOwner || user?.role === 'admin' || !!user?.can_edit_crewfit_orders
+  const canWhatsApp = isOwner || user?.role === 'admin' || !!user?.can_view_whatsapp
+  const location = useLocation()
   const [meta, setMeta] = useState(null)
   const [products, setProducts] = useState([])
   const [form, setForm] = useState(null)
@@ -1168,7 +1173,16 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
       <div className="drawer drawer-wide">
         <div className="drawer-header">
           <div><h2>{form.id ? `Edit Order #${form.sl_no}` : 'New Bulk Order'}</h2><div style={{ fontSize: 12.5, color: 'var(--text-muted)' }}>Add one or more products — price & totals auto-fill</div></div>
-          <button className="btn-icon" onClick={guard.requestClose}>✕</button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {/* The customer's chat, where this order's links, invoices and tracking are sent from.
+                Not offered when the drawer is already open inside that chat. */}
+            {form.id && canWhatsApp && !location.pathname.startsWith('/crewfit/whatsapp') && (
+              <Link to={`/crewfit/whatsapp?order=${form.id}`} className="btn btn-secondary btn-sm">
+                <Icon name="whatsapp" size={14} /> Open chat
+              </Link>
+            )}
+            <button className="btn-icon" onClick={guard.requestClose}>✕</button>
+          </div>
         </div>
         <form className="drawer-body" onSubmit={save}>
           {/* A native fieldset disables every control inside it in one go, so a read-only user
@@ -1202,7 +1216,7 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
               <select required value={form.customer_type || ''} onChange={e => setF({ customer_type: e.target.value })}><option value="">—</option>{(meta?.customerTypes || ['New', 'Returning']).map(v => <option key={v}>{v}</option>)}</select>
               <div className="img-upload-hint">Set automatically from the contact number's order history.</div>
             </div>
-            <div className="input-group"><label>Sales Officer *</label><select required value={form.so || ''} onChange={e => setF({ so: e.target.value })}><option value="">—</option>{(meta?.sos || []).map(v => <option key={v}>{v}</option>)}</select></div>
+            <div className="input-group"><label>Sales Officer *</label><select required value={form.so || ''} onChange={e => setF({ so: e.target.value })}><option value="">—</option>{[...new Set([...(meta?.sos || []), ...(form.so ? [form.so] : [])])].map(v => <option key={v}>{v}</option>)}</select></div>
           </div>
 
           {/* The count is a sibling element, not part of the heading text: AccordionSections keys

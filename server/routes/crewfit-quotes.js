@@ -218,6 +218,8 @@ router.post('/', async (req, res) => {
       // Optional buyer paperwork. A quote is often raised before any of it exists, so nothing here
       // is required — whatever is missing is simply left off the printed quotation.
       company_name, contact_person, email, gstin, delivery_address, delivery_date,
+      // Set when the quote is built from a WhatsApp chat, so the chat lists it.
+      wa_lead_id,
     } = req.body || {};
     if (!customer_name || !contact_number) return res.status(400).json({ error: 'Customer name and phone are required' });
     if (!isValidMobile(contact_number)) return res.status(400).json({ error: 'Phone must be exactly 10 digits' });
@@ -232,13 +234,13 @@ router.post('/', async (req, res) => {
       `INSERT INTO crewfit_quotes
          (customer_name, contact_number, zone_id, zone_label, line_items, product_total, shipping_charge,
           gst_amount, grand_total, notes, status, created_by,
-          company_name, contact_person, email, gstin, delivery_address, delivery_date)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'Draft',$11,$12,$13,$14,$15,$16,$17) RETURNING *`,
+          company_name, contact_person, email, gstin, delivery_address, delivery_date, wa_lead_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'Draft',$11,$12,$13,$14,$15,$16,$17,$18) RETURNING *`,
       [customer_name, contact_number, zoneId || null, result.zoneLabel, JSON.stringify(result.lineItems),
         result.productTotal, result.shippingCharge, result.gstAmount, result.grandTotal, notes || null,
         req.user?.username || null,
         trimText(company_name), trimText(contact_person), trimText(email), trimText(gstin),
-        trimText(delivery_address), delivery_date || null]
+        trimText(delivery_address), delivery_date || null, Number(wa_lead_id) || null]
     );
     res.status(201).json(parseQuote(ins.rows[0]));
   } catch (err) {
@@ -333,20 +335,30 @@ router.post('/:id/payment-link', async (req, res) => {
 });
 
 // GET /api/crewfit/quotes/:id/pdf — a shareable PDF of the quote (not a tax invoice).
+/** The quotation PDF as bytes, for the download below and for sending it on WhatsApp. */
+async function quotePdfBuffer(id) {
+  const r = await db.query('SELECT * FROM crewfit_quotes WHERE id = $1', [id]);
+  const quote = r.rows[0];
+  if (!quote) return null;
+  const parsed = parseQuote(quote);
+  parsed.line_items = await withFabric(parsed.line_items);
+  const doc = new PDFDocument({ size: 'A4', margin: 40 });
+  const chunks = [];
+  doc.on('data', (c) => chunks.push(c));
+  const done = new Promise((resolve, reject) => { doc.on('end', resolve); doc.on('error', reject); });
+  renderQuote(doc, parsed);
+  doc.end();
+  await done;
+  return { quote: parsed, buffer: Buffer.concat(chunks), filename: `Quote-${quote.id}-${quote.customer_name.replace(/[^a-z0-9]+/gi, '-')}.pdf` };
+}
+
 router.get('/:id/pdf', async (req, res) => {
   try {
-    const r = await db.query('SELECT * FROM crewfit_quotes WHERE id = $1', [req.params.id]);
-    const quote = r.rows[0];
-    if (!quote) return res.status(404).json({ error: 'Quote not found' });
-    const parsed = parseQuote(quote);
-    parsed.line_items = await withFabric(parsed.line_items);
-
+    const out = await quotePdfBuffer(req.params.id);
+    if (!out) return res.status(404).json({ error: 'Quote not found' });
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="Quote-${quote.id}-${quote.customer_name.replace(/[^a-z0-9]+/gi, '-')}.pdf"`);
-    const doc = new PDFDocument({ size: 'A4', margin: 40 });
-    doc.pipe(res);
-    renderQuote(doc, parsed);
-    doc.end();
+    res.setHeader('Content-Disposition', `attachment; filename="${out.filename}"`);
+    res.end(out.buffer);
   } catch (err) {
     console.error('quote pdf error:', err);
     if (!res.headersSent) res.status(500).json({ error: 'Failed to generate quote PDF' });
@@ -355,3 +367,4 @@ router.get('/:id/pdf', async (req, res) => {
 
 module.exports = router;
 module.exports.convertQuoteToOrder = convertQuoteToOrder;
+module.exports.quotePdfBuffer = quotePdfBuffer;

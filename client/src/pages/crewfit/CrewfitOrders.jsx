@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useSearchParams, Link } from 'react-router-dom'
 import { useApi, useAuth } from '../../App'
 import { useToast } from '../../components/Toast'
 import DateRangeFilter from '../../components/DateRangeFilter'
@@ -30,6 +30,7 @@ export default function CrewfitOrders() {
   const apiFetch = useApi()
   const toast = useToast()
   const { user, API_URL } = useAuth()
+  const canWhatsApp = user?.role === 'owner' || user?.role === 'admin' || !!user?.can_view_whatsapp
   const canEdit = ['owner', 'admin'].includes(user?.role) || !!user?.can_edit_crewfit_orders
   const [params, setParams] = useSearchParams()
   const [meta, setMeta] = useState(null)
@@ -208,7 +209,16 @@ export default function CrewfitOrders() {
                     <td data-label="Date" style={{ fontSize: 12.5 }}>{(o.order_date || '').slice(0, 10) || '—'}</td>
                     <td className="cell-primary">
                       <div style={{ fontWeight: 600 }}>{o.customer_name}</div>
-                      <div style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>{o.contact_number}</div>
+                      <div style={{ fontSize: 11.5, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                        {o.contact_number}
+                        {/* Straight to this customer's WhatsApp chat, where the order's messages go. */}
+                        {canWhatsApp && (
+                          <Link to={`/crewfit/whatsapp?order=${o.id}`} className="row-wa" title="Open the WhatsApp chat for this order"
+                            aria-label={`WhatsApp chat for CF-${o.sl_no}`} onClick={e => e.stopPropagation()}>
+                            <Icon name="whatsapp" size={13} />
+                          </Link>
+                        )}
+                      </div>
                       {/* The last thing anyone said about it — the reason to open the order. */}
                       {!!o.last_comment && (
                         <div className="note-preview" title={o.last_comment}>

@@ -83,13 +83,18 @@ async function settlePayment(payment, { razorpayPaymentId } = {}) {
   }
 
   const fields = Object.keys(patch);
-  if (!fields.length) return { alreadySettled: false, orderUpdated: false };
+  if (!fields.length) {
+    require('../services/wa-orders').paymentSettled(payment);
+    return { alreadySettled: false, orderUpdated: false };
+  }
   const set = fields.map((f, i) => `${f} = $${i + 1}`).join(', ');
   await db.query(
     `UPDATE crewfit_orders SET ${set}, updated_at = CURRENT_TIMESTAMP WHERE id = $${fields.length + 1}`,
     [...fields.map(f => patch[f]), order.id]
   );
   console.log(`💰 Payment #${payment.id} (${payment.kind}) settled — order CF-${order.sl_no} → ${JSON.stringify(patch)}`);
+  // The customer hears about it on WhatsApp, if that is switched on. Not awaited.
+  require('../services/wa-orders').paymentSettled(payment);
   return { alreadySettled: false, orderUpdated: true, order, patch };
 }
 
@@ -384,3 +389,5 @@ router.post('/:id/sent', async (req, res) => {
 module.exports = router;
 module.exports.settlePayment = settlePayment;
 module.exports.syncPayment = syncPayment;
+module.exports.createLink = createLink;
+module.exports.KIND_LABEL = KIND_LABEL;

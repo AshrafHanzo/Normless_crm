@@ -567,7 +567,7 @@ router.get('/orders/:id', async (req, res) => {
 
 const EXTRA = ['printing', 'printing_type', 'delivery_location', 'billing_name', 'contact_person', 'billing_mobile', 'billing_email',
   'gst_number', 'billing_address', 'unit_price', 'product_total', 'shipping', 'designer_charge', 'gst_amount', 'grand_total', 'advance', 'balance',
-  'line_items', 'whatsapp_number', 'tracking_sent_at', 'photos_sent_at', 'place_of_supply'];
+  'line_items', 'whatsapp_number', 'tracking_sent_at', 'photos_sent_at', 'place_of_supply', 'wa_lead_id'];
 
 // Anything a change to which can move the place of supply.
 const SUPPLY_EVIDENCE = ['gst_number', 'billing_address', 'delivery_location'];
@@ -671,6 +671,9 @@ router.put('/orders/:id', canEditOrders, async (req, res) => {
     const r = await db.query('SELECT * FROM crewfit_orders WHERE id = $1', [req.params.id]);
     await recordAudit(r.rows[0], before, r.rows[0], req.user?.username);
     const stock = await applyStock(r.rows[0]);
+    // Dispatched, production done: the customer may be due a WhatsApp message. Never awaited —
+    // a slow or refused send must not hold up saving the order.
+    require('../services/wa-orders').orderChanged(before, r.rows[0], req.user?.username);
     res.json({ ...parseOrder(r.rows[0]), inventory: stock });
   } catch (err) {
     console.error('crewfit update error:', err); res.status(500).json({ error: 'Failed to update order' });
@@ -734,6 +737,7 @@ router.post('/orders', canEditOrders, async (req, res) => {
     const ph = allCols.map((_, i) => `$${i + 1}`).join(',');
     const r = await db.query(`INSERT INTO crewfit_orders (${allCols.join(',')}) VALUES (${ph}) RETURNING *`, vals);
     await recordAudit(r.rows[0], null, r.rows[0], req.user?.username, 'create');
+    require('../services/wa-orders').orderChanged(null, r.rows[0], req.user?.username);
     // Usually a no-op — a new order starts at Awaiting Payment, well before production — but an
     // order can be entered after the fact, already in production or dispatched.
     const stock = await applyStock(r.rows[0]);
@@ -830,93 +834,119 @@ const docRow = async (orderId, type) => (await db.query(
  * 'advance' and 'balance' are accepted as aliases so older links keep working.
  */
 const DOC_ALIAS = { advance: 'proforma', balance: 'final', proforma: 'proforma', final: 'final' };
+const docError = (status, message) => Object.assign(new Error(message), { status });
+
+/**
+ * Issue (if not issued yet) an order's proforma or tax invoice, and draw it into a PDF document.
+ *
+ * Shared by the download route and the WhatsApp inbox, which sends the same PDF as an attachment.
+ * `type` is 'proforma' or 'final'. Throws an error carrying `status` when the order is not ready.
+ */
+async function issueOrderDocument(orderId, type, doc) {
+  const r = await db.query('SELECT * FROM crewfit_orders WHERE id = $1', [orderId]);
+  if (!r.rows[0]) throw docError(404, 'Not found');
+  const order = await withHsn(parseOrder(r.rows[0]));
+
+  if (!Number(order.grand_total)) {
+    throw docError(400, 'Order pricing is not finalized yet — add products/qty and save the order before generating an invoice.');
+  }
+  if (type === 'proforma' && order.payment_status === 'Pending') {
+    throw docError(400, 'No advance has been recorded yet');
+  }
+  if (type === 'final' && order.payment_status !== 'Fully Paid') {
+    throw docError(400, 'A tax invoice is only issued once the order is Fully Paid');
+  }
+
+  const figures = orderFigures(order);
+  const qty = orderUnits(order);
+  let row = await docRow(order.id, type === 'proforma' ? 'proforma' : 'tax_invoice');
+
+  if (!row) {
+    const gstin = (order.gst_number || '').trim().toUpperCase() || null;
+    // A proforma states only what was received; the tax invoice states the whole supply.
+    const advance = order.advance != null ? Number(order.advance) : Math.round(figures.amount / 2);
+    const amounts = type === 'proforma'
+      ? { taxable: null, gst_amount: null, gross: advance, qty: null }
+      : { taxable: figures.taxable_value, gst_amount: figures.gst_amount, gross: figures.amount, qty };
+    const today = todayStr();
+    const insert = (tx, number) => {
+      const { series, fy, seq } = numbering.parseNumber(number);
+      return tx.query(
+        `INSERT INTO crewfit_invoices
+           (order_id, doc_type, number, series, fy, seq, issue_date, status, qty,
+            taxable, gst_pct, gst_amount, gross, place_of_supply, gstin)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,'issued',$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
+        [order.id, type === 'proforma' ? 'proforma' : 'tax_invoice', number, series, fy, seq, today,
+          amounts.qty, amounts.taxable, figures.gst_pct, amounts.gst_amount, amounts.gross,
+          order.place_of_supply || null, gstin]);
+    };
+
+    if (type === 'proforma') {
+      row = (await insert(db, await nextProformaNumber(db))).rows[0];
+    } else if (gstin) {
+      row = (await insert(db, await numbering.nextCrewfitB2bNumber(db))).rows[0];
+    } else {
+      // The NL number and the row that carries it are one unit of work: issued under the
+      // shared lock so a sync batch numbering fulfilments can't be handed the same number.
+      row = await db.transaction(async (tx) => {
+        // A cancelled tax invoice keeps its number, so a reissue is a new line in the series —
+        // keyed CF-12/2, not CF-12, or the counter would hand the old number straight back.
+        const prior = (await tx.query(
+          `SELECT COUNT(*)::int AS n FROM crewfit_invoices WHERE order_id = $1 AND doc_type = 'tax_invoice'`, [order.id])).rows[0].n;
+        const item = { order_name: `CF-${order.sl_no}${prior ? `/${prior + 1}` : ''}`, date: today, kind: 'crewfit', tiebreak: order.id };
+        const numbers = await numbering.issueNormlessNumbers(tx, [item]);
+        return (await insert(tx, numbers.get(item.order_name))).rows[0];
+      });
+    }
+  } else if (type === 'final' && Number(row.gross) !== figures.amount) {
+    // The order was edited after the invoice was issued. Refresh the figures but keep the number
+    // and date: re-issuing would burn a number and leave a gap in the tax series.
+    const upd = await db.query(
+      `UPDATE crewfit_invoices SET taxable = $1, gst_amount = $2, gross = $3, qty = $4,
+              gst_pct = $5, updated_at = CURRENT_TIMESTAMP WHERE id = $6 RETURNING *`,
+      [figures.taxable_value, figures.gst_amount, figures.amount, qty, figures.gst_pct, row.id]);
+    row = upd.rows[0];
+  }
+
+  const asDoc = (d) => ({
+    number: d.number, date: toDateStr(d.issue_date), amount: Number(d.gross),
+    taxable_value: Number(d.taxable), gst_amount: Number(d.gst_amount), gst_pct: Number(d.gst_pct),
+  });
+
+  if (type === 'proforma') {
+    renderProforma(doc, order, asDoc(row));
+  } else {
+    const pro = await docRow(order.id, 'proforma');
+    renderInvoice(doc, order, asDoc(row), pro ? asDoc(pro) : null);
+  }
+  return { row, order, filename: `${row.number.replace(/\//g, '-')}.pdf` };
+}
+
+/** The same document, finished, as bytes. */
+async function orderDocumentBuffer(orderId, alias) {
+  const type = DOC_ALIAS[alias];
+  if (!type) throw docError(400, 'Invalid document type');
+  const doc = new PDFDocument({ size: 'A4', margin: 40 });
+  const chunks = [];
+  doc.on('data', (c) => chunks.push(c));
+  const done = new Promise((resolve, reject) => { doc.on('end', resolve); doc.on('error', reject); });
+  const issued = await issueOrderDocument(orderId, type, doc);
+  doc.end();
+  await done;
+  return { ...issued, type, buffer: Buffer.concat(chunks) };
+}
+
 router.get('/orders/:id/invoice/:type', canEditOrders, async (req, res) => {
   try {
     const type = DOC_ALIAS[req.params.type];
     if (!type) return res.status(400).json({ error: 'Invalid document type' });
-
-    const r = await db.query('SELECT * FROM crewfit_orders WHERE id = $1', [req.params.id]);
-    if (!r.rows[0]) return res.status(404).json({ error: 'Not found' });
-    const order = await withHsn(parseOrder(r.rows[0]));
-
-    if (!Number(order.grand_total)) {
-      return res.status(400).json({ error: 'Order pricing is not finalized yet — add products/qty and save the order before generating an invoice.' });
-    }
-    if (type === 'proforma' && order.payment_status === 'Pending') {
-      return res.status(400).json({ error: 'No advance has been recorded yet' });
-    }
-    if (type === 'final' && order.payment_status !== 'Fully Paid') {
-      return res.status(400).json({ error: 'A tax invoice is only issued once the order is Fully Paid' });
-    }
-
-    const figures = orderFigures(order);
-    const qty = orderUnits(order);
-    let row = await docRow(order.id, type === 'proforma' ? 'proforma' : 'tax_invoice');
-
-    if (!row) {
-      const gstin = (order.gst_number || '').trim().toUpperCase() || null;
-      // A proforma states only what was received; the tax invoice states the whole supply.
-      const advance = order.advance != null ? Number(order.advance) : Math.round(figures.amount / 2);
-      const amounts = type === 'proforma'
-        ? { taxable: null, gst_amount: null, gross: advance, qty: null }
-        : { taxable: figures.taxable_value, gst_amount: figures.gst_amount, gross: figures.amount, qty };
-      const today = todayStr();
-      const insert = (tx, number) => {
-        const { series, fy, seq } = numbering.parseNumber(number);
-        return tx.query(
-          `INSERT INTO crewfit_invoices
-             (order_id, doc_type, number, series, fy, seq, issue_date, status, qty,
-              taxable, gst_pct, gst_amount, gross, place_of_supply, gstin)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,'issued',$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
-          [order.id, type === 'proforma' ? 'proforma' : 'tax_invoice', number, series, fy, seq, today,
-            amounts.qty, amounts.taxable, figures.gst_pct, amounts.gst_amount, amounts.gross,
-            order.place_of_supply || null, gstin]);
-      };
-
-      if (type === 'proforma') {
-        row = (await insert(db, await nextProformaNumber(db))).rows[0];
-      } else if (gstin) {
-        row = (await insert(db, await numbering.nextCrewfitB2bNumber(db))).rows[0];
-      } else {
-        // The NL number and the row that carries it are one unit of work: issued under the
-        // shared lock so a sync batch numbering fulfilments can't be handed the same number.
-        row = await db.transaction(async (tx) => {
-          // A cancelled tax invoice keeps its number, so a reissue is a new line in the series —
-          // keyed CF-12/2, not CF-12, or the counter would hand the old number straight back.
-          const prior = (await tx.query(
-            `SELECT COUNT(*)::int AS n FROM crewfit_invoices WHERE order_id = $1 AND doc_type = 'tax_invoice'`, [order.id])).rows[0].n;
-          const item = { order_name: `CF-${order.sl_no}${prior ? `/${prior + 1}` : ''}`, date: today, kind: 'crewfit', tiebreak: order.id };
-          const numbers = await numbering.issueNormlessNumbers(tx, [item]);
-          return (await insert(tx, numbers.get(item.order_name))).rows[0];
-        });
-      }
-    } else if (type === 'final' && Number(row.gross) !== figures.amount) {
-      // The order was edited after the invoice was issued. Refresh the figures but keep the number
-      // and date: re-issuing would burn a number and leave a gap in the tax series.
-      const upd = await db.query(
-        `UPDATE crewfit_invoices SET taxable = $1, gst_amount = $2, gross = $3, qty = $4,
-                gst_pct = $5, updated_at = CURRENT_TIMESTAMP WHERE id = $6 RETURNING *`,
-        [figures.taxable_value, figures.gst_amount, figures.amount, qty, figures.gst_pct, row.id]);
-      row = upd.rows[0];
-    }
-
-    const asDoc = (d) => ({
-      number: d.number, date: toDateStr(d.issue_date), amount: Number(d.gross),
-      taxable_value: Number(d.taxable), gst_amount: Number(d.gst_amount), gst_pct: Number(d.gst_pct),
-    });
-
+    // Drawn into a buffer first, so a refusal can still be answered as JSON.
+    const { buffer, filename } = await orderDocumentBuffer(req.params.id, req.params.type);
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="${row.number.replace(/\//g, '-')}.pdf"`);
-    const doc = new PDFDocument({ size: 'A4', margin: 40 });
-    doc.pipe(res);
-    if (type === 'proforma') {
-      renderProforma(doc, order, asDoc(row));
-    } else {
-      const pro = await docRow(order.id, 'proforma');
-      renderInvoice(doc, order, asDoc(row), pro ? asDoc(pro) : null);
-    }
-    doc.end();
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.end(buffer);
   } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
     console.error('crewfit invoice error:', err);
     if (!res.headersSent) res.status(500).json({ error: 'Failed to generate invoice' });
   }
@@ -1197,3 +1227,5 @@ router.delete('/products/:id', ownerOnly, async (req, res) => {
 });
 
 module.exports = router;
+module.exports.orderDocumentBuffer = orderDocumentBuffer;
+module.exports.parseOrder = parseOrder;

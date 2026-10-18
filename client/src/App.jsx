@@ -34,6 +34,8 @@ import Inventory from './pages/Inventory'
 import OfflineSales from './pages/OfflineSales'
 import Backup from './pages/Backup'
 import DesignStudio from './pages/crewfit/DesignStudio'
+import WhatsAppInbox from './pages/crewfit/WhatsAppInbox'
+import WhatsAppSettings from './pages/crewfit/WhatsAppSettings'
 
 // API base. In dev, VITE_API_URL (from .env.development.local) points at the
 // production backend + Postgres so previews use the real database.
@@ -102,9 +104,21 @@ function AdminRoute({ children }) {
   return children
 }
 
+// Pages that want the whole screen — the WhatsApp inbox — hide the main menu and open it from a
+// button of their own. This is how they reach it.
+const MainMenuContext = createContext({ openMenu: () => {}, immersive: false })
+export function useMainMenu() { return useContext(MainMenuContext) }
+const IMMERSIVE = ['/crewfit/whatsapp']
+
 function AppLayout({ children }) {
   const { brand } = useAuth()
   const location = useLocation()
+  const immersive = IMMERSIVE.some(p => location.pathname === p || location.pathname.startsWith(`${p}/`))
+  // Open for the page it was opened on: a link followed from the menu lands on another page, and
+  // the menu should not still be covering it there.
+  const [menuPath, setMenuPath] = useState(null)
+  const menuOpen = menuPath === location.pathname
+  const setMenuOpen = (open) => setMenuPath(open ? location.pathname : null)
   // Open unless the user has said otherwise, and remembered across visits — a menu that reopens
   // itself every navigation is worse than one that never collapsed.
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem('crm_sidebar') === 'collapsed')
@@ -114,12 +128,15 @@ function AppLayout({ children }) {
     return next
   })
   return (
-    <div className={`app-layout brand-${brand} ${collapsed ? 'sidebar-collapsed' : ''}`}>
-      <Sidebar collapsed={collapsed} onToggleCollapse={toggleSidebar} />
-      <main className="main-content">
-        <ErrorBoundary key={location.pathname}>{children}</ErrorBoundary>
-      </main>
-    </div>
+    <MainMenuContext.Provider value={{ openMenu: () => setMenuOpen(true), immersive }}>
+      <div className={`app-layout brand-${brand} ${collapsed && !immersive ? 'sidebar-collapsed' : ''} ${immersive ? 'app-immersive' : ''}`}>
+        <Sidebar collapsed={collapsed && !immersive} onToggleCollapse={toggleSidebar}
+          {...(immersive ? { open: menuOpen, onOpenChange: setMenuOpen } : {})} />
+        <main className="main-content">
+          <ErrorBoundary key={location.pathname}>{children}</ErrorBoundary>
+        </main>
+      </div>
+    </MainMenuContext.Provider>
   )
 }
 
@@ -213,6 +230,9 @@ function App() {
             <Route path="/crewfit/orders" element={<ProtectedRoute permission="can_view_crewfit_orders"><AppLayout><CrewfitOrders /></AppLayout></ProtectedRoute>} />
             <Route path="/crewfit/catalog" element={<ProtectedRoute permission="can_view_crewfit_catalog"><AppLayout><CrewfitCatalog /></AppLayout></ProtectedRoute>} />
             <Route path="/crewfit/design-studio" element={<ProtectedRoute permission="can_use_design_studio"><AppLayout><DesignStudio /></AppLayout></ProtectedRoute>} />
+            <Route path="/crewfit/whatsapp" element={<ProtectedRoute permission="can_view_whatsapp"><AppLayout><WhatsAppInbox /></AppLayout></ProtectedRoute>} />
+            <Route path="/crewfit/whatsapp/settings" element={<ProtectedRoute permission="can_manage_whatsapp"><AppLayout><WhatsAppSettings /></AppLayout></ProtectedRoute>} />
+            <Route path="/crewfit/whatsapp/settings/:tab" element={<ProtectedRoute permission="can_manage_whatsapp"><AppLayout><WhatsAppSettings /></AppLayout></ProtectedRoute>} />
             <Route path="/crewfit/quotes" element={<ProtectedRoute permission="can_view_crewfit_calculator"><AppLayout><CrewfitQuotes /></AppLayout></ProtectedRoute>} />
             <Route path="/crewfit/payments" element={<ProtectedRoute permission="can_view_crewfit_payments"><AppLayout><CrewfitPayments /></AppLayout></ProtectedRoute>} />
             <Route path="/crewfit/customers" element={<ProtectedRoute permission="can_view_crewfit_customers"><AppLayout><CrewfitCustomers /></AppLayout></ProtectedRoute>} />

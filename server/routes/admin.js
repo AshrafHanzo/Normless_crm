@@ -26,6 +26,7 @@ const PERM_MAP = {
   offline_sales: 'can_view_offline_sales', offline_sales_edit: 'can_edit_offline_sales',
   support: 'can_view_support', support_edit: 'can_edit_support',
   banking: 'can_view_banking', banking_edit: 'can_edit_banking',
+  whatsapp: 'can_view_whatsapp', whatsapp_manage: 'can_manage_whatsapp',
   backups: 'can_view_backups',
 };
 const PERM_KEYS = Object.keys(PERM_MAP);
@@ -66,7 +67,7 @@ router.get('/users', async (req, res) => {
     }
 
     const result = await db.query(`
-      SELECT id, username, role, is_active, last_login, login_count, created_at,
+      SELECT id, username, role, is_active, is_sales_agent, last_login, login_count, created_at,
              ${PERM_COLUMNS.join(', ')}
       FROM admin_users
       ORDER BY created_at DESC
@@ -102,8 +103,9 @@ router.post('/users', async (req, res) => {
     const hash = bcrypt.hashSync(password, salt);
     const p = permissions || {};
 
-    const cols = ['username', 'password_hash', 'role', 'is_active', ...PERM_COLUMNS];
-    const vals = [username, hash, role || 'operator', true, ...PERM_KEYS.map(k => !!p[k])];
+    const cols = ['username', 'password_hash', 'role', 'is_active', 'is_sales_agent', ...PERM_COLUMNS];
+    const vals = [username, hash, role || 'operator', true, !!req.body.is_sales_agent,
+                  ...PERM_KEYS.map(k => !!p[k])];
     await db.query(
       `INSERT INTO admin_users (${cols.join(', ')})
        VALUES (${cols.map((_, i) => `$${i + 1}`).join(', ')})`, vals);
@@ -122,7 +124,7 @@ router.put('/users/:id', async (req, res) => {
       return res.status(403).json({ error: 'Access denied' });
     }
 
-    const { role, is_active, permissions } = req.body;
+    const { role, is_active, is_sales_agent, permissions } = req.body;
     if (role !== undefined) {
       if (!ROLES.includes(role)) return res.status(400).json({ error: 'Unknown role' });
       const bad = await guardRoleChange(req, req.params.id, role);
@@ -137,6 +139,8 @@ router.put('/users/:id', async (req, res) => {
     const sets = [], vals = [];
     if (role !== undefined) { vals.push(role); sets.push(`role = $${vals.length}`); }
     if (is_active !== undefined) { vals.push(is_active); sets.push(`is_active = $${vals.length}`); }
+    // Not a permission: it decides who new WhatsApp enquiries are shared out between.
+    if (is_sales_agent !== undefined) { vals.push(!!is_sales_agent); sets.push(`is_sales_agent = $${vals.length}`); }
     if (permissions) for (const [k, col] of Object.entries(PERM_MAP)) {
       if (permissions[k] !== undefined) { vals.push(!!permissions[k]); sets.push(`${col} = $${vals.length}`); }
     }

@@ -38,22 +38,24 @@ const GROUPS = [
     { key: 'crewfit_payments', label: 'Payments', icon: 'card' },
     { key: 'crewfit_vendors', label: 'Vendor Orders', icon: 'truck' },
     { key: 'crewfit_invoices', label: 'Invoices', icon: 'invoice' },
+    { key: 'whatsapp', label: 'WhatsApp inbox — own conversations', icon: 'whatsapp' },
+    { key: 'whatsapp_manage', label: 'WhatsApp — every conversation, and reassign', icon: 'edit', sub: 'whatsapp' },
   ] },
 ]
 
-const blankForm = () => ({ username: '', password: '', role: 'operator', normless: true, dashboard: true, customers: true, orders: true, scanner: true, marketing: false, marketing_dispatch: false, marketing_approve: false, marketing_reports: false, support: false, support_edit: false, invoices: false, crewfit: false, crewfit_analytics: false, crewfit_followups: false, crewfit_orders: false, crewfit_catalog: false, crewfit_catalog_upload: false, crewfit_samples_upload: false, design_studio: false, crewfit_calculator: false, crewfit_payments: false, crewfit_customers: false, crewfit_vendors: false, crewfit_invoices: false, crewfit_orders_edit: false, inventory: false, inventory_edit: false, inventory_import: false, offline_sales: false, offline_sales_edit: false, banking: false, banking_edit: false, revenue: false, backups: false })
+const blankForm = () => ({ username: '', password: '', role: 'operator', is_sales_agent: false, normless: true, dashboard: true, customers: true, orders: true, scanner: true, marketing: false, marketing_dispatch: false, marketing_approve: false, marketing_reports: false, support: false, support_edit: false, invoices: false, crewfit: false, crewfit_analytics: false, crewfit_followups: false, crewfit_orders: false, crewfit_catalog: false, crewfit_catalog_upload: false, crewfit_samples_upload: false, design_studio: false, crewfit_calculator: false, crewfit_payments: false, crewfit_customers: false, crewfit_vendors: false, crewfit_invoices: false, crewfit_orders_edit: false, inventory: false, inventory_edit: false, inventory_import: false, offline_sales: false, offline_sales_edit: false, banking: false, banking_edit: false, whatsapp: false, whatsapp_manage: false, revenue: false, backups: false })
 const fromUser = (u) => ({
-  id: u.id, username: u.username, password: '', role: u.role,
+  id: u.id, username: u.username, password: '', role: u.role, is_sales_agent: !!u.is_sales_agent,
   normless: !!u.can_access_normless, dashboard: !!u.can_view_dashboard, customers: !!u.can_view_customers, orders: !!u.can_view_orders, scanner: !!u.can_scan_orders, invoices: !!u.can_view_invoices,
   marketing: !!u.can_view_marketing, marketing_dispatch: !!u.can_dispatch_marketing, marketing_approve: !!u.can_approve_marketing, marketing_reports: !!u.can_view_marketing_reports,
   support: !!u.can_view_support, support_edit: !!u.can_edit_support,
-  crewfit: !!u.can_access_crewfit, crewfit_analytics: !!u.can_view_crewfit_analytics, crewfit_followups: !!u.can_view_crewfit_followups, crewfit_orders: !!u.can_view_crewfit_orders, crewfit_catalog: !!u.can_view_crewfit_catalog, crewfit_catalog_upload: !!u.can_upload_crewfit_catalog, crewfit_samples_upload: !!u.can_upload_crewfit_samples, design_studio: !!u.can_use_design_studio, crewfit_calculator: !!u.can_view_crewfit_calculator, crewfit_payments: !!u.can_view_crewfit_payments, crewfit_customers: !!u.can_view_crewfit_customers, crewfit_vendors: !!u.can_view_crewfit_vendors, crewfit_invoices: !!u.can_view_crewfit_invoices, crewfit_orders_edit: !!u.can_edit_crewfit_orders, inventory: !!u.can_view_inventory, inventory_edit: !!u.can_edit_inventory, inventory_import: !!u.can_import_rto, offline_sales: !!u.can_view_offline_sales, offline_sales_edit: !!u.can_edit_offline_sales, banking: !!u.can_view_banking, banking_edit: !!u.can_edit_banking, revenue: !!u.can_view_revenue,
+  crewfit: !!u.can_access_crewfit, crewfit_analytics: !!u.can_view_crewfit_analytics, crewfit_followups: !!u.can_view_crewfit_followups, crewfit_orders: !!u.can_view_crewfit_orders, crewfit_catalog: !!u.can_view_crewfit_catalog, crewfit_catalog_upload: !!u.can_upload_crewfit_catalog, crewfit_samples_upload: !!u.can_upload_crewfit_samples, design_studio: !!u.can_use_design_studio, crewfit_calculator: !!u.can_view_crewfit_calculator, crewfit_payments: !!u.can_view_crewfit_payments, crewfit_customers: !!u.can_view_crewfit_customers, crewfit_vendors: !!u.can_view_crewfit_vendors, crewfit_invoices: !!u.can_view_crewfit_invoices, crewfit_orders_edit: !!u.can_edit_crewfit_orders, inventory: !!u.can_view_inventory, inventory_edit: !!u.can_edit_inventory, inventory_import: !!u.can_import_rto, offline_sales: !!u.can_view_offline_sales, offline_sales_edit: !!u.can_edit_offline_sales, banking: !!u.can_view_banking, banking_edit: !!u.can_edit_banking, whatsapp: !!u.can_view_whatsapp, whatsapp_manage: !!u.can_manage_whatsapp, revenue: !!u.can_view_revenue,
   backups: !!u.can_view_backups,
 })
 const buildPerms = (f) => {
   // Owner and admin both hold every page; the server short-circuits permission checks for them
   // either way, so these columns are really just kept consistent with the role.
-  if (f.role === 'admin' || f.role === 'owner') return { normless: true, crewfit: true, dashboard: true, customers: true, orders: true, scanner: true, marketing: true, marketing_dispatch: true, marketing_approve: true, marketing_reports: true, support: true, support_edit: true, invoices: true, crewfit_analytics: true, crewfit_followups: true, crewfit_orders: true, crewfit_catalog: true, crewfit_catalog_upload: true, crewfit_samples_upload: true, design_studio: true, crewfit_calculator: true, crewfit_payments: true, crewfit_customers: true, crewfit_vendors: true, crewfit_invoices: true, crewfit_orders_edit: true, inventory: true, inventory_edit: true, inventory_import: true, offline_sales: true, offline_sales_edit: true, banking: true, banking_edit: true, revenue: true, backups: true, sync: f.role === 'owner' }
+  if (f.role === 'admin' || f.role === 'owner') return { normless: true, crewfit: true, dashboard: true, customers: true, orders: true, scanner: true, marketing: true, marketing_dispatch: true, marketing_approve: true, marketing_reports: true, support: true, support_edit: true, invoices: true, crewfit_analytics: true, crewfit_followups: true, crewfit_orders: true, crewfit_catalog: true, crewfit_catalog_upload: true, crewfit_samples_upload: true, design_studio: true, crewfit_calculator: true, crewfit_payments: true, crewfit_customers: true, crewfit_vendors: true, crewfit_invoices: true, crewfit_orders_edit: true, inventory: true, inventory_edit: true, inventory_import: true, offline_sales: true, offline_sales_edit: true, banking: true, banking_edit: true, whatsapp: true, whatsapp_manage: true, revenue: true, backups: true, sync: f.role === 'owner' }
   return {
     normless: !!f.normless, crewfit: !!f.crewfit, sync: false,
     dashboard: !!(f.normless && f.dashboard), customers: !!(f.normless && f.customers), orders: !!(f.normless && f.orders), scanner: !!(f.normless && f.scanner), invoices: !!(f.normless && f.invoices),
@@ -82,6 +84,11 @@ const buildPerms = (f) => {
     // The statements are the most sensitive page here, so viewing is its own grant and loading
     // one is another on top of it.
     banking: !!(f.normless && f.banking), banking_edit: !!(f.normless && f.banking && f.banking_edit),
+    // The inbox is a Crewfit page: enquiries come in against Crewfit products. Managing
+    // conversations is the separate grant, because reassigning somebody else's thread and
+    // reading every customer's chat are not what a rep needs to do their own work.
+    whatsapp: !!(f.crewfit && f.whatsapp),
+    whatsapp_manage: !!(f.crewfit && f.whatsapp && f.whatsapp_manage),
     revenue: !!f.revenue,
     // Not tied to either brand: one database holds both, so one backup covers both.
     backups: !!f.backups,
@@ -123,8 +130,8 @@ export default function AdminManagement() {
     setSaving(true)
     const permissions = buildPerms(form)
     let res
-    if (form.id) res = await apiFetch(`/api/admin/users/${form.id}`, { method: 'PUT', body: JSON.stringify({ role: form.role, permissions }) })
-    else res = await apiFetch('/api/admin/users', { method: 'POST', body: JSON.stringify({ username: form.username, password: form.password, role: form.role, permissions }) })
+    if (form.id) res = await apiFetch(`/api/admin/users/${form.id}`, { method: 'PUT', body: JSON.stringify({ role: form.role, is_sales_agent: !!form.is_sales_agent, permissions }) })
+    else res = await apiFetch('/api/admin/users', { method: 'POST', body: JSON.stringify({ username: form.username, password: form.password, role: form.role, is_sales_agent: !!form.is_sales_agent, permissions }) })
     setSaving(false)
     if (res?.success) { guard.reset(); setForm(null); loadUsers(); loadStats(); toast.success(form.id ? 'User updated' : 'User created') } else toast.error(res?.error || 'Save failed')
   }
@@ -177,6 +184,20 @@ export default function AdminManagement() {
               </select>
               {!isOwner && form.role === 'owner' && <div className="img-upload-hint">Only another owner can change this.</div>}
             </div>
+          </div>
+
+          {/* Not a permission — it decides who new WhatsApp enquiries are shared out between, and
+              an admin can be on the rota as readily as an operator. */}
+          <div className="access-card data-access-card" style={{ marginTop: 12 }}>
+            <label className="page-check" style={{ margin: 0 }}>
+              <input type="checkbox" checked={!!form.is_sales_agent}
+                onChange={e => setF({ is_sales_agent: e.target.checked })} />
+              <Icon name="users" size={15} />
+              <span>
+                <b>Takes a share of new WhatsApp enquiries</b>
+                <em>New conversations are handed out between the people ticked here, to whoever is carrying the fewest open ones. Leave it unticked and they can still be given a conversation by hand, or pick one up from the unassigned list.</em>
+              </span>
+            </label>
           </div>
 
           {form.role === 'owner' ? (
