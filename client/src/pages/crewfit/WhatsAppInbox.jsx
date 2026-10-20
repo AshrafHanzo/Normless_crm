@@ -1175,7 +1175,7 @@ export default function WhatsAppInbox() {
                         {m.body && <div className="wa-text">{m.body}</div>}
                         <div className="wa-meta">
                           {m.type === 'template' && <span>template</span>}
-                          {mine && (m.sender_type === 'auto' ? <span>sent automatically</span> : m.sender_type === 'bot' ? <span>menu</span>
+                          {mine && (m.sender_type === 'phone' ? <span>from the phone app</span> : m.sender_type === 'auto' ? <span>sent automatically</span> : m.sender_type === 'bot' ? <span>menu</span>
                             : m.sender_type === 'ai' ? <span>assistant</span>
                               : m.sender_user ? <span>{short(m.sender_user)}</span> : null)}
                           <span>{clock(m.sent_at)}</span>

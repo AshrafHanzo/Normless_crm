@@ -32,6 +32,7 @@ const routing = require('../services/wa-routing');
 const orders = require('../services/wa-orders');
 const extras = require('../services/wa-extras');
 const billing = require('../services/wa-billing');
+const connectSvc = require('../services/wa-connect');
 
 const router = express.Router();
 
@@ -91,6 +92,18 @@ async function handleEvent(body) {
     for (const entry of body?.entry || []) {
         for (const change of entry?.changes || []) {
             const value = change?.value || {};
+            // Coexistence: the phone app's own traffic, the imported history, its contacts, and
+            // the account's connection changing. Each is its own webhook field.
+            if (change.field === 'smb_message_echoes') {
+                for (const echo of value.message_echoes || []) await receiveEcho(echo);
+                continue;
+            }
+            // One at a time: Meta sends the chunks close together, and each one adds to the same
+            // running count. Handled side by side, two chunks each read the old count and the
+            // second write lost the first — the import said 3 messages where 4 had come in.
+            if (change.field === 'history') { await inTurn(() => receiveHistory(value)); continue; }
+            if (change.field === 'smb_app_state_sync') { await inTurn(() => receiveContacts(value)); continue; }
+            if (change.field === 'account_update') { await connectSvc.accountUpdate(value); continue; }
             const profileByPhone = new Map(
                 (value.contacts || []).map(c => [c.wa_id, c?.profile?.name || null]));
 
@@ -264,6 +277,149 @@ async function isMenuKeyword(text) {
     return words.includes(String(text || '').trim().toLowerCase());
 }
 
+/* ── Coexistence: the phone app's messages, and the history it brought with it ──────────────
+   With the number on the WhatsApp Business app and the CRM together, staff still reply from the
+   phone. Those replies arrive as "echoes" and are written into the thread so it reads whole.
+   History arrives once, in chunks, after connecting: up to 180 days of one-to-one chats.
+
+   Neither starts the menu, assigns anybody, counts as unread, or touches the 24-hour window —
+   Meta does not count phone-app or historical messages towards it, and neither do we. */
+
+let importChain = Promise.resolve();
+const inTurn = (job) => {
+    const run = importChain.then(job);
+    importChain = run.catch(err => console.error('whatsapp import error:', err.message));
+    return run;
+};
+
+/** The thread with a number, made without routing or a menu: for messages that are not new. */
+async function quietThread(phone, name) {
+    return db.transaction(async (c) => {
+        const contact = (await c.query(
+            `INSERT INTO wa_contacts (phone, profile_name) VALUES ($1, $2)
+             ON CONFLICT (phone) DO UPDATE SET profile_name = COALESCE(wa_contacts.profile_name, EXCLUDED.profile_name)
+             RETURNING id, lead_id`, [phone, name || null])).rows[0];
+        const locked = (await c.query('SELECT lead_id FROM wa_contacts WHERE id = $1 FOR UPDATE', [contact.id])).rows[0];
+        if (!locked?.lead_id) {
+            // An old chat is not a new enquiry: it goes in as one already being talked to.
+            const leadId = (await c.query(
+                `INSERT INTO crewfit_leads (name, phone, source, status)
+                 VALUES ($1, $2, 'whatsapp',
+                         COALESCE((SELECT key FROM wa_lead_statuses WHERE key = 'enquiry'),
+                                  (SELECT key FROM wa_lead_statuses WHERE is_default ORDER BY sort_order LIMIT 1), 'new'))
+                 RETURNING id`, [name || null, phone])).rows[0].id;
+            await c.query('UPDATE wa_contacts SET lead_id = $2 WHERE id = $1', [contact.id, leadId]);
+        }
+        return (await c.query(
+            `INSERT INTO wa_conversations (contact_id) VALUES ($1)
+             ON CONFLICT (contact_id) DO UPDATE SET contact_id = EXCLUDED.contact_id
+             RETURNING id`, [contact.id])).rows[0];
+    });
+}
+
+/** Move a thread's "last message" on, but never back to something older. */
+async function touchThread(conversationId, at, preview) {
+    await db.query(
+        `UPDATE wa_conversations
+            SET last_message_at = $2, last_message_preview = $3, updated_at = CURRENT_TIMESTAMP
+          WHERE id = $1 AND (last_message_at IS NULL OR last_message_at <= $2)`,
+        [conversationId, at, String(preview || '').slice(0, 200)]);
+}
+
+const tsOf = (m) => (m?.timestamp ? new Date(Number(m.timestamp) * 1000) : new Date());
+
+/** A message a member of staff sent from the phone app. */
+async function receiveEcho(echo) {
+    const phone = wa.normalisePhone(echo?.to);
+    if (!phone || !echo?.id) return;
+    const conv = await quietThread(phone, null);
+    const body = describe(echo);
+    const row = (await db.query(
+        `INSERT INTO wa_messages (conversation_id, wamid, direction, sender_type, type, body, interactive_payload, status, sent_at)
+         VALUES ($1,$2,'out','phone',$3,$4,$5,'sent',$6)
+         ON CONFLICT (wamid) DO NOTHING RETURNING id`,
+        [conv.id, echo.id, echo.type || 'text', body, JSON.stringify(interactivePayload(echo)), tsOf(echo)])).rows[0];
+    if (!row) return;
+    await touchThread(conv.id, tsOf(echo), body);
+    if (MEDIA_TYPES.includes(echo.type) && echo[echo.type]?.id) {
+        try {
+            const file = await wa.downloadMedia(echo[echo.type].id, conv.id);
+            await db.query(`UPDATE wa_messages SET media_url = $2, media_mime = $3, media_name = $4 WHERE id = $1`,
+                [row.id, file.url, file.mime, echo[echo.type].filename || null]);
+        } catch (err) {
+            console.error('whatsapp echo media download failed:', err.message);
+        }
+    }
+}
+
+/** One chunk of imported history. Counted into history_import for the settings page. */
+async function receiveHistory(value) {
+    const conn = (await connectSvc.getSetting('connection')) || {};
+    const business = conn.business_phone || wa.normalisePhone(value?.metadata?.display_phone_number || '');
+    const progress = (await connectSvc.getSetting('history_import')) || {};
+
+    for (const chunk of value?.history || []) {
+        const errors = chunk.errors || value.errors || [];
+        if (errors.some(e => Number(e.code) === 2593109)) {
+            await connectSvc.putSetting('history_import', { ...progress, status: 'declined', error: 'The business chose not to share its chat history', updated_at: new Date().toISOString() });
+            return;
+        }
+        let inserted = 0;
+        for (const thread of chunk.threads || []) {
+            const phone = wa.normalisePhone(thread.id);
+            if (!phone) continue;
+            const conv = await quietThread(phone, null);
+            let latest = null;
+            for (const m of thread.messages || []) {
+                if (!m?.id) continue;
+                const out = (business && wa.normalisePhone(m.from) === business) || (!!m.to && wa.normalisePhone(m.to) === phone);
+                const body = m.type === 'media_placeholder' ? '📎 Media (from the phone app history)' : describe(m);
+                const status = out ? String(m.history_context?.status || 'sent').toLowerCase() : 'delivered';
+                const r = (await db.query(
+                    `INSERT INTO wa_messages (conversation_id, wamid, direction, sender_type, type, body, status, sent_at)
+                     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+                     ON CONFLICT (wamid) DO NOTHING RETURNING id`,
+                    [conv.id, m.id, out ? 'out' : 'in', out ? 'phone' : 'customer', m.type || 'text', body,
+                        ['sent', 'delivered', 'read', 'played'].includes(status) ? (status === 'played' ? 'read' : status) : 'sent', tsOf(m)])).rows[0];
+                if (r) inserted++;
+                if (!latest || tsOf(m) > latest.at) latest = { at: tsOf(m), body };
+            }
+            if (latest) await touchThread(conv.id, latest.at, latest.body);
+        }
+        const meta = chunk.metadata || {};
+        Object.assign(progress, {
+            status: Number(meta.progress) >= 100 ? 'done' : 'importing',
+            phase: meta.phase ?? progress.phase, progress: meta.progress ?? progress.progress,
+            chunks: (progress.chunks || 0) + 1,
+            threads: (progress.threads || 0) + (chunk.threads || []).length,
+            messages: (progress.messages || 0) + inserted,
+            updated_at: new Date().toISOString(),
+        });
+    }
+    await connectSvc.putSetting('history_import', progress);
+}
+
+/** The phone app's contacts: the names the shop saved its customers under. */
+async function receiveContacts(value) {
+    const progress = (await connectSvc.getSetting('contacts_import')) || {};
+    let n = 0;
+    for (const item of value?.state_sync || []) {
+        if (item.type !== 'contact' || !item.contact) continue;
+        const phone = wa.normalisePhone(item.contact.phone_number);
+        if (!phone) continue;
+        if (item.action === 'remove') continue;          // a deleted contact keeps its chats
+        const name = item.contact.full_name || item.contact.first_name || null;
+        // The name the shop saved them under beats the one they gave themselves on WhatsApp.
+        const c = (await db.query(
+            `INSERT INTO wa_contacts (phone, profile_name) VALUES ($1, $2)
+             ON CONFLICT (phone) DO UPDATE SET profile_name = COALESCE(EXCLUDED.profile_name, wa_contacts.profile_name)
+             RETURNING lead_id`, [phone, name])).rows[0];
+        if (c?.lead_id && name) await db.query(`UPDATE crewfit_leads SET name = COALESCE(name, $2) WHERE id = $1`, [c.lead_id, name]);
+        n++;
+    }
+    await connectSvc.putSetting('contacts_import', { ...progress, status: 'done', contacts: (progress.contacts || 0) + n, updated_at: new Date().toISOString() });
+}
+
 /** What became of something we sent: one tick, two, blue, or a refusal. */
 async function receiveStatus(status) {
     if (!status?.id || !status?.status) return;
@@ -356,6 +512,52 @@ function visibility(req, params) {
     params.push(String(req.user?.username || '').toLowerCase());
     return `(LOWER(COALESCE(c.assigned_to,'')) = $${params.length} OR c.assigned_to IS NULL)`;
 }
+
+// Connecting the number is an account change: admins and owners only.
+const adminOnly = (req, res, next) => (['admin', 'owner'].includes(req.user?.role)
+    ? next() : res.status(403).json({ error: 'Only an admin can connect WhatsApp' }));
+
+router.get('/connect', adminOnly, async (req, res) => {
+    try { res.json(await connectSvc.status()); }
+    catch (err) { console.error('whatsapp connect status error:', err); res.status(500).json({ error: 'Could not read the connection' }); }
+});
+
+router.post('/connect', adminOnly, async (req, res) => {
+    try {
+        const b = req.body || {};
+        const out = await connectSvc.connect({
+            code: b.code, wabaId: b.waba_id, phoneNumberId: b.phone_number_id, businessId: b.business_id, finishType: b.event,
+        }, req.user?.username);
+        res.status(201).json({ connection: out, ...(await connectSvc.status()) });
+    } catch (err) {
+        if (err instanceof connectSvc.ConnectError) return res.status(err.status).json({ error: err.message });
+        console.error('whatsapp connect error:', err);
+        res.status(500).json({ error: 'Could not finish connecting' });
+    }
+});
+
+router.post('/connect/sync/:type', adminOnly, async (req, res) => {
+    try {
+        const type = req.params.type === 'contacts' ? 'smb_app_state_sync' : req.params.type === 'history' ? 'history' : null;
+        if (!type) return res.status(400).json({ error: 'Unknown sync' });
+        await connectSvc.requestSync(type, req.user?.username);
+        res.json(await connectSvc.status());
+    } catch (err) {
+        if (err instanceof connectSvc.ConnectError) return res.status(err.status).json({ error: err.message });
+        console.error('whatsapp sync request error:', err);
+        res.status(500).json({ error: 'Could not ask Meta for the sync' });
+    }
+});
+
+router.post('/connect/disconnect', adminOnly, async (req, res) => {
+    try {
+        await connectSvc.disconnect(req.user?.username);
+        res.json(await connectSvc.status());
+    } catch (err) {
+        console.error('whatsapp disconnect error:', err);
+        res.status(500).json({ error: 'Could not disconnect' });
+    }
+});
 
 // Settings: the menu, templates, catalogue, team, assignment and statuses. Managers only.
 router.use('/admin', (req, res, next) =>

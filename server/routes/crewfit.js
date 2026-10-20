@@ -747,6 +747,56 @@ router.post('/orders', canEditOrders, async (req, res) => {
   }
 });
 
+/**
+ * Cancel an issued document — owner only.
+ *
+ * The number stays. That is the whole point: a tax invoice raised in error is cancelled, never
+ * deleted, so the series runs unbroken and an auditor can see what happened to every number in
+ * it. Until this existed the delete guard told people to "cancel the document first" and gave
+ * them no way to do it, which left a wrongly raised invoice welded to an order forever.
+ *
+ * A document inside a period that has already been filed is refused: by then the number is in a
+ * return, and taking it back is a conversation with an accountant and a credit note, not a
+ * button. `force` is there for when that conversation has happened.
+ */
+router.post('/orders/:id/documents/:docId/cancel', ownerOnly, async (req, res) => {
+  try {
+    const doc = (await db.query(
+      `SELECT * FROM crewfit_invoices WHERE id = $1 AND order_id = $2`,
+      [req.params.docId, req.params.id])).rows[0];
+    if (!doc) return res.status(404).json({ error: 'No such document on this order' });
+    if (doc.status === 'cancelled') return res.status(409).json({ error: `${doc.number} is already cancelled` });
+
+    const reason = String(req.body?.reason || '').trim();
+    if (reason.length < 4) return res.status(400).json({ error: 'Say why it is being cancelled — it stays on the record' });
+
+    const filed = (await db.query(
+      `SELECT period_label FROM gst_reports
+        WHERE $1::date BETWEEN from_date AND to_date ORDER BY id DESC LIMIT 1`,
+      [doc.issue_date])).rows[0];
+    if (filed && !req.body?.force) {
+      return res.status(409).json({
+        error: `${doc.number} falls in ${filed.period_label}, which has already been filed. Cancelling it now means amending that return — raise a credit note with your accountant instead.`,
+        filed: filed.period_label,
+      });
+    }
+
+    const updated = (await db.query(
+      `UPDATE crewfit_invoices
+          SET status = 'cancelled',
+              note = TRIM(BOTH ' ' FROM COALESCE(note || ' | ', '') || $2),
+              updated_at = CURRENT_TIMESTAMP
+        WHERE id = $1 RETURNING id, number, doc_type, status, note`,
+      [doc.id, `Cancelled by ${req.user?.username || 'unknown'}: ${reason}`])).rows[0];
+
+    console.log(`🚫 ${updated.number} cancelled by ${req.user?.username}: ${reason}`);
+    res.json({ document: updated });
+  } catch (err) {
+    console.error('crewfit document cancel error:', err);
+    res.status(500).json({ error: 'Could not cancel that document' });
+  }
+});
+
 // DELETE /api/crewfit/orders/:id — owner only.
 // Also drops the order's uploaded mock/production photos; without this the image folder is
 // orphaned on disk forever, since nothing else ever references it once the row is gone.

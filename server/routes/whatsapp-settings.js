@@ -389,7 +389,7 @@ router.get('/templates', async (req, res) => {
                FROM wa_templates ORDER BY LOWER(name), language`);
         res.json({
             templates: r.rows.map(t => ({ ...t, var_map: safeJson(t.var_map, []) })),
-            canCreate: !!process.env.WA_BUSINESS_ACCOUNT_ID && wa.configured(),
+            canCreate: !!wa.wabaId() && wa.configured(),
         });
     } catch (err) {
         console.error('whatsapp settings templates error:', err);

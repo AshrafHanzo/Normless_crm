@@ -141,3 +141,67 @@ same verify token, and subscribe to **messages** there too.
 - **Access is two grants.** *WhatsApp inbox* lets somebody see and answer their own conversations
   and anything unclaimed; *WhatsApp — every conversation* adds seeing all of them and moving them
   between people. Both are set per user in Admin, under Crewfit.
+
+---
+
+## Keeping the phone app: Coexistence (Settings › Connect WhatsApp)
+
+Coexistence connects the number the shop already uses on the **WhatsApp Business app**. The phone
+keeps working; every chat — including replies typed on the phone — also appears in the CRM, and
+the last 180 days of one-to-one chats are imported once. It goes through Meta's **Embedded
+Signup** popup, opened from the CRM.
+
+### Once, in Meta
+
+1. **Become a Tech Provider.** App Dashboard → Use cases → WhatsApp → Customize → *Tech Provider
+   onboarding*. It needs **business verification** of the Meta business portfolio, then **App
+   Review** asking for *Advanced Access* to `whatsapp_business_messaging` and
+   `whatsapp_business_management`. Review wants a privacy-policy URL, an app icon, and two short
+   screen recordings: a message sent from the CRM arriving in WhatsApp, and a template being
+   created.
+2. **Facebook Login for Business → Configurations → Create.** Pick the template *WhatsApp Embedded
+   Signup Configuration With 60 Expiration Token*, or a custom one with the login variation
+   **WhatsApp Embedded Signup**. Ask only for the WhatsApp assets. Copy the **Configuration ID**.
+   (Embedded Signup v2/v3 were retired on 15 Oct 2026; a new configuration is v4.)
+3. **Facebook Login for Business → Settings → Client OAuth settings.** Turn on Client OAuth login,
+   Web OAuth login, Enforce HTTPS, Embedded Browser OAuth Login, Strict mode and *Login with the
+   JavaScript SDK*. Add `ops.normless.store` to **Allowed domains for the JavaScript SDK** and
+   `https://ops.normless.store/` to **Valid OAuth redirect URIs**. The popup only opens on https.
+4. **WhatsApp → Configuration → Webhook fields.** Subscribe to `messages`, `account_update`,
+   `history`, `smb_app_state_sync` and `smb_message_echoes`.
+
+### On the server (.env)
+
+```
+WA_APP_ID=<the Meta app's ID>
+WA_APP_SECRET=<the app secret — already set for webhooks>
+WA_EMBEDDED_CONFIG_ID=<the configuration ID from step 2>
+WA_API_VERSION=v21.0
+```
+
+The access token, account ID and phone number ID are **not** put in .env for this: the CRM gets
+them from the popup and stores the token encrypted (key from `JWT_SECRET`, or `WA_TOKEN_KEY` if
+set). Changing that secret means connecting again.
+
+### Connecting
+
+An admin opens **Settings › Connect WhatsApp → Connect WhatsApp**, logs in to Facebook, picks the
+business, enters the WhatsApp Business app number and approves it on the phone (keep the app at
+version 2.24.17 or later, and choose to **share chat history**). The CRM then, straight away:
+swaps the code for a token, subscribes to the account's webhooks, checks the number is on both
+the phone app and Cloud API, and asks Meta for the contacts and history.
+
+**The history and contacts can be asked for once only, within 24 hours of connecting.** Missed or
+declined, the only way to import them is to disconnect in the phone app and connect again.
+
+### What to expect
+
+- Replies typed on the phone show in the thread marked *from the phone app*. They do not open
+  WhatsApp's 24-hour window — only the customer writing does.
+- Imported chats go in as *Enquiry*, unassigned and not unread. Photos older than 14 days come
+  through as a placeholder only.
+- Group chats, broadcast lists, view-once and disappearing messages are not synced.
+- The phone app loses some tools once connected (labels, greeting/away messages, quick replies,
+  catalog): those now live in the CRM.
+- Disconnecting in the CRM only stops the CRM using the number; removing the link entirely is
+  done in the WhatsApp Business app.

@@ -23,6 +23,7 @@ const TABS = [
   { key: 'assignment', label: 'Assignment', icon: 'refresh' },
   { key: 'hours', label: 'Working hours', icon: 'clock' },
   { key: 'statuses', label: 'Lead statuses', icon: 'check' },
+  { key: 'connect', label: 'Connect WhatsApp', icon: 'whatsapp', adminOnly: true },
 ]
 
 const short = (u) => (u ? u.split('@')[0] : '')
@@ -39,8 +40,10 @@ function SaveButton({ dirty, saving, onClick, idle = 'Saved', label = 'Save chan
 export default function WhatsAppSettings() {
   const { tab = 'menu' } = useParams()
   const { openMenu } = useMainMenu()
+  const { user } = useAuth()
+  const isAdmin = user?.role === 'admin' || user?.role === 'owner'
   if (!TABS.some(t => t.key === tab)) return <Navigate to="/crewfit/whatsapp/settings/menu" replace />
-  const Pane = { menu: MenuTab, templates: TemplatesTab, orders: OrderMessagesTab, hours: HoursTab, catalogue: CatalogueTab, team: TeamTab, assignment: AssignmentTab, statuses: StatusesTab }[tab]
+  const Pane = { connect: ConnectTab, menu: MenuTab, templates: TemplatesTab, orders: OrderMessagesTab, hours: HoursTab, catalogue: CatalogueTab, team: TeamTab, assignment: AssignmentTab, statuses: StatusesTab }[tab]
 
   return (
     <div className="page">
@@ -56,7 +59,7 @@ export default function WhatsAppSettings() {
       </header>
       <div className="was-layout">
         <nav className="was-nav" aria-label="Settings">
-          {TABS.map(t => (
+          {TABS.filter(t => !t.adminOnly || isAdmin).map(t => (
             <NavLink key={t.key} to={`/crewfit/whatsapp/settings/${t.key}`}
               className={({ isActive }) => `was-nav-item${isActive ? ' was-nav-on' : ''}`}>
               <Icon name={t.icon} size={15} /> {t.label}
@@ -855,6 +858,234 @@ function OrderMessagesTab() {
         A message sent on its own appears in the chat marked “sent automatically”. If it cannot go — no number, no total, no template —
         the reason is written to that chat’s Activity tab.
       </p>
+    </>
+  )
+}
+
+/* ════════════════════════════════════════════════════════════════════════════════════════════
+   Connect WhatsApp (Coexistence)
+   ════════════════════════════════════════════════════════════════════════════════════════════ */
+
+/** Meta's JavaScript SDK, loaded once, the first time somebody connects. */
+let fbReady = null
+function loadFacebookSdk(appId, version) {
+  if (!fbReady) {
+    fbReady = new Promise((resolve, reject) => {
+      window.fbAsyncInit = () => {
+        window.FB.init({ appId, autoLogAppEvents: true, xfbml: false, version })
+        resolve(window.FB)
+      }
+      const s = document.createElement('script')
+      s.src = 'https://connect.facebook.net/en_US/sdk.js'
+      s.async = true; s.defer = true; s.crossOrigin = 'anonymous'
+      s.onerror = () => { fbReady = null; reject(new Error('Could not load Meta’s login script — check the connection, or an ad blocker')) }
+      document.body.appendChild(s)
+    })
+  }
+  return fbReady
+}
+
+const fmtWhen = (v) => (v ? new Date(v).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—')
+
+function ConnectTab() {
+  const apiFetch = useApi()
+  const toast = useToast()
+  const { user } = useAuth()
+  const [data, setData] = useState(null)
+  const [coexist, setCoexist] = useState(true)
+  const [step, setStep] = useState(null)       // what the connect is doing right now
+  const isAdmin = user?.role === 'admin' || user?.role === 'owner'
+
+  const load = () => apiFetch('/api/whatsapp/connect').then(r => (r && !r.error ? setData(r) : toast.error(r?.error || 'Could not read the connection')))
+  // The signed-in user arrives a moment after the page: ask once they are known to be an admin.
+  useEffect(() => {
+    if (isAdmin) load()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAdmin])
+  // While the history comes in, keep the counts moving.
+  useEffect(() => {
+    if (!['requested', 'importing'].includes(data?.history?.status)) return
+    const t = setInterval(load, 5000)
+    return () => clearInterval(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data?.history?.status])
+
+  if (!user) return <Loading />
+  if (!isAdmin) return <p className="was-hint">Only an admin can connect WhatsApp.</p>
+  if (!data) return <Loading />
+
+  const conn = data.connection?.status === 'connected' ? data.connection : null
+  const missing = [!data.appId && 'WA_APP_ID', !data.configId && 'WA_EMBEDDED_CONFIG_ID'].filter(Boolean)
+
+  /**
+   * Open Meta's popup. Two things come back separately and in either order: a message event with
+   * the account and number the customer picked, and the login callback with a one-time code.
+   * Both are needed, and the code dies in 30 seconds, so they are joined and sent at once.
+   */
+  const connect = async () => {
+    if (location.protocol !== 'https:' && location.hostname !== 'localhost') {
+      return toast.error('Meta only opens this popup on an https:// address — use the live CRM')
+    }
+    setStep('Opening Meta…')
+    let FB
+    try { FB = await loadFacebookSdk(data.appId, data.graphVersion) }
+    catch (err) { setStep(null); return toast.error(err.message) }
+
+    let session = null
+    let code = null
+    let finished = false
+    const finish = async () => {
+      if (finished || !code) return
+      // The session event normally arrives first; give it a moment if the code beat it.
+      for (let i = 0; i < 20 && !session; i++) await new Promise(r => setTimeout(r, 250))
+      finished = true
+      window.removeEventListener('message', onMessage)
+      if (!session?.waba_id) { setStep(null); return toast.error('Meta did not say which account was chosen — try again and finish every step in the popup') }
+      setStep('Connecting the number…')
+      const r = await apiFetch('/api/whatsapp/connect', { method: 'POST', body: JSON.stringify({ code, ...session }) })
+      setStep(null)
+      if (!r || r.error) return toast.error(r?.error || 'Could not finish connecting', { duration: 0 })
+      setData(r)
+      toast.success(r.connection?.coexistence ? 'Connected — the phone app keeps working, and history is on its way' : 'Connected')
+    }
+    const onMessage = (event) => {
+      if (!String(event.origin).endsWith('facebook.com')) return
+      let msg
+      try { msg = JSON.parse(event.data) } catch { return }
+      if (msg?.type !== 'WA_EMBEDDED_SIGNUP') return
+      if (String(msg.event).startsWith('FINISH')) {
+        session = { event: msg.event, waba_id: msg.data?.waba_id, phone_number_id: msg.data?.phone_number_id, business_id: msg.data?.business_id }
+        finish()
+      } else if (msg.event === 'CANCEL') {
+        finished = true
+        window.removeEventListener('message', onMessage)
+        setStep(null)
+        toast.error(msg.data?.error_message ? `Meta stopped: ${msg.data.error_message}` : `Stopped at “${msg.data?.current_step || 'the first step'}” — nothing was connected`)
+      }
+    }
+    window.addEventListener('message', onMessage)
+    setStep('Waiting for you to finish in Meta’s window…')
+    FB.login((response) => {
+      code = response?.authResponse?.code || null
+      if (!code) {
+        if (!finished) { finished = true; window.removeEventListener('message', onMessage); setStep(null) }
+        return
+      }
+      finish()
+    }, {
+      config_id: data.configId,
+      response_type: 'code',
+      override_default_response_type: true,
+      // Coexistence: connect the number already on the WhatsApp Business app instead of a new one.
+      extras: coexist ? { setup: {}, featureType: 'whatsapp_business_app_onboarding' } : { setup: {} },
+    })
+  }
+
+  const sync = async (type) => {
+    const r = await apiFetch(`/api/whatsapp/connect/sync/${type}`, { method: 'POST' })
+    if (!r || r.error) return toast.error(r?.error || 'Meta refused the sync request', { duration: 0 })
+    setData(r)
+    toast.success('Asked Meta again')
+  }
+
+  const disconnect = async () => {
+    if (!await toast.confirm({
+      title: 'Stop using this connection?',
+      message: 'The CRM stops sending and receiving through this number. The WhatsApp Business app on the phone is not affected. To remove the CRM from the number entirely, do it in the phone app under Linked devices / Business platform.',
+      confirmLabel: 'Disconnect', danger: true,
+    })) return
+    const r = await apiFetch('/api/whatsapp/connect/disconnect', { method: 'POST' })
+    if (!r || r.error) return toast.error(r?.error || 'Could not disconnect')
+    setData(r)
+  }
+
+  const h = data.history || {}
+  const c = data.contacts || {}
+  const within24 = conn && Date.now() - new Date(conn.connected_at).getTime() < 24 * 3600 * 1000
+  const HISTORY_LOOK = {
+    requested: ['Asked Meta — waiting for the first chats', 'pending'],
+    importing: [`Importing — ${h.progress ?? 0}%`, 'pending'],
+    done: ['Imported', 'success'],
+    declined: ['The business chose not to share history', 'error'],
+    failed: ['The request failed', 'error'],
+  }
+
+  return (
+    <>
+      <Head title="Connect WhatsApp">
+        Link the number the shop already uses on the WhatsApp Business app. The phone keeps working exactly as before;
+        every chat, in and out — including replies typed on the phone — also appears here, and the last 180 days of chats are imported once.
+      </Head>
+
+      {missing.length > 0 && (
+        <section className="was-card was-warn-card">
+          <h3>Set up on the server first</h3>
+          <p className="was-hint" style={{ margin: 0 }}>Add {missing.join(' and ')} to the server’s .env and restart it. The values come from the Meta app (see the steps on this page’s help).</p>
+        </section>
+      )}
+
+      <section className="was-card">
+        <div className="was-card-head">
+          <h3>{conn ? 'Connected number' : 'Not connected from the CRM'}</h3>
+          {conn && <span className={`status-badge ${conn.coexistence ? 'success' : ''}`}>{conn.coexistence ? 'Phone app + CRM' : 'CRM only'}</span>}
+        </div>
+        {conn ? (
+          <div className="was-facts">
+            <div><span>Number</span><b>{conn.display_phone_number || conn.phone_number_id}</b></div>
+            <div><span>Business name</span><b>{conn.verified_name || '—'}</b></div>
+            <div><span>Platform</span><b>{conn.platform_type || '—'}{conn.coexistence ? ' · still on the phone app' : ''}</b></div>
+            <div><span>WhatsApp account ID</span><b className="was-mono">{conn.waba_id}</b></div>
+            <div><span>Phone number ID</span><b className="was-mono">{conn.phone_number_id}</b></div>
+            <div><span>Connected</span><b>{fmtWhen(conn.connected_at)} by {String(conn.connected_by || '').split('@')[0]}</b></div>
+          </div>
+        ) : (
+          <p className="was-hint" style={{ margin: 0 }}>
+            {data.usingEnv ? 'The CRM is using the number set in the server’s .env. Connecting here replaces it.' : 'Nothing is connected yet.'}
+            {data.connection?.status === 'disconnected' && ` Last disconnected ${fmtWhen(data.connection.disconnected_at || data.connection.last_account_event_at)}${data.connection.disconnect_reason ? ` (${data.connection.disconnect_reason})` : ''}.`}
+          </p>
+        )}
+        <label className="page-check" style={{ margin: 0 }}>
+          <input type="checkbox" checked={coexist} onChange={e => setCoexist(e.target.checked)} />
+          The number is already on the WhatsApp Business app — keep it there (Coexistence)
+        </label>
+        <div className="was-inline">
+          <button type="button" className="btn btn-primary" disabled={!!step || missing.length > 0} onClick={connect}>
+            <Icon name="whatsapp" size={15} /> {step || (conn ? 'Connect again' : 'Connect WhatsApp')}
+          </button>
+          {conn && <button type="button" className="btn btn-secondary" onClick={disconnect}>Disconnect</button>}
+        </div>
+      </section>
+
+      {conn?.coexistence && (
+        <section className="was-card">
+          <h3>Bringing the phone’s chats across</h3>
+          <p className="was-hint" style={{ margin: 0 }}>
+            Meta sends these once, and only if asked within 24 hours of connecting. They arrive in pieces over a few minutes.
+          </p>
+          <div className="was-sync">
+            <div>
+              <b>Chat history (180 days)</b>
+              <span className={`status-badge ${HISTORY_LOOK[h.status]?.[1] || ''}`}>{HISTORY_LOOK[h.status]?.[0] || 'Not asked yet'}</span>
+              {(h.status === 'importing' || h.status === 'done') && (
+                <>
+                  <div className="wa-paid-bar" style={{ marginTop: 8 }}><div style={{ width: `${Math.min(100, h.progress || 0)}%` }} /></div>
+                  <small>{h.threads || 0} chats, {h.messages || 0} messages{h.status === 'done' ? '' : ' so far'}</small>
+                </>
+              )}
+              {h.error && <small className="was-bad">{h.error}</small>}
+              {within24 && ['failed', undefined].includes(h.status) && <button type="button" className="mini-btn" onClick={() => sync('history')}>Ask Meta for the history</button>}
+            </div>
+            <div>
+              <b>Contacts</b>
+              <span className={`status-badge ${c.status === 'done' ? 'success' : c.status === 'failed' ? 'error' : 'pending'}`}>
+                {c.status === 'done' ? `${c.contacts || 0} name${c.contacts === 1 ? '' : 's'} updated` : c.status === 'failed' ? 'The request failed' : c.status ? 'Asked Meta' : 'Not asked yet'}
+              </span>
+              {c.error && <small className="was-bad">{c.error}</small>}
+              {within24 && ['failed', undefined].includes(c.status) && <button type="button" className="mini-btn" onClick={() => sync('contacts')}>Ask Meta for the contacts</button>}
+            </div>
+          </div>
+        </section>
+      )}
     </>
   )
 }

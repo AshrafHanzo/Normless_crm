@@ -1990,6 +1990,9 @@ app.listen(PORT, async () => {
     // robot started answering their customers because a deploy happened.
     try { await require('./services/wa-flow').ensureStarterFlow(); }
     catch (e) { console.error('whatsapp flow seed:', e.message); }
+    // A number connected from the CRM (Coexistence) is used over the .env credentials.
+    try { await require('./services/wa-connect').load(); }
+    catch (e) { console.error('whatsapp connection load:', e.message); }
     // Ensure GST sales invoicing schema
     await ensureGstSchema();
     await ensureInventorySchema();

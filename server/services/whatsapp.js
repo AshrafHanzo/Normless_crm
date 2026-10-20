@@ -24,8 +24,13 @@ const crypto = require('crypto');
 
 const API_VERSION = process.env.WA_API_VERSION || 'v21.0';
 const GRAPH = `https://graph.facebook.com/${API_VERSION}`;
-const TOKEN = () => process.env.WA_ACCESS_TOKEN || '';
-const PHONE_ID = () => process.env.WA_PHONE_NUMBER_ID || '';
+// A number connected from the CRM (Settings › Connect WhatsApp) is used over the .env values,
+// so connecting does not need a deploy. Loaded at start-up and after each connect by wa-connect.
+let connected = {};
+const useConnection = (c) => { connected = c || {}; };
+const TOKEN = () => connected.token || process.env.WA_ACCESS_TOKEN || '';
+const PHONE_ID = () => connected.phoneNumberId || process.env.WA_PHONE_NUMBER_ID || '';
+const WABA_ID = () => connected.wabaId || process.env.WA_BUSINESS_ACCOUNT_ID || '';
 
 /** Where a file a customer sent us is kept. Served like every other upload in the CRM. */
 const MEDIA_ROOT = path.join(__dirname, '..', 'uploads', 'whatsapp');
@@ -296,7 +301,7 @@ async function sendList(phone, text, { button = 'Choose', sections = [] }) {
 
 /** Everything the business account has, as Meta has it. */
 async function fetchTemplates() {
-    const waba = process.env.WA_BUSINESS_ACCOUNT_ID;
+    const waba = WABA_ID();
     if (!waba) throw new WhatsAppError('WA_BUSINESS_ACCOUNT_ID is not set');
     const out = [];
     let after = null;
@@ -346,7 +351,7 @@ async function sendTemplate(phone, { name, language = 'en_US', variables = [] })
  * are sent with it — the wording a reviewer reads is the wording a customer would.
  */
 async function createTemplate({ name, language, category, body, examples = [], buttons = [] }) {
-    const waba = process.env.WA_BUSINESS_ACCOUNT_ID;
+    const waba = WABA_ID();
     if (!waba) throw new WhatsAppError('WA_BUSINESS_ACCOUNT_ID is not set');
     const components = [{
         type: 'BODY', text: body,
@@ -435,7 +440,7 @@ function verifySignature(rawBody, header) {
 }
 
 module.exports = {
-    configured, checkToken, normalisePhone, prettyPhone, windowOpen, windowLeftMs,
+    configured, checkToken, useConnection, phoneNumberId: PHONE_ID, wabaId: WABA_ID, graph, GRAPH, normalisePhone, prettyPhone, windowOpen, windowLeftMs,
     sendText, sendMedia, sendButtons, sendList, createTemplate, downloadMedia, markRead, verifySignature, CAP,
     fetchTemplates, sendTemplate, renderTemplate, whatsappImage,
     WhatsAppError, MEDIA_ROOT, MAX_MEDIA_MB, WINDOW_HOURS,

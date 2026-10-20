@@ -403,8 +403,8 @@ function PaymentCard({ title, amount, payment, busy, disabled, disabledLabel, on
   );
 }
 
-function InvoiceCard({ title, subtitle, icon = '🧾', amount, invoice, busy, locked, lockedLabel, onGenerate, onShare }) {
-  const status = invoice ? 'issued' : locked ? 'locked' : 'ready'
+function InvoiceCard({ title, subtitle, icon = '🧾', amount, invoice, busy, locked, lockedLabel, onGenerate, onShare, onCancel }) {
+  const status = invoice ? (invoice.status === 'cancelled' ? 'cancelled' : 'issued') : locked ? 'locked' : 'ready'
   return (
     <div className={`invoice-card invoice-card-${status}`}>
       <div className="invoice-card-head">
@@ -414,7 +414,9 @@ function InvoiceCard({ title, subtitle, icon = '🧾', amount, invoice, busy, lo
           <div className="invoice-card-amount">{fmt(amount)}</div>
           {subtitle && <div className="invoice-card-sub">{subtitle}</div>}
         </div>
-        <span className={`invoice-status-pill invoice-status-${status}`}>{status === 'issued' ? 'Issued' : status === 'locked' ? 'Locked' : 'Ready'}</span>
+        <span className={`invoice-status-pill invoice-status-${status}`}>
+          {status === 'issued' ? 'Issued' : status === 'cancelled' ? 'Cancelled' : status === 'locked' ? 'Locked' : 'Ready'}
+        </span>
       </div>
       {invoice && (
         <div className="invoice-card-meta">
@@ -425,6 +427,14 @@ function InvoiceCard({ title, subtitle, icon = '🧾', amount, invoice, busy, lo
       <button type="button" className="btn btn-secondary invoice-card-btn" disabled={busy || (!invoice && locked)} onClick={onGenerate}>
         {busy ? 'Generating…' : invoice ? '⬇ Download PDF' : locked ? lockedLabel : 'Generate'}
       </button>
+      {/* Cancelling keeps the number and marks it void, which is the only honest way to undo an
+          invoice — and the only way an order carrying one can then be deleted. */}
+      {invoice && invoice.status !== 'cancelled' && onCancel && (
+        <button type="button" className="btn btn-secondary invoice-card-btn" disabled={busy}
+          style={{ color: 'var(--danger)' }} onClick={onCancel}>
+          Cancel this document
+        </button>
+      )}
       {onShare && !locked && (
         <button type="button" className="btn btn-secondary invoice-card-btn" disabled={busy} onClick={onShare}>
           💬 {invoice ? 'Send' : 'Generate & send'} on WhatsApp
@@ -1130,6 +1140,40 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
   const taxInvoice = documents.find(d => d.doc_type === 'tax_invoice' && d.status !== 'cancelled')
 
   /** Issues the document if it doesn't exist yet, then downloads it. Returns the saved file name. */
+  /**
+   * Void a document that should never have been raised.
+   *
+   * The number is kept and marked cancelled — an auditor has to be able to see what became of
+   * every number in the series — and the reason is typed in, because "why" is the part somebody
+   * will be asked about a year from now.
+   */
+  const cancelDocument = async (doc) => {
+    if (!doc?.id) return
+    const reason = window.prompt(
+      `Cancel ${doc.number}?\n\nThe number stays in the series, marked cancelled — it is never reused. Why is it being cancelled?`,
+      '')
+    if (reason === null) return
+    if (reason.trim().length < 4) return toast.error('Say why it is being cancelled — it stays on the record')
+
+    let res = await apiFetch(`/api/crewfit/orders/${form.id}/documents/${doc.id}/cancel`, {
+      method: 'POST', body: JSON.stringify({ reason: reason.trim() }),
+    })
+    // Already filed: cancelling means amending a return, so it takes a second, deliberate yes.
+    if (res?.filed && !await toast.confirm({
+      title: `${doc.number} is in a filed return`,
+      message: `${res.error}\n\nCancel it anyway?`,
+      confirmText: 'Cancel it anyway', danger: true,
+    })) return
+    if (res?.filed) {
+      res = await apiFetch(`/api/crewfit/orders/${form.id}/documents/${doc.id}/cancel`, {
+        method: 'POST', body: JSON.stringify({ reason: reason.trim(), force: true }),
+      })
+    }
+    if (!res || res.error) return toast.error(res?.error || 'Could not cancel that document')
+    toast.success(`${doc.number} cancelled — the number stays in the series`)
+    loadDocuments(form.id)
+  }
+
   const downloadInvoice = async (type) => {
     setInvoiceBusy(type)
     const res = await apiFetch(`/api/crewfit/orders/${form.id}/invoice/${type}`, { responseType: 'blob' })
@@ -1447,6 +1491,7 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
                   amount={form.advance} invoice={proformaDoc}
                   busy={invoiceBusy === 'proforma'} locked={form.payment_status === 'Pending'}
                   lockedLabel="Awaiting advance payment" onGenerate={() => downloadInvoice('proforma')}
+                  onCancel={isOwner ? () => cancelDocument(proformaDoc) : null}
                 />
                 <InvoiceCard
                   title="Tax Invoice — Full Amount" icon="🧾"
@@ -1457,6 +1502,7 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
                   busy={invoiceBusy === 'final'} locked={form.payment_status !== 'Fully Paid'}
                   lockedLabel="Awaiting full payment" onGenerate={() => downloadInvoice('final')}
                   onShare={taxInvoice || form.payment_status === 'Fully Paid' ? shareTaxInvoice : null}
+                  onCancel={isOwner ? () => cancelDocument(taxInvoice) : null}
                 />
               </div>
               <div className="invoice-note">
