@@ -11,7 +11,7 @@ import { createContext, useContext } from 'react'
 
 export const WA_BRANDS = {
   crewfit: { key: 'crewfit', name: 'Crewfit', api: '/api/whatsapp', path: '/crewfit/whatsapp', defaultTab: 'menu' },
-  normless: { key: 'normless', name: 'Normless', api: '/api/nl-whatsapp', path: '/whatsapp', defaultTab: 'connect' },
+  normless: { key: 'normless', name: 'Normless', api: '/api/nl-whatsapp', path: '/whatsapp', defaultTab: 'bot' },
 }
 
 export const WaBrandContext = createContext(WA_BRANDS.crewfit)

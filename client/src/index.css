@@ -3341,3 +3341,52 @@ html, body { max-width: 100%; overflow-x: hidden; }
 /* Normless has six queues: they wrap onto a second line rather than squeezing their labels. */
 .wa-filters { flex-wrap: wrap; }
 .wa-filters .chip { white-space: nowrap; }
+
+/* ── Normless WhatsApp settings (the design's Bot, Knowledge, Products, Handoff… screens) ── */
+.nl-grid { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
+.nl-col { flex: 999 1 520px; min-width: 0; display: flex; flex-direction: column; gap: 14px; }
+.nl-col > .was-card { margin: 0; }
+.nl-switch-row { display: flex; gap: 12px; align-items: flex-start; }
+.nl-switch-row b { display: block; margin-bottom: 2px; }
+.nl-row-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; padding-top: 10px; border-top: 1px solid var(--border); }
+.nl-row-top { margin-top: 4px; }
+.nl-sources { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.nl-sources li { display: flex; gap: 10px; align-items: center; padding: 9px 0; border-top: 1px solid var(--border); font-size: 13px; }
+.nl-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); flex: none; }
+.nl-dot.on { background: var(--success); }
+.nl-faq { position: relative; display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: var(--radius-md); background: var(--bg-tertiary); font-size: 13px; }
+.nl-faq input, .nl-faq textarea { width: 100%; box-sizing: border-box; padding: 7px 10px; border-radius: 8px; background: var(--surface); border: 1px solid var(--border); color: var(--text-primary); font: inherit; }
+.nl-faq input { font-weight: 600; padding-right: 40px; }
+.nl-faq-remove { position: absolute; top: 8px; right: 8px; }
+.nl-faq-edit { border: 1px solid color-mix(in srgb, var(--primary) 45%, transparent); }
+.nl-policies { display: flex; flex-direction: column; gap: 8px; }
+.nl-policies div { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; font-size: 13px; }
+.nl-rules { list-style: none; margin: 0; padding: 0; }
+.nl-rules li { display: flex; gap: 12px; align-items: flex-start; padding: 10px 0; border-top: 1px solid var(--border); font-size: 13px; }
+.nl-rules li span b, .nl-rules li span .was-hint { display: block; }
+.nl-amount { width: 90px; margin-left: 4px; padding: 2px 6px; border-radius: 6px; background: var(--surface); border: 1px solid var(--border); color: var(--text-primary); font: inherit; }
+.nl-never { border-color: rgba(248, 113, 113, 0.3); }
+.nl-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.nl-chips span { padding: 6px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; background: var(--danger-bg); color: #fca5a5; }
+.nl-try { flex: 1 1 300px; max-width: 380px; margin: 0; display: flex; flex-direction: column; gap: 10px; }
+.nl-try-feed { min-height: 260px; padding: 12px; border-radius: 10px; background: var(--bg-primary); display: flex; align-items: center; }
+.nl-try-note { display: flex; gap: 10px; color: var(--text-secondary); font-size: 13px; line-height: 1.5; }
+.nl-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.nl-table th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); font-weight: 600; padding: 6px 8px; }
+.nl-table td { padding: 8px; border-top: 1px solid var(--border); }
+.nl-table td.ok { color: var(--success); }
+.nl-table td.warn { color: var(--warning); }
+.nl-missing { list-style: none; margin: 0; padding: 0; }
+.nl-missing li { display: flex; justify-content: space-between; gap: 10px; padding: 8px 0; border-top: 1px solid var(--border); font-size: 13px; }
+.nl-option { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
+.nl-option input { flex: 1; padding: 7px 10px; border-radius: 8px; background: var(--surface); border: 1px solid var(--border); color: var(--text-primary); font: inherit; }
+.nl-days { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.nl-phone { flex: 1 1 280px; max-width: 320px; border-radius: 28px; border: 7px solid #1c1d22; background: #0b141a; overflow: hidden; }
+.nl-phone-top { display: flex; align-items: center; gap: 10px; padding: 12px; background: #1f2c34; color: #e9edef; font-size: 13px; }
+.nl-phone-top span { width: 30px; height: 30px; border-radius: 50%; background: #e9edef; color: #0b141a; display: grid; place-items: center; font-weight: 800; font-size: 11px; }
+.nl-phone-feed { padding: 12px 10px 18px; display: flex; flex-direction: column; gap: 8px; min-height: 280px; }
+.nl-phone-out { align-self: flex-end; background: #005c4b; color: #e9edef; padding: 6px 10px; border-radius: 10px 0 10px 10px; font-size: 13px; }
+.nl-phone-in { align-self: flex-start; width: 85%; background: #202c33; color: #e9edef; border-radius: 0 10px 10px 10px; font-size: 13px; overflow: hidden; }
+.nl-phone-in div { padding: 8px 10px; line-height: 1.45; }
+.nl-phone-in span { display: block; text-align: center; padding: 8px; border-top: 1px solid rgba(255,255,255,.08); color: #53bdeb; font-weight: 600; }
+.wa-demo-chip { background: rgba(251, 191, 36, 0.15); color: #fcd34d; }

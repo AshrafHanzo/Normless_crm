@@ -274,6 +274,7 @@ async function fetchOrdersInRange(createdAtMin, createdAtMax) {
  * of the influencer-order form, which shouldn't mean a multi-page Shopify crawl each time.
  */
 const PRODUCT_CACHE_MS = 5 * 60 * 1000;
+const SIZE_CHART = /size[\s_-]*chart|sizechart|size[_-]?guide/i;
 let productCache = { at: 0, products: null };
 
 async function fetchProducts({ force = false } = {}) {
@@ -299,11 +300,16 @@ async function fetchProducts({ force = false } = {}) {
             // A variant image beats the product's hero shot — the colour actually being sent is
             // what the packer and the influencer both need to see.
             const byId = new Map((p.images || []).map(img => [img.id, img.src]));
+            // Normless keeps each product's size chart as one of its photos, named for what it
+            // is (Oversized_Tshirt_Size_Chart.png, Tanks_size_chart.png). Picked out by name.
+            const chart = (p.images || []).find(img => SIZE_CHART.test(String(img.src || '').split('/').pop().split('?')[0]));
             all.push({
                 id: p.id,
                 title: p.title,
+                handle: p.handle || null,
                 product_type: p.product_type || '',
                 image: p.image?.src || null,
+                size_chart: chart?.src || null,
                 variants: (p.variants || []).map(v => ({
                     id: v.id,
                     title: v.title === 'Default Title' ? '' : v.title,
@@ -328,6 +334,25 @@ async function fetchProducts({ force = false } = {}) {
 }
 
 /**
+ * The shop's published policies: refund/exchange, shipping, privacy, terms. Read, never written —
+ * they are edited in Shopify, and the WhatsApp bot answers from what is there.
+ */
+let policyCache = { at: 0, policies: null };
+async function fetchPolicies({ force = false } = {}) {
+    if (!force && policyCache.policies && Date.now() - policyCache.at < PRODUCT_CACHE_MS) return policyCache.policies;
+    if (!SHOPIFY_STORE_DOMAIN || !SHOPIFY_ACCESS_TOKEN) throw new Error('Shopify is not configured on the server');
+    const response = await fetch(`${REST_BASE}/policies.json`, { headers: { 'X-Shopify-Access-Token': SHOPIFY_ACCESS_TOKEN } });
+    if (!response.ok) throw new Error(`Shopify REST API error ${response.status}`);
+    const data = await response.json();
+    const policies = (data.policies || []).map(p => ({
+        title: p.title, handle: p.handle || null, url: p.url || null, updated_at: p.updated_at || null,
+        text: String(p.body || '').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim(),
+    }));
+    policyCache = { at: Date.now(), policies };
+    return policies;
+}
+
+/**
  * Test the API connection
  */
 async function testConnection() {
@@ -340,6 +365,7 @@ module.exports = {
     fetchAllOrders,
     fetchOnHoldOrderNames,
     fetchProducts,
+    fetchPolicies,
     countOrders,
     fetchOrdersInRange,
     testConnection,

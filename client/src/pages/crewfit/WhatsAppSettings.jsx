@@ -5,6 +5,8 @@ import { useToast } from '../../components/Toast'
 import Icon from '../../components/Icon'
 import useDirtyGuard from '../../hooks/useDirtyGuard'
 import { WA_BRANDS, WaBrandContext, useWaBrand } from './waBrand'
+import { SaveButton, Head, Toggle, Loading } from './waSettingsUi'
+import { NlBotTab, NlKnowledgeTab, NlProductsTab, NlHandoffTab, NlMenuTab, NlRepliesTab, NlTeamTab, NlHoursTab, NlTemplatesTab } from './NlSettings'
 
 /**
  * WhatsApp settings.
@@ -26,29 +28,35 @@ const TABS = [
   { key: 'statuses', label: 'Lead statuses', icon: 'check' },
   { key: 'connect', label: 'Connect WhatsApp', icon: 'whatsapp', adminOnly: true },
 ]
-// Normless's inbox has only its connection to set up so far; its bot settings come later.
-const BRAND_TABS = { crewfit: TABS.map(t => t.key), normless: ['connect'] }
+// Normless's settings, as the design lays them out: the bot first, then what it knows and does.
+const NL_TABS = [
+  { key: 'bot', label: 'Bot', icon: 'spark' },
+  { key: 'knowledge', label: 'Knowledge & policies', icon: 'note' },
+  { key: 'products', label: 'Products & size charts', icon: 'shirt' },
+  { key: 'handoff', label: 'Handoff rules', icon: 'users' },
+  { key: 'menu', label: 'Welcome menu', icon: 'note' },
+  { key: 'replies', label: 'Saved replies', icon: 'copy' },
+  { key: 'team', label: 'Team', icon: 'users' },
+  { key: 'hours', label: 'Hours & away', icon: 'clock' },
+  { key: 'templates', label: 'Templates', icon: 'mail' },
+  { key: 'connect', label: 'Connect WhatsApp', icon: 'whatsapp', adminOnly: true },
+]
 
 const short = (u) => (u ? u.split('@')[0] : '')
 
-/** A save button that says what state the form is in, so nobody has to wonder. */
-function SaveButton({ dirty, saving, onClick, idle = 'Saved', label = 'Save changes' }) {
-  return (
-    <button type="button" className={`btn btn-sm ${dirty ? 'btn-primary' : 'btn-secondary'}`} disabled={saving || !dirty} onClick={onClick}>
-      {saving ? 'Saving…' : dirty ? label : <><Icon name="check" size={14} /> {idle}</>}
-    </button>
-  )
-}
 
 export default function WhatsAppSettings({ brand: brandKey = 'crewfit' }) {
   const brand = WA_BRANDS[brandKey]
-  const tabs = TABS.filter(t => BRAND_TABS[brand.key].includes(t.key))
+  const tabs = brand.key === 'crewfit' ? TABS : NL_TABS
   const { tab = brand.defaultTab } = useParams()
   const { openMenu } = useMainMenu()
   const { user } = useAuth()
   const isAdmin = user?.role === 'admin' || user?.role === 'owner'
   if (!tabs.some(t => t.key === tab)) return <Navigate to={`${brand.path}/settings/${brand.defaultTab}`} replace />
-  const Pane = { connect: ConnectTab, menu: MenuTab, templates: TemplatesTab, orders: OrderMessagesTab, hours: HoursTab, catalogue: CatalogueTab, team: TeamTab, assignment: AssignmentTab, statuses: StatusesTab }[tab]
+  const Pane = brand.key !== 'crewfit' ? {
+    bot: NlBotTab, knowledge: NlKnowledgeTab, products: NlProductsTab, handoff: NlHandoffTab, menu: NlMenuTab,
+    replies: NlRepliesTab, team: NlTeamTab, hours: NlHoursTab, templates: NlTemplatesTab, connect: ConnectTab,
+  }[tab] : { connect: ConnectTab, menu: MenuTab, templates: TemplatesTab, orders: OrderMessagesTab, hours: HoursTab, catalogue: CatalogueTab, team: TeamTab, assignment: AssignmentTab, statuses: StatusesTab }[tab]
 
   return (
     <WaBrandContext.Provider value={brand}>
@@ -79,26 +87,8 @@ export default function WhatsAppSettings({ brand: brandKey = 'crewfit' }) {
   )
 }
 
-function Head({ title, children, actions }) {
-  return (
-    <div className="was-head">
-      <div>
-        <h2>{title}</h2>
-        {children && <p>{children}</p>}
-      </div>
-      {actions && <div className="was-actions">{actions}</div>}
-    </div>
-  )
-}
 
-function Toggle({ on, onChange, label, disabled }) {
-  return (
-    <button type="button" role="switch" aria-checked={!!on} aria-label={label} disabled={disabled}
-      className={`toggle${on ? ' on' : ''}`} onClick={() => onChange(!on)}><span /></button>
-  )
-}
 
-const Loading = () => <div className="loader"><div className="spinner" /></div>
 
 /* ════════════════════════════════════════════════════════════════════════════════════════════
    Menu list

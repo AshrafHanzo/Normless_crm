@@ -1783,6 +1783,8 @@ async function ensureWaLinesSchema() {
             CREATE UNIQUE INDEX IF NOT EXISTS wa_templates_line_name_idx ON wa_templates (line_id, name, language);
 
             -- Normless's inbox has its own pair of grants; Crewfit keeps can_view/manage_whatsapp.
+            -- What a manager set for the line's inbox and bot (Normless's settings live here).
+            ALTER TABLE wa_lines ADD COLUMN IF NOT EXISTS settings TEXT;
             ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_wa_normless BOOLEAN DEFAULT false;
             ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_manage_wa_normless BOOLEAN DEFAULT false;
         `);

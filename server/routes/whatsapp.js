@@ -578,6 +578,19 @@ router.use((req, res, next) => {
     next();
 });
 
+// Normless's own settings: bot, knowledge, handoff rules, menu, hours, team.
+router.use('/nl', (req, res, next) => (req.waLine?.brand === 'normless' ? next()
+    : res.status(404).json({ error: 'Not part of this inbox' })), require('./whatsapp-normless'));
+
+/**
+ * The demo chat: a made-up customer on a number no phone can have, so the team can see and click
+ * through the inbox before the real number is connected. Nothing is ever sent to it, no ticket is
+ * tied to it, and its Shopify panel is invented rather than read from (or written to) the shop.
+ */
+const DEMO_PHONE = '910000000000';
+const isDemo = (conversation) => conversation?.phone === DEMO_PHONE;
+const demoRefusal = (res) => res.status(400).json({ error: 'This is the demo chat — nothing is sent from it. Try it on a real customer once the number is connected.' });
+
 /**
  * The conversations this person is allowed to open, as a SQL condition.
  *
@@ -689,6 +702,7 @@ const shapeConversation = (row) => ({
     phone_pretty: wa.prettyPhone(row.phone),
     window_open: wa.windowOpen(row.last_inbound_at),
     window_left_ms: wa.windowLeftMs(row.last_inbound_at),
+    is_demo: row.phone === DEMO_PHONE,
 });
 
 /** The thread list down the left of the page. */
@@ -855,9 +869,10 @@ const takeFile = (req, res, next) => upload.single('file')(req, res, (err) => {
  */
 router.post('/conversations/:id/messages', takeFile, async (req, res) => {
     try {
-        if (!wa.configured()) return res.status(503).json({ error: 'WhatsApp is not configured on this server' });
         const conversation = await loadConversation(req, req.params.id);
         if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
+        if (isDemo(conversation)) return demoRefusal(res);
+        if (!wa.configured()) return res.status(503).json({ error: 'WhatsApp is not configured on this server' });
         if (!wa.windowOpen(conversation.last_inbound_at)) {
             return res.status(409).json({
                 error: 'This chat is past WhatsApp’s 24-hour window — only an approved template can be sent now.',
@@ -1552,10 +1567,34 @@ function paymentKind(financialStatus) {
     return { key: 'other', label: s ? s.charAt(0) + s.slice(1).toLowerCase().replace(/_/g, ' ') : 'Unknown' };
 }
 
+/** The demo chat's panel: the design's own example, invented, so no real customer is shown. */
+function demoCustomer() {
+    const ago = (days) => new Date(Date.now() - days * 86400000).toISOString();
+    return {
+        demo: true,
+        customer: { id: null, name: 'Demo Customer', first_name: 'Demo', email: 'demo@example.com', orders_count: 3, total_spent: 2497, created_at: ago(220) },
+        orders: [
+            {
+                order_number: '#DEMO-1', created_at: ago(4), total_price: 699, payment: paymentKind('PAID'), state: 'Shipped', shipped_at: ago(3),
+                items: [{ title: 'Acid Wash Tank Midnight', variant: 'Black / L', quantity: 1, price: '699.00' }],
+                dispatch: { awb: 'DEMO00000000', courier: 'Delhivery', tracking_url: null }, tickets: [-1],
+            },
+            {
+                order_number: '#DEMO-2', created_at: ago(1), total_price: 1348, payment: paymentKind('PARTIALLY_PAID'), state: 'Not shipped yet', shipped_at: null,
+                items: [{ title: 'AMG Petronas', variant: 'Black / M', quantity: 1, price: '699.00' }, { title: 'CR7 Minimal Classic Tee', variant: 'White / M', quantity: 1, price: '649.00' }],
+                dispatch: null, tickets: [],
+            },
+        ],
+        tickets: [{ id: -1, ref_no: 0, order_number: '#DEMO-1', nature: 'Return & Replacement', reason: 'Size Change', status: 'Closed', progress: 'Completed', action: 'Replacement Initiated', raised_on: ago(40).slice(0, 10) }],
+        media: { photos: 1, videos: 1 },
+    };
+}
+
 router.get('/conversations/:id/customer', async (req, res) => {
     try {
         const conversation = await loadConversation(req, req.params.id);
         if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
+        if (isDemo(conversation)) return res.json(demoCustomer());
         const phone10 = last10(conversation.phone);
 
         // Customers are synced from Shopify after the chat may have started, so a thread with no
@@ -1660,6 +1699,7 @@ router.post('/conversations/:id/ticket', async (req, res) => {
         }
         const conversation = await loadConversation(req, req.params.id);
         if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
+        if (isDemo(conversation)) return demoRefusal(res);
         const ticketId = parseInt(req.body?.ticket_id, 10) || 0;
         const ticket = (await db.query('SELECT id, ref_no, images FROM support_tickets WHERE id = $1', [ticketId])).rows[0];
         if (!ticket) return res.status(404).json({ error: 'That ticket is gone' });
@@ -2070,9 +2110,10 @@ router.post('/templates/sync', manager, async (req, res) => {
 /** Send one. This is the only thing allowed through a closed window. */
 router.post('/conversations/:id/template', async (req, res) => {
     try {
-        if (!wa.configured()) return res.status(503).json({ error: 'WhatsApp is not configured on this server' });
         const conversation = await loadConversation(req, req.params.id);
         if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
+        if (isDemo(conversation)) return demoRefusal(res);
+        if (!wa.configured()) return res.status(503).json({ error: 'WhatsApp is not configured on this server' });
 
         const name = trim(req.body?.name);
         const language = trim(req.body?.language) || 'en_US';

@@ -451,6 +451,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
 
   /** Open Support's own ticket form, filled in from the chat and, when given, one order. */
   const raiseTicket = async (order = null) => {
+    if (thread?.is_demo) return toast.info('This is the demo chat — tickets can only be raised from a real customer’s chat.')
     if (!ticketOptions) {
       const o = await apiFetch('/api/support/options')
       if (!o || o.error) return toast.error(o?.error || 'Could not open Support')
@@ -1234,6 +1235,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                   <span className="wa-chat-name">
                     <b>{thread.display_name}</b>
                     {cf && <span className="wa-pill" style={pillStyle(look.color)} title="Lead status">{look.name}</span>}
+                    {thread.is_demo && <span className="wa-pill wa-demo-chip" title="A made-up customer for trying the inbox. Nothing is sent from it.">Demo</span>}
                     {!cf && thread.status !== 'closed' && thread.last_direction === 'in' && <span className="wa-pill" style={pillStyle('#f87171')}>Needs a person</span>}
                     {!cf && thread.open_ticket_ref && <span className="wa-pill" style={pillStyle('#60a5fa')}>{refOf({ ref_no: thread.open_ticket_ref })} open</span>}
                   </span>
@@ -1347,7 +1349,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                         {m.body && <div className="wa-text">{m.body}</div>}
                         <div className="wa-meta">
                           {m.type === 'template' && <span>template</span>}
-                          {mine && (m.sender_type === 'phone' ? <span>from the phone app</span> : m.sender_type === 'auto' ? <span>sent automatically</span> : m.sender_type === 'bot' ? <span>menu</span>
+                          {mine && (m.sender_type === 'phone' ? <span>from the phone app</span> : m.sender_type === 'auto' ? <span>sent automatically</span> : m.sender_type === 'bot' ? <span>{cf ? 'menu' : 'bot'}</span>
                             : m.sender_type === 'ai' ? <span>assistant</span>
                               : m.sender_user ? <span>{short(m.sender_user)}</span> : null)}
                           <span>{clock(m.sent_at)}</span>
