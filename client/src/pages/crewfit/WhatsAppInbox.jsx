@@ -16,6 +16,16 @@ const FILTERS = [
   { key: 'all', label: 'All' },
 ]
 
+// Normless's queues, as the design lays them out: who needs a person first.
+const NL_FILTERS = [
+  { key: 'waiting', label: 'Needs a person', hot: true },
+  { key: 'bot', label: 'Bot handling' },
+  { key: 'mine', label: 'Mine' },
+  { key: 'ticket', label: 'Ticket open' },
+  { key: 'closed', label: 'Closed' },
+  { key: 'all', label: 'All' },
+]
+
 const clock = (v) => (v ? new Date(v).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '')
 const day = (v) => (v ? new Date(v).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '')
 
@@ -210,11 +220,12 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
 
   const [config, setConfig] = useState(null)
   const [filter, setFilter] = useState(params.get('filter') || 'all')
+  const [focusOrder, setFocusOrder] = useState(null)    // Normless: the order the panel is about
   const [statusFilter, setStatusFilter] = useState(params.get('status') || '')
   const [search, setSearch] = useState('')
   const [term, setTerm] = useState('')
   const [conversations, setConversations] = useState([])
-  const [tally, setTally] = useState({ open: 0, unassigned: 0, unread: 0 })
+  const [tally, setTally] = useState({ open: 0, unassigned: 0, unread: 0, waiting: 0, bot: 0, mine: 0, ticket: 0, closed: 0 })
   const [openId, setOpenId] = useState(params.get('c') ? Number(params.get('c')) : null)
   const [thread, setThread] = useState(null)
   const [messages, setMessages] = useState([])
@@ -356,7 +367,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
     const n = await apiFetch(`${API}/conversations/${id}/notes`)
     if (n && !n.error) setNotes(n.notes || [])
     loadActivity(id)
-    if (cf) { loadOrders(id); loadMockups(id) } else { setShop(null); loadShop(id) }
+    if (cf) { loadOrders(id); loadMockups(id) } else { setShop(null); setFocusOrder(null); loadShop(id) }
   }
 
   const loadShop = async (id = thread?.id) => {
@@ -434,6 +445,8 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
   /* ── Normless: support tickets from the chat ───────────────────────────────────────────── */
 
   const canTicket = ['admin', 'owner'].includes(user?.role) || !!user?.can_edit_support
+  // The order the Normless panel is about: the one picked, else the latest.
+  const nlOrder = shop?.orders?.find(o => o.order_number === focusOrder) || shop?.orders?.[0] || null
   const chatPhotos = messages.filter(m => m.direction === 'in' && m.media_url && /^image\/(jpeg|png|webp)$/.test(m.media_mime || ''))
 
   /** Open Support's own ticket form, filled in from the chat and, when given, one order. */
@@ -992,14 +1005,20 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
         <button type="button" className="btn-icon wa-menu-btn" aria-label="Open the main menu" title="Main menu" onClick={openMenu}>
           <Icon name="dashboard" size={18} />
         </button>
-        <h1>{cf ? 'WhatsApp' : `${brand.name} WhatsApp`}</h1>
-        <div className="wa-counts">
+        {cf ? <h1>WhatsApp</h1> : (
+          <nav className="wa-crumb" aria-label="Breadcrumb">
+            <span>{brand.name}</span><span aria-hidden="true">/</span><b>WhatsApp</b>
+            {health?.number && <small>{health.number}</small>}
+          </nav>
+        )}
+        {!cf && <span className="wa-nl-hours"><span className={`wa-dot${health?.ok ? ' on' : ''}`} aria-hidden="true" />Team replies 9 am – 6 pm</span>}
+        {cf && <div className="wa-counts">
           <span className="wa-count"><b>{tally.open}</b> open</span>
           <button type="button" className="wa-count" style={{ cursor: 'pointer' }} onClick={() => setFilter('unassigned')}>
             <b>{tally.unassigned}</b> waiting
           </button>
           <span className="wa-count"><b>{tally.unread}</b> unread</span>
-        </div>
+        </div>}
         <div className="wa-topbar-end">
           {config?.canManage && menuFlow && (
             <label className="wa-menu-switch" title="Whether a new chat is answered by the menu first. Outside working hours it always is, if that is set in Settings › Working hours.">
@@ -1135,11 +1154,13 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
               onChange={e => setSearch(e.target.value)} />
             {!!search && <button type="button" className="search-clear" aria-label="Clear search" onClick={() => setSearch('')}>×</button>}
           </div>
-          <div className="wa-filters" role="group" aria-label="Whose">
-            {FILTERS.map(f => (
-              <button key={f.key} type="button"
+          <div className="wa-filters" role="group" aria-label={cf ? 'Whose' : 'Queue'}>
+            {(cf ? FILTERS : NL_FILTERS).map(f => (
+              <button key={f.key} type="button" aria-pressed={filter === f.key}
                 className={`chip${filter === f.key ? ' chip-on' : ''}`}
-                onClick={() => setFilter(f.key)}>{f.label}</button>
+                onClick={() => setFilter(f.key)}>{f.label}
+                {!cf && f.key !== 'all' && <span className={`wa-q-count${f.hot && tally[f.key] ? ' hot' : ''}`}>{tally[f.key] ?? 0}</span>}
+              </button>
             ))}
           </div>
           {!!statuses.length && (
@@ -1183,6 +1204,14 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                         <span className="wa-thread-line">{c.last_message_preview || 'No messages yet'}</span>
                         <span className="wa-thread-foot">
                           {cf && <span className="wa-pill" style={pillStyle(s.color)}>{s.name}</span>}
+                          {!cf && (c.status === 'closed'
+                            ? <span className="wa-pill" style={pillStyle('#a8b0be')}>Closed</span>
+                            : c.mode === 'flow' || c.mode === 'ai'
+                              ? <span className="wa-pill" style={pillStyle('#b3a9ff')}>Bot</span>
+                              : c.last_direction === 'in'
+                                ? <span className="wa-pill" style={pillStyle('#f87171')}>Needs a person</span>
+                                : <span className="wa-pill" style={pillStyle('#34d399')}>Answered</span>)}
+                          {!cf && c.open_ticket_ref && <span className="wa-pill" style={pillStyle('#60a5fa')}>{refOf({ ref_no: c.open_ticket_ref })}</span>}
                           <span className="wa-thread-owner">{c.assigned_to ? short(c.assigned_to) : 'Unassigned'}</span>
                           {!!c.unread_count && <span className="wa-unread">{c.unread_count}</span>}
                         </span>
@@ -1210,9 +1239,13 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                   <span className="wa-chat-name">
                     <b>{thread.display_name}</b>
                     {cf && <span className="wa-pill" style={pillStyle(look.color)} title="Lead status">{look.name}</span>}
+                    {!cf && thread.status !== 'closed' && thread.last_direction === 'in' && <span className="wa-pill" style={pillStyle('#f87171')}>Needs a person</span>}
+                    {!cf && thread.open_ticket_ref && <span className="wa-pill" style={pillStyle('#60a5fa')}>{refOf({ ref_no: thread.open_ticket_ref })} open</span>}
                   </span>
                   <span className="wa-chat-phone">
                     {thread.phone_pretty}{thread.lead_company ? ` · ${thread.lead_company}` : ''}
+                    {!cf && shop?.customer?.created_at && ` · customer since ${new Date(shop.customer.created_at).toLocaleDateString('en-IN', { month: 'short', year: 'numeric' })}`}
+                    {!cf && thread.last_inbound_at && ` · wrote ${clock(thread.last_inbound_at)}`}
                   </span>
                   <span className="wa-chat-since" title={new Date(thread.created_at).toLocaleString('en-IN')}>
                     {cf ? 'Lead since' : 'First message'} {day(thread.created_at)}, {clock(thread.created_at)}{thread.ad_referral ? ' · from an ad' : ''}
@@ -1269,6 +1302,17 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                           onClick={() => setMode('ai')}>Hand to assistant</button>
                       )}
                     </>
+                  )}
+                  {!cf && thread.assigned_to?.toLowerCase() !== user?.username?.toLowerCase() && (
+                    <button type="button" className="btn btn-primary btn-sm" onClick={() => assign(user?.username)}>Take over</button>
+                  )}
+                  {!cf && (
+                    <button type="button" className="btn btn-secondary btn-sm" disabled={!canTicket}
+                      title={canTicket ? 'Opens a Support ticket filled in from this chat' : 'Needs edit access to Support'}
+                      onClick={() => raiseTicket(nlOrder)}>Raise support ticket</button>
+                  )}
+                  {!cf && thread.status !== 'closed' && (
+                    <button type="button" className="mini-btn" title="Close the chat once the customer is sorted" onClick={() => setStatus('closed')}>Close chat</button>
                   )}
                   {/* No "Done": a chat that is closed by hand drops off the list and out of
                       follow-up. Chats stay open; the lead's status says where they stand. */}
@@ -1428,6 +1472,10 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                           </div>
                         )}
                       </div>}
+                      {!cf && nlOrder && (
+                        <button type="button" className="wa-tool" title={`Puts ${nlOrder.order_number}'s status in the reply box`}
+                          onClick={() => orderStatusText(nlOrder)}><Icon name="box" size={14} /> Order status</button>
+                      )}
                       {/* The sentences that get typed twenty times a week, one click away. */}
                       <div className="wa-pop-anchor">
                         <button type="button" className={`wa-tool${pop === 'snippets' ? ' wa-tool-on' : ''}`}
@@ -1518,11 +1566,6 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
               <h2>{thread.display_name}</h2>
               <span>Since {day(thread.created_at)}</span>
             </div>
-            <div className="wa-side-actions">
-              <button type="button" className="btn btn-primary wa-span-2" disabled={!canTicket}
-                title={canTicket ? 'Opens a Support ticket filled in from this chat' : 'Needs edit access to Support'}
-                onClick={() => raiseTicket(shop?.orders?.[0] || null)}><Icon name="plus" size={14} /> Raise support ticket</button>
-            </div>
             <div className="wa-side-tabs" role="tablist">
               {[['customer', 'Customer'], ['tickets', `Tickets${shop?.tickets?.length ? ` (${shop.tickets.length})` : ''}`], ['activity', 'Activity']].map(([k, label]) => (
                 <button key={k} type="button" role="tab" aria-selected={sideTab === k}
@@ -1531,63 +1574,92 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
             </div>
             {sideTab === 'customer' && (
               <>
-                {!shop ? <div className="loader"><div className="spinner" /></div> : (
-                  <>
-                    <div className="wa-nl-card">
-                      {shop.customer ? (
-                        <>
-                          <div className="wa-nl-card-head"><b>{shop.customer.name || thread.display_name}</b><span>Shopify customer</span></div>
-                          <div className="wa-nl-stats">
-                            <div><span>Orders</span><b>{shop.customer.orders_count ?? 0}</b></div>
-                            <div><span>Spent</span><b>{money(shop.customer.total_spent)}</b></div>
-                            <div><span>Since</span><b>{day(shop.customer.created_at)}</b></div>
-                          </div>
-                          {shop.customer.email && <div className="wa-nl-muted">{shop.customer.email}</div>}
-                        </>
-                      ) : (
-                        <div className="wa-nl-muted">No Shopify customer has {thread.phone_pretty} on file. Orders shipped to this number still show below.</div>
-                      )}
-                    </div>
-
-                    <div className="form-section">Orders</div>
-                    {!shop.orders.length && <p className="wa-empty">No orders found for this number. Ask the customer for their order number.</p>}
-                    {shop.orders.map((o, i) => {
-                      const tickets = shop.tickets.filter(t => o.tickets.includes(t.id))
-                      const days = o.shipped_at ? Math.floor((Date.now() - new Date(o.shipped_at).getTime()) / 86400000) : null
-                      return (
-                        <div key={o.order_number} className={`wa-order${i === 0 ? ' wa-order-latest' : ''}`}>
-                          <div className="wa-order-head">
-                            <span className="wa-order-ref">{o.order_number}</span>
-                            <span className="wa-pill" style={pillStyle(o.state === 'Shipped' ? '#34d399' : o.state === 'Cancelled' ? '#f87171' : '#60a5fa')}>{o.state}</span>
-                            <span className="wa-order-total">{money(o.total_price)}</span>
-                          </div>
-                          <div className="wa-order-meta">
-                            <span>{o.items.map(it => `${it.title}${it.variant ? ` · ${it.variant}` : ''}${it.quantity > 1 ? ` ×${it.quantity}` : ''}`).join(', ') || 'No items recorded'}</span>
-                          </div>
-                          <div className="wa-order-meta">
-                            <span>Ordered {day(o.created_at)}</span>
-                            {o.shipped_at && <span>· shipped {day(o.shipped_at)}{o.dispatch?.courier ? ` by ${o.dispatch.courier}` : ''}</span>}
-                            {o.dispatch?.tracking_url && <a href={o.dispatch.tracking_url} target="_blank" rel="noreferrer">· track {o.dispatch.awb ? `…${String(o.dispatch.awb).slice(-4)}` : ''} ↗</a>}
-                          </div>
-                          {/* What the refund policy turns on, so nobody has to remember it. */}
-                          <ul className="wa-nl-checks">
-                            <li className={o.payment.key === 'partial_cod' ? 'warn' : ''}>{o.payment.label}</li>
-                            {days != null && <li>Shipped {days === 0 ? 'today' : `${days} day${days === 1 ? '' : 's'} ago`} — damage or wrong-item claims need the unboxing video, within 24h of delivery</li>}
-                            {i === 0 && <li className={shop.media.photos ? 'ok' : ''}>{shop.media.photos ? `${shop.media.photos} photo${shop.media.photos === 1 ? '' : 's'} sent in this chat` : 'No photos sent in this chat'}</li>}
-                            {i === 0 && <li className={shop.media.videos ? 'ok' : ''}>{shop.media.videos ? 'Video sent in this chat (unboxing?)' : 'No unboxing video in this chat'}</li>}
-                            {tickets.map(t => <li key={t.id} className="warn">Earlier ticket {refOf(t)} · {t.nature || 'request'} · {t.status}</li>)}
-                          </ul>
-                          <div className="wa-order-actions">
-                            <button type="button" className="mini-btn" disabled={!thread.window_open}
-                              title={thread.window_open ? 'Puts the status in the reply box to check and send' : 'The customer has to write first'}
-                              onClick={() => orderStatusText(o)}>Order status</button>
-                            <button type="button" className="mini-btn" disabled={!canTicket} onClick={() => raiseTicket(o)}>Raise ticket</button>
-                          </div>
+                {!shop ? <div className="loader"><div className="spinner" /></div> : (() => {
+                  const o = nlOrder
+                  const days = o?.shipped_at ? Math.floor((Date.now() - new Date(o.shipped_at).getTime()) / 86400000) : null
+                  const earlier = o ? shop.tickets.filter(t => o.tickets.includes(t.id)) : []
+                  const others = shop.orders.filter(x => x !== o)
+                  return (
+                    <>
+                      <section className="wa-nl-card">
+                        <div className="wa-nl-card-head">
+                          <b>{shop.customer?.name || thread.display_name}</b>
+                          {shop.customer && <span className="wa-nl-muted">Shopify customer</span>}
                         </div>
-                      )
-                    })}
-                  </>
-                )}
+                        {shop.customer ? (
+                          <>
+                            <div className="wa-nl-stats">
+                              <div><span>Orders</span><b>{shop.customer.orders_count ?? 0}</b></div>
+                              <div><span>Spent</span><b>{money(shop.customer.total_spent)}</b></div>
+                              <div><span>Matched by</span><b className="wa-nl-small">Phone</b></div>
+                            </div>
+                            {shop.customer.email && <div className="wa-nl-muted">{shop.customer.email}</div>}
+                          </>
+                        ) : (
+                          <div className="wa-nl-muted">No Shopify customer has {thread.phone_pretty} on file. Orders shipped to this number still show below.</div>
+                        )}
+                      </section>
+
+                      {!o ? (
+                        <section className="wa-nl-card"><div className="wa-nl-muted">No orders found for this number. Ask the customer for their order number.</div></section>
+                      ) : (
+                        <section className="wa-nl-card wa-nl-order">
+                          <div className="wa-nl-card-head">
+                            <b>Order {o.order_number}</b>
+                            <span className="wa-pill" style={pillStyle(o.state === 'Shipped' ? '#34d399' : o.state === 'Cancelled' ? '#f87171' : '#60a5fa')}>{o.state}</span>
+                          </div>
+                          {o.items.map((it, k) => (
+                            <div key={k} className="wa-nl-item">
+                              <span className="wa-nl-thumb" aria-hidden="true"><Icon name="shirt" size={16} /></span>
+                              <span><b>{it.title}</b><small>{[it.variant, it.price ? money(it.price) : null, it.quantity > 1 ? `×${it.quantity}` : null].filter(Boolean).join(' · ')}</small></span>
+                            </div>
+                          ))}
+                          <div className="wa-nl-rows">
+                            <div><span>Ordered</span><span>{day(o.created_at)} · {money(o.total_price)}</span></div>
+                            {o.shipped_at && <div><span>Shipped</span><span>{day(o.shipped_at)}{o.dispatch?.courier ? ` · ${o.dispatch.courier}` : ''}{o.dispatch?.tracking_url && <> · <a href={o.dispatch.tracking_url} target="_blank" rel="noreferrer">{o.dispatch.awb ? `…${String(o.dispatch.awb).slice(-4)}` : 'track'} ↗</a></>}</span></div>}
+                          </div>
+                          <div className="wa-nl-checks-box">
+                            <div className="wa-nl-label">Policy checks</div>
+                            <ul className="wa-nl-checks">
+                              <li className={o.payment.key === 'partial_cod' ? 'warn' : o.payment.key === 'prepaid' ? 'ok' : ''}>{o.payment.label}</li>
+                              {days != null && <li>Shipped {days === 0 ? 'today' : `${days} day${days === 1 ? '' : 's'} ago`} — damage claims need the unboxing video within 24h of delivery</li>}
+                              <li className={shop.media.photos ? 'ok' : ''}>{shop.media.photos ? `${shop.media.photos} photo${shop.media.photos === 1 ? '' : 's'} received in this chat` : 'No photos in this chat yet'}</li>
+                              <li className={shop.media.videos ? 'ok' : ''}>{shop.media.videos ? 'Video received in this chat (unboxing?)' : 'No unboxing video in this chat'}</li>
+                              {earlier.map(t => <li key={t.id} className="warn">Earlier ticket {refOf(t)} · {t.nature || 'request'} · {t.status}</li>)}
+                            </ul>
+                          </div>
+                          <button type="button" className="btn btn-primary wa-nl-wide" disabled={!canTicket}
+                            title={canTicket ? undefined : 'Needs edit access to Support'} onClick={() => raiseTicket(o)}>
+                            Raise support ticket for {o.order_number}</button>
+                        </section>
+                      )}
+
+                      {!!others.length && (
+                        <section className="wa-nl-card">
+                          <div className="wa-nl-label">Other orders</div>
+                          {others.map(x => (
+                            <button key={x.order_number} type="button" className="wa-nl-line" onClick={() => setFocusOrder(x.order_number)}
+                              title="Show this order above">
+                              <span><b>{x.order_number}</b> · {x.items.map(it => it.title).join(', ') || 'No items'}</span>
+                              <span>{x.state}</span>
+                            </button>
+                          ))}
+                        </section>
+                      )}
+
+                      <section className="wa-nl-card">
+                        <div className="wa-nl-card-head"><span className="wa-nl-label">Support tickets</span><a href="/support">Open in Support</a></div>
+                        {!shop.tickets.length && <div className="wa-nl-muted">None yet.</div>}
+                        {shop.tickets.slice(0, 4).map(t => (
+                          <a key={t.id} className="wa-nl-line" href={`/support?focus=${t.id}`}>
+                            <span><b>{refOf(t)}</b> · {t.reason || t.nature || 'Request'}{t.order_number ? ` · ${t.order_number}` : ''}</span>
+                            <span className={t.status === 'Closed' ? 'ok' : 'warn'}>{t.status}</span>
+                          </a>
+                        ))}
+                      </section>
+                    </>
+                  )
+                })()}
                 {filesAndNotes}
               </>
             )}

@@ -3295,3 +3295,49 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .wa-nl-pick label.on { border-color: var(--primary); }
 .wa-nl-pick img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .wa-nl-pick input { position: absolute; top: 6px; left: 6px; accent-color: var(--primary); }
+.wa-crumb { display: flex; align-items: baseline; gap: 8px; font-size: 16px; }
+.wa-crumb span { color: var(--text-secondary); font-weight: 500; }
+.wa-crumb small { margin-left: 6px; font-size: 12px; color: var(--text-muted); }
+.wa-nl-hours { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--text-secondary); }
+.wa-nl-hours .wa-dot { background: var(--text-muted); }
+.wa-nl-hours .wa-dot.on { background: var(--success); }
+.wa-q-count { margin-left: 6px; padding: 0 6px; border-radius: 999px; font-size: 11px; font-weight: 700; background: rgba(255,255,255,.08); color: var(--text-secondary); }
+.wa-q-count.hot { background: var(--danger); color: #1a0606; }
+.wa-nl-card-head a, .wa-nl-card-head .wa-nl-label + a { font-size: 12px; }
+.wa-nl-small { font-size: 13px !important; }
+.wa-nl-order { border-color: color-mix(in srgb, var(--primary) 50%, transparent); }
+.wa-nl-item { display: flex; gap: 10px; align-items: center; }
+.wa-nl-item b { display: block; font-size: 13px; }
+.wa-nl-item small { color: var(--text-secondary); font-size: 12px; }
+.wa-nl-thumb { width: 40px; height: 48px; border-radius: 6px; background: var(--surface-active); display: grid; place-items: center; color: var(--text-muted); flex: none; }
+.wa-nl-rows { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--text-secondary); }
+.wa-nl-rows div { display: flex; justify-content: space-between; gap: 10px; }
+.wa-nl-checks-box { border-top: 1px solid var(--border); padding-top: 8px; }
+.wa-nl-checks-box .wa-nl-checks { border-top: 0; margin: 4px 0 0; padding: 0; }
+.wa-nl-label { font-size: 11px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--text-secondary); }
+.wa-nl-wide { width: 100%; justify-content: center; }
+.wa-nl-line { display: flex; justify-content: space-between; gap: 10px; width: 100%; padding: 4px 0; background: none; border: 0; color: var(--text-primary); font: inherit; font-size: 12px; text-align: left; text-decoration: none; cursor: pointer; }
+.wa-nl-line span:last-child { color: var(--text-secondary); white-space: nowrap; }
+.wa-nl-line span.ok { color: var(--success); }
+.wa-nl-line span.warn { color: var(--warning); }
+.wa-nl-card + .wa-nl-card { margin-top: 10px; }
+
+/* The full-screen inbox (menu hidden) used to keep three columns at every width, which crushed the
+   chat under the side panel on a laptop. Narrower columns first, then the panel drops below. */
+@media (max-width: 1280px) {
+  .app-immersive .wa-layout { grid-template-columns: minmax(230px, 280px) minmax(0, 1fr) minmax(280px, 320px); }
+}
+@media (max-width: 1100px) {
+  .app-immersive .wa-page { height: auto; }
+  .app-immersive .wa-layout, .app-immersive .wa-layout.wa-layout-empty { grid-template-columns: minmax(220px, 280px) minmax(0, 1fr); grid-auto-rows: auto; }
+  .app-immersive .wa-list, .app-immersive .wa-chat { height: calc(100vh - 150px); }
+  .app-immersive .wa-side { display: flex; grid-column: 1 / -1; }
+}
+@media (max-width: 760px) {
+  .app-immersive .wa-layout, .app-immersive .wa-layout.wa-layout-empty { grid-template-columns: minmax(0, 1fr); }
+  .app-immersive .wa-list, .app-immersive .wa-chat { height: auto; }
+  .app-immersive .wa-side { grid-column: auto; }
+}
+/* Normless has six queues: they wrap onto a second line rather than squeezing their labels. */
+.wa-filters { flex-wrap: wrap; }
+.wa-filters .chip { white-space: nowrap; }

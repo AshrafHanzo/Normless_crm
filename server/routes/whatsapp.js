@@ -662,19 +662,30 @@ router.get('/config', (req, res) => {
     });
 });
 
+// Who spoke last: a chat whose last word is the customer's is one waiting for an answer.
+const LAST_DIRECTION = `(SELECT m.direction FROM wa_messages m WHERE m.conversation_id = c.id
+                          ORDER BY m.id DESC LIMIT 1)`;
+// A Normless chat with a support ticket still open on it.
+const HAS_OPEN_TICKET = `EXISTS (SELECT 1 FROM support_tickets t WHERE t.wa_conversation_id = c.id AND t.status <> 'Closed')`;
+
 const LIST_FIELDS = `c.id, c.status, c.mode, c.assigned_to, c.unread_count, c.last_message_preview,
                      c.last_inbound_at, c.last_message_at, c.ad_referral,
                      k.phone, k.profile_name, k.lead_id, k.customer_id,
                      l.name AS lead_name, l.company AS lead_company, l.status AS lead_status,
-                     l.product_interest, l.quantity`;
+                     l.product_interest, l.quantity,
+                     NULLIF(TRIM(CONCAT(cu.first_name, ' ', cu.last_name)), '') AS customer_name,
+                     ${LAST_DIRECTION} AS last_direction,
+                     (SELECT t.ref_no FROM support_tickets t WHERE t.wa_conversation_id = c.id AND t.status <> 'Closed'
+                       ORDER BY t.id DESC LIMIT 1) AS open_ticket_ref`;
 const LIST_FROM = `FROM wa_conversations c
                    JOIN wa_contacts k ON k.id = c.contact_id
-                   LEFT JOIN crewfit_leads l ON l.id = k.lead_id`;
+                   LEFT JOIN crewfit_leads l ON l.id = k.lead_id
+                   LEFT JOIN customers cu ON cu.id = k.customer_id`;
 
 const shapeConversation = (row) => ({
     ...row,
     ad_referral: safeJson(row.ad_referral, null),
-    display_name: row.lead_name || row.profile_name || wa.prettyPhone(row.phone),
+    display_name: row.lead_name || row.customer_name || row.profile_name || wa.prettyPhone(row.phone),
     phone_pretty: wa.prettyPhone(row.phone),
     window_open: wa.windowOpen(row.last_inbound_at),
     window_left_ms: wa.windowLeftMs(row.last_inbound_at),
@@ -692,8 +703,17 @@ router.get('/conversations', async (req, res) => {
             where.push(`LOWER(COALESCE(c.assigned_to,'')) = $${params.length}`);
         } else if (filter === 'unassigned') {
             where.push('c.assigned_to IS NULL');
+        } else if (filter === 'waiting') {
+            // Normless's "Needs a person": a person is answering it, and the customer spoke last.
+            where.push(`c.mode = 'human' AND ${LAST_DIRECTION} = 'in'`);
+        } else if (filter === 'bot') {
+            where.push(`c.mode IN ('flow', 'ai')`);
+        } else if (filter === 'ticket') {
+            where.push(HAS_OPEN_TICKET);
         }
-        if (String(req.query.status || 'open') !== 'all') {
+        if (filter === 'closed') {
+            where.push(`c.status = 'closed'`);
+        } else if (String(req.query.status || 'open') !== 'all') {
             params.push(String(req.query.status || 'open'));
             where.push(`c.status = $${params.length}`);
         }
@@ -735,11 +755,19 @@ router.get('/conversations', async (req, res) => {
 
         // The counts the filter chips show, over everything this person can see.
         const tallyParams = [];
+        const vis = visibility(req, tallyParams);
+        tallyParams.push(String(req.user?.username || '').toLowerCase());
+        const me = `$${tallyParams.length}`;
         const tally = await db.query(
             `SELECT COUNT(*) FILTER (WHERE c.status = 'open') AS open,
                     COUNT(*) FILTER (WHERE c.status = 'open' AND c.assigned_to IS NULL) AS unassigned,
-                    COALESCE(SUM(c.unread_count), 0) AS unread
-               ${LIST_FROM} WHERE ${visibility(req, tallyParams)}`, tallyParams);
+                    COALESCE(SUM(c.unread_count), 0) AS unread,
+                    COUNT(*) FILTER (WHERE c.status = 'open' AND c.mode = 'human' AND ${LAST_DIRECTION} = 'in')::int AS waiting,
+                    COUNT(*) FILTER (WHERE c.status = 'open' AND c.mode IN ('flow', 'ai'))::int AS bot,
+                    COUNT(*) FILTER (WHERE c.status = 'open' AND LOWER(COALESCE(c.assigned_to, '')) = ${me})::int AS mine,
+                    COUNT(*) FILTER (WHERE c.status = 'open' AND ${HAS_OPEN_TICKET})::int AS ticket,
+                    COUNT(*) FILTER (WHERE c.status = 'closed')::int AS closed
+               ${LIST_FROM} WHERE ${vis}`, tallyParams);
 
         res.json({ conversations: rows.rows.map(shapeConversation), tally: tally.rows[0] });
     } catch (err) {
