@@ -328,8 +328,8 @@ async function threadForOrder(order) {
     if (!phone) throw new SendError(`${ref(order)} has no WhatsApp number`);
     return db.transaction(async (c) => {
         const contact = (await c.query(
-            `INSERT INTO wa_contacts (phone, profile_name) VALUES ($1, $2)
-             ON CONFLICT (phone) DO UPDATE SET profile_name = COALESCE(wa_contacts.profile_name, EXCLUDED.profile_name)
+            `INSERT INTO wa_contacts (line_id, phone, profile_name) VALUES ((SELECT id FROM wa_lines WHERE brand = 'crewfit'), $1, $2)
+             ON CONFLICT (line_id, phone) DO UPDATE SET profile_name = COALESCE(wa_contacts.profile_name, EXCLUDED.profile_name)
              RETURNING id, phone, lead_id`, [phone, order.customer_name || null])).rows[0];
         let leadId = order.wa_lead_id || contact.lead_id;
         if (!leadId) {
@@ -342,8 +342,8 @@ async function threadForOrder(order) {
         if (!contact.lead_id) await c.query('UPDATE wa_contacts SET lead_id = $2 WHERE id = $1', [contact.id, leadId]);
         if (!order.wa_lead_id) await c.query('UPDATE crewfit_orders SET wa_lead_id = $2 WHERE id = $1', [order.id, leadId]);
         const conv = (await c.query(
-            `INSERT INTO wa_conversations (contact_id, last_message_at)
-             VALUES ($1, CURRENT_TIMESTAMP)
+            `INSERT INTO wa_conversations (contact_id, last_message_at, line_id)
+             VALUES ($1, CURRENT_TIMESTAMP, (SELECT id FROM wa_lines WHERE brand = 'crewfit'))
              ON CONFLICT (contact_id) DO UPDATE SET updated_at = CURRENT_TIMESTAMP
              RETURNING *`, [contact.id])).rows[0];
         return { ...conv, phone };
@@ -359,7 +359,8 @@ async function logActivity({ conversationId = null, orderId = null, kind, body, 
             const phone = o && wa.normalisePhone(o.whatsapp_number || o.contact_number || o.billing_mobile);
             if (phone) {
                 conversationId = (await db.query(
-                    `SELECT c.id FROM wa_conversations c JOIN wa_contacts k ON k.id = c.contact_id WHERE k.phone = $1`,
+                    `SELECT c.id FROM wa_conversations c JOIN wa_contacts k ON k.id = c.contact_id
+                      WHERE k.phone = $1 AND k.line_id = (SELECT id FROM wa_lines WHERE brand = 'crewfit')`,
                     [phone])).rows[0]?.id || null;
             }
         }
@@ -498,7 +499,7 @@ async function sendOnce(orderId, kind, { user = null, auto = false } = {}) {
             // Outside the window only a template can go, and only if one was chosen for this.
             const s = await settings();
             const tplId = s[`order_tpl_${kind}`];
-            const t = tplId && (await db.query(`SELECT * FROM wa_templates WHERE id = $1`, [tplId])).rows[0];
+            const t = tplId && (await db.query(`SELECT * FROM wa_templates WHERE id = $1 AND line_id = (SELECT id FROM wa_lines WHERE brand = 'crewfit')`, [tplId])).rows[0];
             if (t && t.status !== 'APPROVED') {
                 throw new SendError(`${ref(order)}: the chat is past WhatsApp’s 24-hour window, and the template “${t.name}” is still ${String(t.status || 'pending').toLowerCase()} at Meta. Sync templates once Meta approves it, or wait for the customer to write.`, 409);
             }
@@ -554,16 +555,16 @@ async function qrFile() {
 async function submitTemplates(user) {
     const out = [];
     for (const [kind, t] of Object.entries(TEMPLATES)) {
-        const existing = (await db.query(`SELECT id, status FROM wa_templates WHERE name = $1 AND language = 'en'`, [t.name])).rows[0];
+        const existing = (await db.query(`SELECT id, status FROM wa_templates WHERE name = $1 AND language = 'en' AND line_id = (SELECT id FROM wa_lines WHERE brand = 'crewfit')`, [t.name])).rows[0];
         let id = existing?.id;
         if (!existing) {
             try {
                 const made = await wa.createTemplate({ name: t.name, language: 'en', category: 'UTILITY', body: t.body, examples: t.examples });
                 const vars = new Set((t.body.match(/\{\{\s*(\d+)\s*\}\}/g) || [])).size;
                 id = (await db.query(
-                    `INSERT INTO wa_templates (name, language, category, status, body_text, variables, var_map, synced_at)
-                     VALUES ($1,'en','UTILITY',$2,$3,$4,$5,CURRENT_TIMESTAMP)
-                     ON CONFLICT (name, language) DO UPDATE SET status = EXCLUDED.status, body_text = EXCLUDED.body_text,
+                    `INSERT INTO wa_templates (name, language, category, status, body_text, variables, var_map, synced_at, line_id)
+                     VALUES ($1,'en','UTILITY',$2,$3,$4,$5,CURRENT_TIMESTAMP,(SELECT id FROM wa_lines WHERE brand = 'crewfit'))
+                     ON CONFLICT (line_id, name, language) DO UPDATE SET status = EXCLUDED.status, body_text = EXCLUDED.body_text,
                          variables = EXCLUDED.variables, var_map = EXCLUDED.var_map
                      RETURNING id`, [t.name, made.status || 'PENDING', t.body, vars, JSON.stringify(t.map)])).rows[0].id;
                 out.push({ kind, name: t.name, result: 'submitted' });

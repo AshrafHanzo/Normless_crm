@@ -321,7 +321,11 @@ app.use('/api/support', authMiddleware, require('./routes/support'));
 // itself with a signature over the raw body instead, which is why it is mounted here, after the
 // JSON parser that stashes those bytes but ahead of the sign-in the inbox routes sit behind.
 app.use('/api/whatsapp/webhook', require('./routes/whatsapp').webhook);
-app.use('/api/whatsapp', authMiddleware, require('./routes/whatsapp'));
+// One inbox router, mounted once per brand: Crewfit's number and Normless's, each scoped to its
+// own line so neither can read or answer the other's customers. One webhook serves both — Meta
+// says in every call which number it is for.
+app.use('/api/whatsapp', authMiddleware, require('./services/wa-line').scope('crewfit'), require('./routes/whatsapp'));
+app.use('/api/nl-whatsapp', authMiddleware, require('./services/wa-line').scope('normless'), require('./routes/whatsapp'));
 // Your own inbox: mentions and replies. Scoped to the caller inside the route.
 app.use('/api/notifications', authMiddleware, require('./routes/notifications'));
 // One comment thread implementation for every kind of thing that has one.
@@ -1719,6 +1723,74 @@ async function ensureBankingSchema() {
     }
 }
 
+/**
+ * Two WhatsApp numbers in one CRM: Crewfit's and Normless's.
+ *
+ * Until now there was one number, so a contact was simply a phone number. A customer can write to
+ * both brands, though, and the two threads must never merge — Crewfit's reps should not read a
+ * Normless refund chat, and a reply must leave from the number it was written to. So contacts,
+ * conversations, saved replies and templates (which Meta approves per business account) each
+ * belong to a line. Everything that existed before is Crewfit's.
+ */
+async function ensureWaLinesSchema() {
+    try {
+        await db.exec(`
+            CREATE TABLE IF NOT EXISTS wa_lines (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                brand TEXT UNIQUE NOT NULL,          -- 'crewfit' | 'normless'
+                name TEXT NOT NULL,
+                -- The number connected from the CRM, as wa-connect writes it (token sealed), and
+                -- the two one-off imports Coexistence allows after connecting.
+                connection TEXT,
+                history_import TEXT,
+                contacts_import TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            INSERT INTO wa_lines (brand, name) VALUES ('crewfit', 'Crewfit'), ('normless', 'Normless')
+                ON CONFLICT (brand) DO NOTHING;
+
+            -- Crewfit's connection used to live in wa_settings; it moves onto its line once.
+            UPDATE wa_lines l SET
+                connection = COALESCE(l.connection, (SELECT value FROM wa_settings WHERE key = 'connection')),
+                history_import = COALESCE(l.history_import, (SELECT value FROM wa_settings WHERE key = 'history_import')),
+                contacts_import = COALESCE(l.contacts_import, (SELECT value FROM wa_settings WHERE key = 'contacts_import'))
+             WHERE l.brand = 'crewfit';
+
+            ALTER TABLE wa_contacts ADD COLUMN IF NOT EXISTS line_id INTEGER REFERENCES wa_lines(id);
+            UPDATE wa_contacts SET line_id = (SELECT id FROM wa_lines WHERE brand = 'crewfit') WHERE line_id IS NULL;
+            ALTER TABLE wa_contacts ALTER COLUMN line_id SET NOT NULL;
+            -- One contact per number per line, instead of one per number.
+            ALTER TABLE wa_contacts DROP CONSTRAINT IF EXISTS wa_contacts_phone_key;
+            CREATE UNIQUE INDEX IF NOT EXISTS wa_contacts_line_phone_idx ON wa_contacts (line_id, phone);
+
+            -- The line again on the thread, so every inbox query can filter without a join.
+            ALTER TABLE wa_conversations ADD COLUMN IF NOT EXISTS line_id INTEGER REFERENCES wa_lines(id);
+            UPDATE wa_conversations c SET line_id = k.line_id FROM wa_contacts k
+             WHERE k.id = c.contact_id AND c.line_id IS NULL;
+            ALTER TABLE wa_conversations ALTER COLUMN line_id SET NOT NULL;
+            CREATE INDEX IF NOT EXISTS wa_conversations_line_idx ON wa_conversations (line_id, last_message_at DESC);
+
+            ALTER TABLE wa_quick_replies ADD COLUMN IF NOT EXISTS line_id INTEGER REFERENCES wa_lines(id);
+            UPDATE wa_quick_replies SET line_id = (SELECT id FROM wa_lines WHERE brand = 'crewfit') WHERE line_id IS NULL;
+            ALTER TABLE wa_quick_replies ALTER COLUMN line_id SET NOT NULL;
+
+            -- Meta approves templates per business account, so each line has its own list.
+            ALTER TABLE wa_templates ADD COLUMN IF NOT EXISTS line_id INTEGER REFERENCES wa_lines(id);
+            UPDATE wa_templates SET line_id = (SELECT id FROM wa_lines WHERE brand = 'crewfit') WHERE line_id IS NULL;
+            ALTER TABLE wa_templates ALTER COLUMN line_id SET NOT NULL;
+            ALTER TABLE wa_templates DROP CONSTRAINT IF EXISTS wa_templates_name_language_key;
+            CREATE UNIQUE INDEX IF NOT EXISTS wa_templates_line_name_idx ON wa_templates (line_id, name, language);
+
+            -- Normless's inbox has its own pair of grants; Crewfit keeps can_view/manage_whatsapp.
+            ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_wa_normless BOOLEAN DEFAULT false;
+            ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_manage_wa_normless BOOLEAN DEFAULT false;
+        `);
+    } catch (err) {
+        console.error('ensureWaLinesSchema error:', err.message);
+    }
+}
+
 async function ensureSupportSchema() {
     try {
         await db.exec(`
@@ -1990,8 +2062,11 @@ app.listen(PORT, async () => {
     // robot started answering their customers because a deploy happened.
     try { await require('./services/wa-flow').ensureStarterFlow(); }
     catch (e) { console.error('whatsapp flow seed:', e.message); }
+    // Crewfit's and Normless's numbers, each its own inbox. Before the connection is loaded:
+    // that reads from the table this makes.
+    await ensureWaLinesSchema();
     // A number connected from the CRM (Coexistence) is used over the .env credentials.
-    try { await require('./services/wa-connect').load(); }
+    try { await require('./services/wa-line').load(); }
     catch (e) { console.error('whatsapp connection load:', e.message); }
     // Ensure GST sales invoicing schema
     await ensureGstSchema();

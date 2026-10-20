@@ -108,7 +108,7 @@ function AdminRoute({ children }) {
 // button of their own. This is how they reach it.
 const MainMenuContext = createContext({ openMenu: () => {}, immersive: false })
 export function useMainMenu() { return useContext(MainMenuContext) }
-const IMMERSIVE = ['/crewfit/whatsapp']
+const IMMERSIVE = ['/crewfit/whatsapp', '/whatsapp']
 
 function AppLayout({ children }) {
   const { brand } = useAuth()
@@ -233,6 +233,11 @@ function App() {
             <Route path="/crewfit/whatsapp" element={<ProtectedRoute permission="can_view_whatsapp"><AppLayout><WhatsAppInbox /></AppLayout></ProtectedRoute>} />
             <Route path="/crewfit/whatsapp/settings" element={<ProtectedRoute permission="can_manage_whatsapp"><AppLayout><WhatsAppSettings /></AppLayout></ProtectedRoute>} />
             <Route path="/crewfit/whatsapp/settings/:tab" element={<ProtectedRoute permission="can_manage_whatsapp"><AppLayout><WhatsAppSettings /></AppLayout></ProtectedRoute>} />
+            {/* Normless's own number: the same pages, its own inbox, API and grants. Connecting is
+                for admins, which the Connect tab and its API both check. */}
+            <Route path="/whatsapp" element={<ProtectedRoute permission="can_view_wa_normless"><AppLayout><WhatsAppInbox brand="normless" /></AppLayout></ProtectedRoute>} />
+            <Route path="/whatsapp/settings" element={<ProtectedRoute permission="can_view_wa_normless"><AppLayout><WhatsAppSettings brand="normless" /></AppLayout></ProtectedRoute>} />
+            <Route path="/whatsapp/settings/:tab" element={<ProtectedRoute permission="can_view_wa_normless"><AppLayout><WhatsAppSettings brand="normless" /></AppLayout></ProtectedRoute>} />
             <Route path="/crewfit/quotes" element={<ProtectedRoute permission="can_view_crewfit_calculator"><AppLayout><CrewfitQuotes /></AppLayout></ProtectedRoute>} />
             <Route path="/crewfit/payments" element={<ProtectedRoute permission="can_view_crewfit_payments"><AppLayout><CrewfitPayments /></AppLayout></ProtectedRoute>} />
             <Route path="/crewfit/customers" element={<ProtectedRoute permission="can_view_crewfit_customers"><AppLayout><CrewfitCustomers /></AppLayout></ProtectedRoute>} />

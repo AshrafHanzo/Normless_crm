@@ -6,6 +6,7 @@ import Icon from '../../components/Icon'
 import CrewfitOrderDrawer from './CrewfitOrderDrawer'
 import { PdfThumb, PdfViewer } from '../../components/PdfPreview'
 import WaQuoteDrawer from './WaQuoteDrawer'
+import { WA_BRANDS } from './waBrand'
 
 const FILTERS = [
   { key: 'mine', label: 'Mine' },
@@ -191,7 +192,12 @@ const LEAD_COLUMN = { lead_company: 'company', lead_notes: 'notes' }
  * three-second poll of a handful of rows is cheaper to run and far cheaper to reason about than
  * the connection handling a push would need; a message lands here within a tick of arriving.
  */
-export default function WhatsAppInbox() {
+export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
+  // Crewfit's inbox or Normless's: the same page, each brand's own number and API. Leads,
+  // orders, quotes, the catalogue and the menu are Crewfit's alone.
+  const brand = WA_BRANDS[brandKey]
+  const API = brand.api
+  const cf = brand.key === 'crewfit'
   const apiFetch = useApi()
   const toast = useToast()
   const { user, API_URL } = useAuth()
@@ -225,7 +231,7 @@ export default function WhatsAppInbox() {
   const [showReport, setShowReport] = useState(false)
   const [noteDraft, setNoteDraft] = useState('')
   const [lead, setLead] = useState(leadFormFrom(null))
-  const [sideTab, setSideTab] = useState('lead')        // 'lead' | 'orders' | 'activity'
+  const [sideTab, setSideTab] = useState(cf ? 'lead' : 'customer')   // 'lead' | 'orders' | 'activity' | 'customer'
   const [orders, setOrders] = useState([])
   const [canEditOrders, setCanEditOrders] = useState(false)
   const [activity, setActivity] = useState([])
@@ -260,16 +266,17 @@ export default function WhatsAppInbox() {
   const statusLook = (key) => statusOf[key] || { name: key || 'New', color: '#8a91a0' }
 
   useEffect(() => {
-    apiFetch('/api/whatsapp/config').then(r => r && !r.error && setConfig(r))
-    apiFetch('/api/whatsapp/agents').then(r => r && !r.error && setAgents(r.agents || []))
-    apiFetch('/api/whatsapp/statuses').then(r => r && !r.error && setStatuses(r.statuses || []))
-    apiFetch('/api/whatsapp/quick-replies').then(r => r && !r.error && setQuickReplies(r.quickReplies || []))
-    apiFetch('/api/whatsapp/catalogue').then(r => r && !r.error && setProducts(r.products || []))
-    apiFetch('/api/whatsapp/settings').then(r => r && !r.error && setSettings(r))
-    apiFetch('/api/whatsapp/templates').then(r => r && !r.error && setTemplates(r.templates || []))
-    apiFetch('/api/whatsapp/health').then(r => r && setHealth(r))
-    apiFetch('/api/whatsapp/flows').then(r => r && !r.error && setMenuFlow(r.flows?.[0] || null))
-    apiFetch('/api/whatsapp/catalogue-pdf').then(r => r && !r.error && setCataloguePdf(r.catalogue))
+    apiFetch(`${API}/config`).then(r => r && !r.error && setConfig(r))
+    apiFetch(`${API}/agents`).then(r => r && !r.error && setAgents(r.agents || []))
+    apiFetch(`${API}/quick-replies`).then(r => r && !r.error && setQuickReplies(r.quickReplies || []))
+    apiFetch(`${API}/templates`).then(r => r && !r.error && setTemplates(r.templates || []))
+    apiFetch(`${API}/health`).then(r => r && setHealth(r))
+    if (!cf) return
+    apiFetch(`${API}/statuses`).then(r => r && !r.error && setStatuses(r.statuses || []))
+    apiFetch(`${API}/catalogue`).then(r => r && !r.error && setProducts(r.products || []))
+    apiFetch(`${API}/settings`).then(r => r && !r.error && setSettings(r))
+    apiFetch(`${API}/flows`).then(r => r && !r.error && setMenuFlow(r.flows?.[0] || null))
+    apiFetch(`${API}/catalogue-pdf`).then(r => r && !r.error && setCataloguePdf(r.catalogue))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -296,7 +303,7 @@ export default function WhatsAppInbox() {
     const qs = new URLSearchParams({ filter, status: 'open' })
     if (term) qs.set('search', term)
     if (statusFilter) qs.set('lead_status', statusFilter)
-    const r = await apiFetch(`/api/whatsapp/conversations?${qs}`)
+    const r = await apiFetch(`${API}/conversations?${qs}`)
     if (r && !r.error) {
       setConversations(r.conversations || [])
       setTally(r.tally || { open: 0, unassigned: 0, unread: 0 })
@@ -328,26 +335,25 @@ export default function WhatsAppInbox() {
     setParams(prev => { const next = new URLSearchParams(prev); next.set('c', String(id)); next.delete('order'); return next },
       { replace: true })
 
-    const r = await apiFetch(`/api/whatsapp/conversations/${id}`)
+    const r = await apiFetch(`${API}/conversations/${id}`)
     if (!r || r.error) return toast.error(r?.error || 'Could not open that conversation')
     showThread(r.conversation)
-    const m = await apiFetch(`/api/whatsapp/conversations/${id}/messages`)
+    const m = await apiFetch(`${API}/conversations/${id}/messages`)
     if (m && !m.error) {
       setMessages(m.messages || [])
       lastSeen.current = m.messages?.length ? m.messages[m.messages.length - 1].id : 0
     }
-    apiFetch(`/api/whatsapp/conversations/${id}/read`, { method: 'POST' })
+    apiFetch(`${API}/conversations/${id}/read`, { method: 'POST' })
     setConversations(list => list.map(c => (c.id === id ? { ...c, unread_count: 0 } : c)))
-    const n = await apiFetch(`/api/whatsapp/conversations/${id}/notes`)
+    const n = await apiFetch(`${API}/conversations/${id}/notes`)
     if (n && !n.error) setNotes(n.notes || [])
-    loadOrders(id)
     loadActivity(id)
-    loadMockups(id)
+    if (cf) { loadOrders(id); loadMockups(id) }
   }
 
   const loadMockups = async (id = thread?.id) => {
     if (!id) return
-    const r = await apiFetch(`/api/whatsapp/conversations/${id}/mockups`)
+    const r = await apiFetch(`${API}/conversations/${id}/mockups`)
     if (r && !r.error) { setMockups(r.mockups || []); setMockPick((r.mockups || []).filter(m => !m.sent_at).map(m => m.id)) }
   }
 
@@ -356,7 +362,7 @@ export default function WhatsAppInbox() {
     setMockUploading(true)
     const fd = new FormData()
     for (const f of files) fd.append('files', f)
-    const r = await apiFetch(`/api/whatsapp/conversations/${thread.id}/mockups`, { method: 'POST', body: fd })
+    const r = await apiFetch(`${API}/conversations/${thread.id}/mockups`, { method: 'POST', body: fd })
     setMockUploading(false)
     if (!r || r.error) return toast.error(r?.error || 'Could not upload the mockups')
     setMockups(r.mockups)
@@ -365,7 +371,7 @@ export default function WhatsAppInbox() {
   }
 
   const removeMockup = async (m) => {
-    const r = await apiFetch(`/api/whatsapp/conversations/${thread.id}/mockups/${m.id}`, { method: 'DELETE' })
+    const r = await apiFetch(`${API}/conversations/${thread.id}/mockups/${m.id}`, { method: 'DELETE' })
     if (!r || r.error) return toast.error(r?.error || 'Could not remove that')
     setMockups(r.mockups)
     setMockPick(p => p.filter(x => x !== m.id))
@@ -382,7 +388,7 @@ export default function WhatsAppInbox() {
     await track({
       label: `🎨 ${chosen.length} mockup${chosen.length > 1 ? 's' : ''} for approval`, retryKey: 'mockups',
       stages: [[0, 'Uploading the mockup…'], [3000, 'Sending to WhatsApp…']],
-      run: () => apiFetch(`/api/whatsapp/conversations/${thread.id}/mockups/send`, { method: 'POST', body: JSON.stringify({ ids: chosen.map(m => m.id) }) }),
+      run: () => apiFetch(`${API}/conversations/${thread.id}/mockups/send`, { method: 'POST', body: JSON.stringify({ ids: chosen.map(m => m.id) }) }),
       onDone: (r) => { for (const m of r.messages || []) appendSent(m); setMockups(r.mockups); setMockPick([]); loadActivity() },
     })
   }
@@ -399,23 +405,32 @@ export default function WhatsAppInbox() {
   const loadOrders = async (id = thread?.id) => {
     if (!id) return
     const [r, q] = await Promise.all([
-      apiFetch(`/api/whatsapp/conversations/${id}/orders`),
-      apiFetch(`/api/whatsapp/conversations/${id}/quotes`),
+      apiFetch(`${API}/conversations/${id}/orders`),
+      apiFetch(`${API}/conversations/${id}/quotes`),
     ])
     if (r && !r.error) { setOrders(r.orders || []); setCanEditOrders(!!r.canEdit) }
     if (q && !q.error) { setQuotes(q.quotes || []); setCanQuote(!!q.canQuote) }
   }
   const loadActivity = async (id = thread?.id) => {
     if (!id) return
-    const r = await apiFetch(`/api/whatsapp/conversations/${id}/activity`)
+    const r = await apiFetch(`${API}/conversations/${id}/activity`)
     if (r && !r.error) setActivity(r.activity || [])
+  }
+
+  // Normless has no settings tab for templates yet: a manager pulls the approved ones from Meta here.
+  const syncTemplates = async () => {
+    const r = await apiFetch(`${API}/templates/sync`, { method: 'POST' })
+    if (!r || r.error) return toast.error(r?.error || 'Could not read the templates from Meta')
+    const t = await apiFetch(`${API}/templates`)
+    if (t && !t.error) setTemplates(t.templates || [])
+    toast.success(`${r.approved} approved template${r.approved === 1 ? '' : 's'}`)
   }
 
   // A conversation linked to from elsewhere — a notification, a bookmark — opens on arrival.
   useEffect(() => {
-    const orderId = params.get('order')
+    const orderId = cf && params.get('order')
     if (orderId) {
-      apiFetch(`/api/whatsapp/orders/${orderId}/conversation`).then(r => {
+      apiFetch(`${API}/orders/${orderId}/conversation`).then(r => {
         if (!r || r.error) return toast.error(r?.error || 'Could not open the chat for that order')
         openConversation(r.conversation.id).then(() => setSideTab('orders'))
         loadConversations()
@@ -434,19 +449,19 @@ export default function WhatsAppInbox() {
     if (document.hidden) return
     loadConversations()
     if (!openId) return
-    const m = await apiFetch(`/api/whatsapp/conversations/${openId}/messages?after=${lastSeen.current}`)
+    const m = await apiFetch(`${API}/conversations/${openId}/messages?after=${lastSeen.current}`)
     if (m && !m.error && m.messages?.length) {
       setMessages(list => {
         const have = new Set(list.map(x => x.id))
         return [...list, ...m.messages.filter(x => !have.has(x.id))]
       })
       lastSeen.current = m.messages[m.messages.length - 1].id
-      apiFetch(`/api/whatsapp/conversations/${openId}/read`, { method: 'POST' })
+      apiFetch(`${API}/conversations/${openId}/read`, { method: 'POST' })
     }
     // Ticks change on messages already here, and the 24-hour countdown moves whether or not
     // anything new arrives, so the header is refreshed with them. The lead form is left alone:
     // somebody may be typing in it.
-    const r = await apiFetch(`/api/whatsapp/conversations/${openId}`)
+    const r = await apiFetch(`${API}/conversations/${openId}`)
     if (r && !r.error) {
       // Fields the customer just filled in through the chat appear without a reload — but never
       // over something a rep is in the middle of typing.
@@ -520,7 +535,7 @@ export default function WhatsAppInbox() {
     await track({
       label: file ? `📎 ${file.name}${body ? ` — ${body}` : ''}` : body,
       stages: file ? [[0, 'Uploading the file…'], [2500, 'Sending to WhatsApp…']] : [[0, 'Sending…']],
-      run: () => apiFetch(`/api/whatsapp/conversations/${thread.id}/messages`, { method: 'POST', body: form }),
+      run: () => apiFetch(`${API}/conversations/${thread.id}/messages`, { method: 'POST', body: form }),
       onDone: (r) => appendSent(r.message),
     })
   }
@@ -560,7 +575,7 @@ export default function WhatsAppInbox() {
     const title = newReply.title.trim()
     const body = newReply.body.trim()
     if (!title || !body) return toast.error('Give the reply a name and some words')
-    const r = await apiFetch('/api/whatsapp/quick-replies', { method: 'POST', body: JSON.stringify({ title, body }) })
+    const r = await apiFetch(`${API}/quick-replies`, { method: 'POST', body: JSON.stringify({ title, body }) })
     if (!r || r.error) return toast.error(r?.error || 'Could not save that reply')
     setQuickReplies(list => [...list, r.quickReply])
     setNewReply(null)
@@ -569,7 +584,7 @@ export default function WhatsAppInbox() {
 
   const removeReply = async (q) => {
     if (!await toast.confirm({ title: `Remove “${q.title}”?`, message: 'Everyone on the team loses it.', danger: true })) return
-    const r = await apiFetch(`/api/whatsapp/quick-replies/${q.id}`, { method: 'DELETE' })
+    const r = await apiFetch(`${API}/quick-replies/${q.id}`, { method: 'DELETE' })
     if (!r || r.error) return toast.error(r?.error || 'Could not remove that reply')
     setQuickReplies(list => list.filter(x => x.id !== q.id))
   }
@@ -582,7 +597,7 @@ export default function WhatsAppInbox() {
     await track({
       label: `📄 ${cataloguePdf?.filename || 'Catalogue PDF'}`, retryKey: 'catalogue',
       stages: [[0, 'Uploading the catalogue to WhatsApp…'], [6000, 'Still uploading — it is a large file…']],
-      run: () => apiFetch(`/api/whatsapp/conversations/${thread.id}/catalogue-pdf`, { method: 'POST' }),
+      run: () => apiFetch(`${API}/conversations/${thread.id}/catalogue-pdf`, { method: 'POST' }),
       onDone: (r) => { appendSent(r.message); loadActivity() },
     })
   }
@@ -592,7 +607,7 @@ export default function WhatsAppInbox() {
     await track({
       label: `👕 ${p.name}`, retryKey: `product:${p.id}`,
       stages: p.image_url ? [[0, 'Uploading the photo…'], [2500, 'Sending to WhatsApp…']] : [[0, 'Sending…']],
-      run: () => apiFetch(`/api/whatsapp/conversations/${thread.id}/product`, { method: 'POST', body: JSON.stringify({ product_id: p.id }) }),
+      run: () => apiFetch(`${API}/conversations/${thread.id}/product`, { method: 'POST', body: JSON.stringify({ product_id: p.id }) }),
       onDone: (r) => appendSent(r.message),
     })
   }
@@ -626,7 +641,7 @@ export default function WhatsAppInbox() {
     })) return
     await track({
       label: `CF-${order.sl_no} · ${label}`, retryKey: key, stages: ORDER_STAGES[kind],
-      run: () => apiFetch(`/api/whatsapp/conversations/${thread.id}/orders/${order.id}/send`, { method: 'POST', body: JSON.stringify({ kind }) }),
+      run: () => apiFetch(`${API}/conversations/${thread.id}/orders/${order.id}/send`, { method: 'POST', body: JSON.stringify({ kind }) }),
       onDone: (r) => { for (const m of r.messages || []) appendSent(m); loadOrders(); loadActivity() },
     })
   }
@@ -636,7 +651,7 @@ export default function WhatsAppInbox() {
     if (busyWith('qr')) return
     await track({
       label: '🔳 Payment QR', retryKey: 'qr', stages: ORDER_STAGES.payment_qr,
-      run: () => apiFetch(`/api/whatsapp/conversations/${thread.id}/payment-qr`, { method: 'POST', body: '{}' }),
+      run: () => apiFetch(`${API}/conversations/${thread.id}/payment-qr`, { method: 'POST', body: '{}' }),
       onDone: (r) => { appendSent(r.message); loadActivity() },
     })
   }
@@ -645,7 +660,7 @@ export default function WhatsAppInbox() {
     if (busyWith('billing')) return
     await track({
       label: '🧾 Billing details request', retryKey: 'billing', stages: [[0, 'Sending the request…']],
-      run: () => apiFetch(`/api/whatsapp/conversations/${thread.id}/billing`, { method: 'POST' }),
+      run: () => apiFetch(`${API}/conversations/${thread.id}/billing`, { method: 'POST' }),
       onDone: (r) => { setThread(r.conversation); loadActivity(); poll.current() },
     })
   }
@@ -690,7 +705,7 @@ export default function WhatsAppInbox() {
     await track({
       label: `📄 Quote #${q.id} · ${money(q.grand_total)}`, retryKey: key,
       stages: [[0, 'Generating the quotation PDF…'], [2500, 'Uploading to WhatsApp…']],
-      run: () => apiFetch(`/api/whatsapp/conversations/${thread.id}/quotes/${q.id}/send`, { method: 'POST' }),
+      run: () => apiFetch(`${API}/conversations/${thread.id}/quotes/${q.id}/send`, { method: 'POST' }),
       onDone: (r) => { appendSent(r.message); loadOrders(); loadActivity() },
     })
   }
@@ -724,7 +739,7 @@ export default function WhatsAppInbox() {
   }
 
   const assign = async (username) => {
-    const r = await apiFetch(`/api/whatsapp/conversations/${thread.id}`, {
+    const r = await apiFetch(`${API}/conversations/${thread.id}`, {
       method: 'PATCH', body: JSON.stringify({ assigned_to: username || null }),
     })
     if (!r || r.error) return toast.error(r?.error || 'Could not reassign that conversation')
@@ -737,7 +752,7 @@ export default function WhatsAppInbox() {
   const addNote = async () => {
     const body = noteDraft.trim()
     if (!body || !thread) return
-    const r = await apiFetch(`/api/whatsapp/conversations/${thread.id}/notes`, {
+    const r = await apiFetch(`${API}/conversations/${thread.id}/notes`, {
       method: 'POST', body: JSON.stringify({ body }),
     })
     if (!r || r.error) return toast.error(r?.error || 'Could not save that note')
@@ -759,7 +774,7 @@ export default function WhatsAppInbox() {
     setValues([])
     await track({
       label: `📋 ${t.name}`, retryKey: `tpl:${t.name}`, stages: [[0, 'Sending the template…']],
-      run: () => apiFetch(`/api/whatsapp/conversations/${thread.id}/template`, {
+      run: () => apiFetch(`${API}/conversations/${thread.id}/template`, {
         method: 'POST', body: JSON.stringify({ name: t.name, language: t.language, variables: vars }),
       }),
       onDone: (r) => appendSent(r.message),
@@ -767,7 +782,7 @@ export default function WhatsAppInbox() {
   }
 
   const toggleMenu = async (on) => {
-    const r = await apiFetch(`/api/whatsapp/flows/${menuFlow.key}`, { method: 'PUT', body: JSON.stringify({ is_active: on }) })
+    const r = await apiFetch(`${API}/flows/${menuFlow.key}`, { method: 'PUT', body: JSON.stringify({ is_active: on }) })
     if (!r || r.error) return toast.error(r?.error || 'Could not change that')
     setMenuFlow(r.flow)
     toast.success(on ? 'New chats start with the menu' : 'The menu is off — new chats come straight to the team')
@@ -775,12 +790,12 @@ export default function WhatsAppInbox() {
 
   const openReport = async () => {
     setShowReport(true)
-    const r = await apiFetch('/api/whatsapp/report?days=30')
+    const r = await apiFetch(`${API}/report?days=30`)
     if (r && !r.error) setReport(r)
   }
 
   const setMode = async (mode) => {
-    const r = await apiFetch(`/api/whatsapp/conversations/${thread.id}/mode`, {
+    const r = await apiFetch(`${API}/conversations/${thread.id}/mode`, {
       method: 'POST', body: JSON.stringify({ mode }),
     })
     if (!r || r.error) return toast.error(r?.error || 'Could not change who is answering')
@@ -789,7 +804,7 @@ export default function WhatsAppInbox() {
   }
 
   const setStatus = async (status) => {
-    const r = await apiFetch(`/api/whatsapp/conversations/${thread.id}`, {
+    const r = await apiFetch(`${API}/conversations/${thread.id}`, {
       method: 'PATCH', body: JSON.stringify({ status }),
     })
     if (!r || r.error) return toast.error(r?.error || 'Could not change that')
@@ -802,7 +817,7 @@ export default function WhatsAppInbox() {
   const saveLead = async (patch) => {
     if (!thread?.lead_id) return
     const body = Object.fromEntries(Object.entries(patch).map(([k, v]) => [LEAD_COLUMN[k] || k, v]))
-    const r = await apiFetch(`/api/whatsapp/leads/${thread.lead_id}`, { method: 'PATCH', body: JSON.stringify(body) })
+    const r = await apiFetch(`${API}/leads/${thread.lead_id}`, { method: 'PATCH', body: JSON.stringify(body) })
     if (!r || r.error) return toast.error(r?.error || 'Could not save that')
     if (r.conversation) {
       setThread(r.conversation)
@@ -850,6 +865,50 @@ export default function WhatsAppInbox() {
     )
   }
 
+  // The customer's files and the team's notes: in Crewfit's Lead tab and Normless's Customer tab.
+  const filesAndNotes = (
+    <>
+      {!!customerFiles.length && (
+        <>
+          <div className="form-section wa-billing-head">
+            <span>Files from the customer</span>
+            {customerFiles.length > 1 && <button type="button" className="mini-btn" onClick={downloadAll}>Download all</button>}
+          </div>
+          <ul className="wa-files">
+            {customerFiles.map(m => (
+              <li key={m.id}>
+                {/^image\//.test(m.media_mime || '')
+                  ? <img src={fileUrl(m.media_url)} alt="" loading="lazy" />
+                  : <span className="wa-doc-icon">{extFor(m.media_mime, m.media_url).toUpperCase().slice(0, 4)}</span>}
+                <span className="wa-files-name">{m.media_name || (/^image/.test(m.media_mime || '') ? 'Photo' : 'File')}<small>{day(m.sent_at)} {clock(m.sent_at)}</small></span>
+                <button type="button" className="btn-icon" aria-label="Download" title="Download"
+                  onClick={() => downloadFile(fileUrl(m.media_url), fileNameFor(m, ago10(thread.phone)))}><Icon name="download" size={14} /></button>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+
+      {/* Never sent: these live in their own table, which the sending code cannot read. */}
+      <div className="form-section">Notes for the team</div>
+      <div className="wa-note-new">
+        <textarea rows={2} aria-label="New note for the team" placeholder="Something the next person should know…"
+          value={noteDraft} onChange={e => setNoteDraft(e.target.value)} />
+        <button type="button" className="mini-btn" disabled={!noteDraft.trim()} onClick={addNote}>Add</button>
+      </div>
+      {!!notes.length && (
+        <ul className="wa-notes">
+          {notes.map(n => (
+            <li key={n.id}>
+              <div className="wa-note-body">{n.body}</div>
+              <div className="wa-note-who">{short(n.author) || 'someone'} · {day(n.created_at)}</div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </>
+  )
+
   const quoted = Number(thread?.quoted_amount || 0)
   const received = Number(thread?.received_amount || 0)
   const paidPct = quoted > 0 ? Math.min(100, Math.round((received / quoted) * 100)) : 0
@@ -861,7 +920,7 @@ export default function WhatsAppInbox() {
         <button type="button" className="btn-icon wa-menu-btn" aria-label="Open the main menu" title="Main menu" onClick={openMenu}>
           <Icon name="dashboard" size={18} />
         </button>
-        <h1>WhatsApp</h1>
+        <h1>{cf ? 'WhatsApp' : `${brand.name} WhatsApp`}</h1>
         <div className="wa-counts">
           <span className="wa-count"><b>{tally.open}</b> open</span>
           <button type="button" className="wa-count" style={{ cursor: 'pointer' }} onClick={() => setFilter('unassigned')}>
@@ -879,7 +938,7 @@ export default function WhatsAppInbox() {
           )}
           <button type="button" className="btn btn-secondary btn-sm" onClick={openReport}><Icon name="trending" size={14} /> Numbers</button>
           {config?.canManage && (
-            <Link to="/crewfit/whatsapp/settings" className="btn btn-secondary btn-sm">
+            <Link to={`${brand.path}/settings`} className="btn btn-secondary btn-sm">
               <Icon name="settings" size={14} /> Settings
             </Link>
           )}
@@ -893,7 +952,7 @@ export default function WhatsAppInbox() {
             <b>{health.reason === 'token_expired' ? 'WhatsApp is disconnected' : 'WhatsApp is not answering'}</b>
             <span>{health.message}</span>
           </div>
-          <button type="button" className="mini-btn" onClick={async () => setHealth(await apiFetch('/api/whatsapp/health?fresh=1'))}>Check again</button>
+          <button type="button" className="mini-btn" onClick={async () => setHealth(await apiFetch(`${API}/health?fresh=1`))}>Check again</button>
         </div>
       )}
 
@@ -960,15 +1019,17 @@ export default function WhatsAppInbox() {
                   <div><span>Enquiries</span><b>{report.perDay.reduce((n, d) => n + d.enquiries, 0)}</b></div>
                   <div><span>Answered by a person</span><b>{report.whoAnswered.people}</b></div>
                   <div><span>Touched by menu or assistant</span><b>{report.whoAnswered.robots}</b></div>
-                  <div><span>Won</span>
-                    <b>{report.outcomes.filter(o => statusOf[o.status]?.stage === 'won').reduce((n, o) => n + o.n, 0)}</b></div>
+                  {cf && <div><span>Won</span>
+                    <b>{report.outcomes.filter(o => statusOf[o.status]?.stage === 'won').reduce((n, o) => n + o.n, 0)}</b></div>}
                 </div>
 
+                {cf && <>
                 <div className="form-section">By status</div>
                 <ul className="wa-report-list">
                   {report.outcomes.map(o => <li key={o.status}><span>{statusLook(o.status).name}</span><b>{o.n}</b></li>)}
                   {!report.outcomes.length && <li className="wa-report-none">Nothing yet.</li>}
                 </ul>
+                </>}
 
                 <div className="form-section">Where they came from</div>
                 <ul className="wa-report-list">
@@ -1049,7 +1110,7 @@ export default function WhatsAppInbox() {
                         </span>
                         <span className="wa-thread-line">{c.last_message_preview || 'No messages yet'}</span>
                         <span className="wa-thread-foot">
-                          <span className="wa-pill" style={pillStyle(s.color)}>{s.name}</span>
+                          {cf && <span className="wa-pill" style={pillStyle(s.color)}>{s.name}</span>}
                           <span className="wa-thread-owner">{c.assigned_to ? short(c.assigned_to) : 'Unassigned'}</span>
                           {!!c.unread_count && <span className="wa-unread">{c.unread_count}</span>}
                         </span>
@@ -1076,13 +1137,13 @@ export default function WhatsAppInbox() {
                 <div className="wa-chat-who">
                   <span className="wa-chat-name">
                     <b>{thread.display_name}</b>
-                    <span className="wa-pill" style={pillStyle(look.color)} title="Lead status">{look.name}</span>
+                    {cf && <span className="wa-pill" style={pillStyle(look.color)} title="Lead status">{look.name}</span>}
                   </span>
                   <span className="wa-chat-phone">
                     {thread.phone_pretty}{thread.lead_company ? ` · ${thread.lead_company}` : ''}
                   </span>
                   <span className="wa-chat-since" title={new Date(thread.created_at).toLocaleString('en-IN')}>
-                    Lead since {day(thread.created_at)}, {clock(thread.created_at)}{thread.ad_referral ? ' · from an ad' : ''}
+                    {cf ? 'Lead since' : 'First message'} {day(thread.created_at)}, {clock(thread.created_at)}{thread.ad_referral ? ' · from an ad' : ''}
                   </span>
                 </div>
                 {/* The order this chat is about, at a glance: which one, and where it stands. */}
@@ -1127,7 +1188,7 @@ export default function WhatsAppInbox() {
                       </span>
                       <button type="button" className="mini-btn" onClick={() => setMode('human')}>Take over</button>
                     </>
-                  ) : (
+                  ) : cf && (
                     <>
                       <button type="button" className="mini-btn" title="Let the menu ask the opening questions"
                         onClick={() => setMode('flow')}>Start the menu</button>
@@ -1215,7 +1276,9 @@ export default function WhatsAppInbox() {
                       <div className="wa-pop">
                         {!templates.length && (
                           <p className="wa-snippet-none">
-                            No approved templates yet.{config?.canManage && <> Sync them in <Link to="/crewfit/whatsapp/settings/templates">Settings</Link>.</>}
+                            No approved templates yet.{config?.canManage && (cf
+                              ? <> Sync them in <Link to={`${brand.path}/settings/templates`}>Settings</Link>.</>
+                              : <> <button type="button" className="mini-btn" onClick={syncTemplates}>Sync from Meta</button></>)}
                           </p>
                         )}
                         {templates.map(t => (
@@ -1227,7 +1290,7 @@ export default function WhatsAppInbox() {
                       </div>
                     )}
                   </div>
-                  {thread.window_open && (
+                  {cf && thread.window_open && (
                     <div className="wa-pop-anchor">
                       <button type="button" className={`wa-tool${pop === 'pay' ? ' wa-tool-on' : ''}`}
                         onClick={() => setPop(p => (p === 'pay' ? null : 'pay'))}>
@@ -1263,7 +1326,7 @@ export default function WhatsAppInbox() {
                   )}
                   {thread.window_open && (
                     <>
-                      <div className="wa-pop-anchor">
+                      {cf && <div className="wa-pop-anchor">
                         <button type="button" className={`wa-tool${pop === 'catalogue' ? ' wa-tool-on' : ''}`}
                           onClick={() => setPop(p => (p === 'catalogue' ? null : 'catalogue'))}>
                           <Icon name="box" size={14} /> Catalogue
@@ -1292,7 +1355,7 @@ export default function WhatsAppInbox() {
                             ))}
                           </div>
                         )}
-                      </div>
+                      </div>}
                       {/* The sentences that get typed twenty times a week, one click away. */}
                       <div className="wa-pop-anchor">
                         <button type="button" className={`wa-tool${pop === 'snippets' ? ' wa-tool-on' : ''}`}
@@ -1375,8 +1438,46 @@ export default function WhatsAppInbox() {
           )}
         </section>
 
+        {/* Normless: the customer, their files and notes, and what has happened. Shopify orders
+            and support tickets join this panel in the next phase. */}
+        {thread && !cf && (
+          <aside className="wa-side" aria-label="Customer">
+            <div className="wa-side-head">
+              <h2>{thread.display_name}</h2>
+              <span>Since {day(thread.created_at)}</span>
+            </div>
+            <div className="wa-side-tabs" role="tablist">
+              {[['customer', 'Customer'], ['activity', 'Activity']].map(([k, label]) => (
+                <button key={k} type="button" role="tab" aria-selected={sideTab === k}
+                  className={`wa-side-tab${sideTab === k ? ' wa-side-tab-on' : ''}`} onClick={() => setSideTab(k)}>{label}</button>
+              ))}
+            </div>
+            {sideTab === 'customer' && (
+              <>
+                <div className="was-facts wa-nl-facts">
+                  <div><span>WhatsApp</span><b>{thread.phone_pretty}</b></div>
+                  {thread.profile_name && <div><span>Name on WhatsApp</span><b>{thread.profile_name}</b></div>}
+                  <div><span>Shopify customer</span><b>{thread.customer_id ? 'Matched by phone number' : 'No customer with this number'}</b></div>
+                </div>
+                {filesAndNotes}
+              </>
+            )}
+            {sideTab === 'activity' && (
+              <ul className="wa-activity">
+                {!activity.length && <li className="wa-empty">Nothing recorded yet.</li>}
+                {activity.map(a => (
+                  <li key={a.id}>
+                    <span className={`wa-activity-dot k-${a.kind}`} aria-hidden="true" />
+                    <span>{a.body}<span className="wa-activity-when">{day(a.created_at)} {clock(a.created_at)}</span></span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </aside>
+        )}
+
         {/* The lead, its orders, and what has happened */}
-        {thread && (
+        {thread && cf && (
           <aside className="wa-side" aria-label="Lead">
             <div className="wa-side-head">
               <h2>{thread.lead_name || thread.display_name}</h2>
@@ -1531,44 +1632,7 @@ export default function WhatsAppInbox() {
                   </>
                 )}
 
-                {!!customerFiles.length && (
-                  <>
-                    <div className="form-section wa-billing-head">
-                      <span>Files from the customer</span>
-                      {customerFiles.length > 1 && <button type="button" className="mini-btn" onClick={downloadAll}>Download all</button>}
-                    </div>
-                    <ul className="wa-files">
-                      {customerFiles.map(m => (
-                        <li key={m.id}>
-                          {/^image\//.test(m.media_mime || '')
-                            ? <img src={fileUrl(m.media_url)} alt="" loading="lazy" />
-                            : <span className="wa-doc-icon">{extFor(m.media_mime, m.media_url).toUpperCase().slice(0, 4)}</span>}
-                          <span className="wa-files-name">{m.media_name || (/^image/.test(m.media_mime || '') ? 'Photo' : 'File')}<small>{day(m.sent_at)} {clock(m.sent_at)}</small></span>
-                          <button type="button" className="btn-icon" aria-label="Download" title="Download"
-                            onClick={() => downloadFile(fileUrl(m.media_url), fileNameFor(m, ago10(thread.phone)))}><Icon name="download" size={14} /></button>
-                        </li>
-                      ))}
-                    </ul>
-                  </>
-                )}
-
-                {/* Never sent: these live in their own table, which the sending code cannot read. */}
-                <div className="form-section">Notes for the team</div>
-                <div className="wa-note-new">
-                  <textarea rows={2} aria-label="New note for the team" placeholder="Something the next person should know…"
-                    value={noteDraft} onChange={e => setNoteDraft(e.target.value)} />
-                  <button type="button" className="mini-btn" disabled={!noteDraft.trim()} onClick={addNote}>Add</button>
-                </div>
-                {!!notes.length && (
-                  <ul className="wa-notes">
-                    {notes.map(n => (
-                      <li key={n.id}>
-                        <div className="wa-note-body">{n.body}</div>
-                        <div className="wa-note-who">{short(n.author) || 'someone'} · {day(n.created_at)}</div>
-                      </li>
-                    ))}
-                  </ul>
-                )}
+                {filesAndNotes}
 
                 {thread.ad_referral && (
                   <>

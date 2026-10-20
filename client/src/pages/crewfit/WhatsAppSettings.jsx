@@ -4,6 +4,7 @@ import { useApi, useAuth, useMainMenu } from '../../App'
 import { useToast } from '../../components/Toast'
 import Icon from '../../components/Icon'
 import useDirtyGuard from '../../hooks/useDirtyGuard'
+import { WA_BRANDS, WaBrandContext, useWaBrand } from './waBrand'
 
 /**
  * WhatsApp settings.
@@ -25,6 +26,8 @@ const TABS = [
   { key: 'statuses', label: 'Lead statuses', icon: 'check' },
   { key: 'connect', label: 'Connect WhatsApp', icon: 'whatsapp', adminOnly: true },
 ]
+// Normless's inbox has only its connection to set up so far; its bot settings come later.
+const BRAND_TABS = { crewfit: TABS.map(t => t.key), normless: ['connect'] }
 
 const short = (u) => (u ? u.split('@')[0] : '')
 
@@ -37,30 +40,33 @@ function SaveButton({ dirty, saving, onClick, idle = 'Saved', label = 'Save chan
   )
 }
 
-export default function WhatsAppSettings() {
-  const { tab = 'menu' } = useParams()
+export default function WhatsAppSettings({ brand: brandKey = 'crewfit' }) {
+  const brand = WA_BRANDS[brandKey]
+  const tabs = TABS.filter(t => BRAND_TABS[brand.key].includes(t.key))
+  const { tab = brand.defaultTab } = useParams()
   const { openMenu } = useMainMenu()
   const { user } = useAuth()
   const isAdmin = user?.role === 'admin' || user?.role === 'owner'
-  if (!TABS.some(t => t.key === tab)) return <Navigate to="/crewfit/whatsapp/settings/menu" replace />
+  if (!tabs.some(t => t.key === tab)) return <Navigate to={`${brand.path}/settings/${brand.defaultTab}`} replace />
   const Pane = { connect: ConnectTab, menu: MenuTab, templates: TemplatesTab, orders: OrderMessagesTab, hours: HoursTab, catalogue: CatalogueTab, team: TeamTab, assignment: AssignmentTab, statuses: StatusesTab }[tab]
 
   return (
+    <WaBrandContext.Provider value={brand}>
     <div className="page">
       <header className="wa-topbar">
         <button type="button" className="btn-icon wa-menu-btn" aria-label="Open the main menu" title="Main menu" onClick={openMenu}>
           <Icon name="dashboard" size={18} />
         </button>
-        <h1>WhatsApp</h1>
+        <h1>{brand.key === 'crewfit' ? 'WhatsApp' : `${brand.name} WhatsApp`}</h1>
         <nav className="wa-seg" aria-label="WhatsApp">
-          <NavLink to="/crewfit/whatsapp" end className="wa-seg-item">Inbox</NavLink>
-          <NavLink to="/crewfit/whatsapp/settings" className="wa-seg-item wa-seg-on">Settings</NavLink>
+          <NavLink to={brand.path} end className="wa-seg-item">Inbox</NavLink>
+          <NavLink to={`${brand.path}/settings`} className="wa-seg-item wa-seg-on">Settings</NavLink>
         </nav>
       </header>
       <div className="was-layout">
         <nav className="was-nav" aria-label="Settings">
-          {TABS.filter(t => !t.adminOnly || isAdmin).map(t => (
-            <NavLink key={t.key} to={`/crewfit/whatsapp/settings/${t.key}`}
+          {tabs.filter(t => !t.adminOnly || isAdmin).map(t => (
+            <NavLink key={t.key} to={`${brand.path}/settings/${t.key}`}
               className={({ isActive }) => `was-nav-item${isActive ? ' was-nav-on' : ''}`}>
               <Icon name={t.icon} size={15} /> {t.label}
             </NavLink>
@@ -69,6 +75,7 @@ export default function WhatsAppSettings() {
         <main className="was-main"><Pane /></main>
       </div>
     </div>
+    </WaBrandContext.Provider>
   )
 }
 
@@ -889,6 +896,7 @@ const fmtWhen = (v) => (v ? new Date(v).toLocaleString('en-IN', { day: '2-digit'
 
 function ConnectTab() {
   const apiFetch = useApi()
+  const brand = useWaBrand()
   const toast = useToast()
   const { user } = useAuth()
   const [data, setData] = useState(null)
@@ -896,7 +904,7 @@ function ConnectTab() {
   const [step, setStep] = useState(null)       // what the connect is doing right now
   const isAdmin = user?.role === 'admin' || user?.role === 'owner'
 
-  const load = () => apiFetch('/api/whatsapp/connect').then(r => (r && !r.error ? setData(r) : toast.error(r?.error || 'Could not read the connection')))
+  const load = () => apiFetch(`${brand.api}/connect`).then(r => (r && !r.error ? setData(r) : toast.error(r?.error || 'Could not read the connection')))
   // The signed-in user arrives a moment after the page: ask once they are known to be an admin.
   useEffect(() => {
     if (isAdmin) load()
@@ -942,7 +950,7 @@ function ConnectTab() {
       window.removeEventListener('message', onMessage)
       if (!session?.waba_id) { setStep(null); return toast.error('Meta did not say which account was chosen — try again and finish every step in the popup') }
       setStep('Connecting the number…')
-      const r = await apiFetch('/api/whatsapp/connect', { method: 'POST', body: JSON.stringify({ code, ...session }) })
+      const r = await apiFetch(`${brand.api}/connect`, { method: 'POST', body: JSON.stringify({ code, ...session }) })
       setStep(null)
       if (!r || r.error) return toast.error(r?.error || 'Could not finish connecting', { duration: 0 })
       setData(r)
@@ -982,7 +990,7 @@ function ConnectTab() {
   }
 
   const sync = async (type) => {
-    const r = await apiFetch(`/api/whatsapp/connect/sync/${type}`, { method: 'POST' })
+    const r = await apiFetch(`${brand.api}/connect/sync/${type}`, { method: 'POST' })
     if (!r || r.error) return toast.error(r?.error || 'Meta refused the sync request', { duration: 0 })
     setData(r)
     toast.success('Asked Meta again')
@@ -994,7 +1002,7 @@ function ConnectTab() {
       message: 'The CRM stops sending and receiving through this number. The WhatsApp Business app on the phone is not affected. To remove the CRM from the number entirely, do it in the phone app under Linked devices / Business platform.',
       confirmLabel: 'Disconnect', danger: true,
     })) return
-    const r = await apiFetch('/api/whatsapp/connect/disconnect', { method: 'POST' })
+    const r = await apiFetch(`${brand.api}/connect/disconnect`, { method: 'POST' })
     if (!r || r.error) return toast.error(r?.error || 'Could not disconnect')
     setData(r)
   }
@@ -1012,8 +1020,8 @@ function ConnectTab() {
 
   return (
     <>
-      <Head title="Connect WhatsApp">
-        Link the number the shop already uses on the WhatsApp Business app. The phone keeps working exactly as before;
+      <Head title={`Connect ${brand.name}'s WhatsApp`}>
+        Link the number {brand.name} already uses on the WhatsApp Business app — pick {brand.name}'s number in Meta's window, not the other brand's. The phone keeps working exactly as before;
         every chat, in and out — including replies typed on the phone — also appears here, and the last 180 days of chats are imported once.
       </Head>
 

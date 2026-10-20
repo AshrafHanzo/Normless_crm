@@ -24,13 +24,12 @@ const crypto = require('crypto');
 
 const API_VERSION = process.env.WA_API_VERSION || 'v21.0';
 const GRAPH = `https://graph.facebook.com/${API_VERSION}`;
-// A number connected from the CRM (Settings › Connect WhatsApp) is used over the .env values,
-// so connecting does not need a deploy. Loaded at start-up and after each connect by wa-connect.
-let connected = {};
-const useConnection = (c) => { connected = c || {}; };
-const TOKEN = () => connected.token || process.env.WA_ACCESS_TOKEN || '';
-const PHONE_ID = () => connected.phoneNumberId || process.env.WA_PHONE_NUMBER_ID || '';
-const WABA_ID = () => connected.wabaId || process.env.WA_BUSINESS_ACCOUNT_ID || '';
+// Whose number: Crewfit's or Normless's, whichever line this work is running on (wa-line).
+// A number connected from the CRM is used over the .env values, so connecting needs no deploy.
+const lines = require('./wa-line');
+const TOKEN = () => lines.current().token;
+const PHONE_ID = () => lines.current().phoneNumberId;
+const WABA_ID = () => lines.current().wabaId;
 
 /** Where a file a customer sent us is kept. Served like every other upload in the CRM. */
 const MEDIA_ROOT = path.join(__dirname, '..', 'uploads', 'whatsapp');
@@ -89,7 +88,7 @@ const ERRORS = {
     132000: 'The template does not match what Meta approved.',
     130429: 'WhatsApp is rate-limiting us — wait a moment and send again.',
     131056: 'Too many messages to this number in a short time. Wait a little.',
-    190: 'The WhatsApp access token has expired — put a permanent System User token in the server’s WA_ACCESS_TOKEN (deploy/whatsapp-setup.md, step 7).',
+    190: 'The WhatsApp access token for this number has expired — connect the number again from WhatsApp › Settings › Connect, or put a permanent System User token in the server’s .env (deploy/whatsapp-setup.md, step 7).',
 };
 
 class WhatsAppError extends Error {
@@ -135,9 +134,11 @@ async function graph(pathname, { method = 'GET', body = null, raw = false } = {}
  * Is the token still good? Asked of Meta at most every five minutes, so the inbox can say
  * "the token has expired" before somebody types a reply, not after.
  */
-let tokenCheck = { at: 0, result: null };
+const tokenChecks = new Map();       // per line: two numbers, two tokens
 async function checkToken({ fresh = false } = {}) {
-    if (!configured()) return { ok: false, reason: 'not_configured', message: 'WhatsApp is not configured on this server' };
+    if (!configured()) return { ok: false, reason: 'not_configured', message: 'WhatsApp is not connected for this brand yet' };
+    const key = lines.current().brand;
+    const tokenCheck = tokenChecks.get(key) || { at: 0, result: null };
     if (!fresh && tokenCheck.result && Date.now() - tokenCheck.at < 5 * 60 * 1000) return tokenCheck.result;
     let result;
     try {
@@ -148,11 +149,11 @@ async function checkToken({ fresh = false } = {}) {
             ok: false, code: err.code || null,
             reason: err.code === 190 ? 'token_expired' : 'error',
             message: err.code === 190
-                ? 'The WhatsApp access token has expired, so nothing can be sent or received. Put a permanent System User token in the server’s WA_ACCESS_TOKEN (see deploy/whatsapp-setup.md, step 7) and restart the server.'
+                ? `The WhatsApp access token for ${lines.current().name}'s number has expired, so nothing can be sent or received. Connect the number again from WhatsApp › Settings › Connect, or put a permanent System User token in the server’s .env (deploy/whatsapp-setup.md, step 7) and restart the server.`
                 : err.message,
         };
     }
-    tokenCheck = { at: Date.now(), result };
+    tokenChecks.set(key, { at: Date.now(), result });
     return result;
 }
 
@@ -302,7 +303,7 @@ async function sendList(phone, text, { button = 'Choose', sections = [] }) {
 /** Everything the business account has, as Meta has it. */
 async function fetchTemplates() {
     const waba = WABA_ID();
-    if (!waba) throw new WhatsAppError('WA_BUSINESS_ACCOUNT_ID is not set');
+    if (!waba) throw new WhatsAppError('This number has no WhatsApp business account id — connect it from WhatsApp settings');
     const out = [];
     let after = null;
     do {
@@ -352,7 +353,7 @@ async function sendTemplate(phone, { name, language = 'en_US', variables = [] })
  */
 async function createTemplate({ name, language, category, body, examples = [], buttons = [] }) {
     const waba = WABA_ID();
-    if (!waba) throw new WhatsAppError('WA_BUSINESS_ACCOUNT_ID is not set');
+    if (!waba) throw new WhatsAppError('This number has no WhatsApp business account id — connect it from WhatsApp settings');
     const components = [{
         type: 'BODY', text: body,
         ...(examples.length ? { example: { body_text: [examples] } } : {}),
@@ -440,7 +441,7 @@ function verifySignature(rawBody, header) {
 }
 
 module.exports = {
-    configured, checkToken, useConnection, phoneNumberId: PHONE_ID, wabaId: WABA_ID, graph, GRAPH, normalisePhone, prettyPhone, windowOpen, windowLeftMs,
+    configured, checkToken, phoneNumberId: PHONE_ID, wabaId: WABA_ID, graph, GRAPH, normalisePhone, prettyPhone, windowOpen, windowLeftMs,
     sendText, sendMedia, sendButtons, sendList, createTemplate, downloadMedia, markRead, verifySignature, CAP,
     fetchTemplates, sendTemplate, renderTemplate, whatsappImage,
     WhatsAppError, MEDIA_ROOT, MAX_MEDIA_MB, WINDOW_HOURS,

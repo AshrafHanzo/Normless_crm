@@ -17,6 +17,7 @@ const NAV = {
     { to: '/orders', icon: 'box', label: 'Orders', perm: 'can_view_orders' },
     { to: '/scan', icon: 'scan', label: 'Scan Order', perm: 'can_scan_orders' },
     { to: '/marketing', icon: 'spark', label: 'Marketing', perm: 'can_view_marketing', badge: 'marketing' },
+    { to: '/whatsapp', icon: 'whatsapp', label: 'WhatsApp', perm: 'can_view_wa_normless' },
     { to: '/support', icon: 'bell', label: 'Support', perm: 'can_view_support', badge: 'support' },
     { to: '/invoices', icon: 'invoice', label: 'Invoices', perm: 'can_view_invoices' },
     { to: '/inventory', icon: 'box', label: 'Inventory', perm: 'can_view_inventory', badge: 'rto' },

@@ -33,6 +33,7 @@ const orders = require('../services/wa-orders');
 const extras = require('../services/wa-extras');
 const billing = require('../services/wa-billing');
 const connectSvc = require('../services/wa-connect');
+const lines = require('../services/wa-line');
 
 const router = express.Router();
 
@@ -87,35 +88,58 @@ webhook.post('/', async (req, res) => {
     }
 });
 
-/** One webhook body: any number of entries, each with any number of changes. */
+/**
+ * One webhook body: any number of entries, each with any number of changes.
+ *
+ * Each change is handled on the line of the number it happened on — Crewfit's or Normless's —
+ * so the thread, the reply and the media download all use that number. A change for a number
+ * this CRM does not carry is dropped: guessing would put one brand's customer in the other's inbox.
+ */
 async function handleEvent(body) {
+    await lines.ready();
     for (const entry of body?.entry || []) {
         for (const change of entry?.changes || []) {
             const value = change?.value || {};
-            // Coexistence: the phone app's own traffic, the imported history, its contacts, and
-            // the account's connection changing. Each is its own webhook field.
-            if (change.field === 'smb_message_echoes') {
-                for (const echo of value.message_echoes || []) await receiveEcho(echo);
+            const line = lines.forWebhook(value?.metadata?.phone_number_id, entry?.id);
+            if (!line?.id) {
+                console.warn('whatsapp webhook for a number no line carries:', value?.metadata?.phone_number_id || entry?.id || '?');
                 continue;
             }
-            // One at a time: Meta sends the chunks close together, and each one adds to the same
-            // running count. Handled side by side, two chunks each read the old count and the
-            // second write lost the first — the import said 3 messages where 4 had come in.
-            if (change.field === 'history') { await inTurn(() => receiveHistory(value)); continue; }
-            if (change.field === 'smb_app_state_sync') { await inTurn(() => receiveContacts(value)); continue; }
-            if (change.field === 'account_update') { await connectSvc.accountUpdate(value); continue; }
-            const profileByPhone = new Map(
-                (value.contacts || []).map(c => [c.wa_id, c?.profile?.name || null]));
-
-            for (const message of value.messages || []) {
-                await receiveMessage(message, profileByPhone.get(message.from) || null);
-            }
-            for (const status of value.statuses || []) {
-                await receiveStatus(status);
-            }
+            await lines.run(line, () => handleChange(change, value));
         }
     }
 }
+
+async function handleChange(change, value) {
+    // Coexistence: the phone app's own traffic, the imported history, its contacts, and
+    // the account's connection changing. Each is its own webhook field.
+    if (change.field === 'smb_message_echoes') {
+        for (const echo of value.message_echoes || []) await receiveEcho(echo);
+        return;
+    }
+    // One at a time: Meta sends the chunks close together, and each one adds to the same
+    // running count. Handled side by side, two chunks each read the old count and the
+    // second write lost the first — the import said 3 messages where 4 had come in.
+    // The queue runs each job on the line it was queued from, not the line of whatever
+    // happened to be first in the queue.
+    const line = lines.current();
+    if (change.field === 'history') { await inTurn(() => lines.run(line, () => receiveHistory(value))); return; }
+    if (change.field === 'smb_app_state_sync') { await inTurn(() => lines.run(line, () => receiveContacts(value))); return; }
+    if (change.field === 'account_update') { await connectSvc.accountUpdate(value); return; }
+    const profileByPhone = new Map(
+        (value.contacts || []).map(c => [c.wa_id, c?.profile?.name || null]));
+
+    for (const message of value.messages || []) {
+        await receiveMessage(message, profileByPhone.get(message.from) || null);
+    }
+    for (const status of value.statuses || []) {
+        await receiveStatus(status);
+    }
+}
+
+/** Is the work in hand on Crewfit's line? Leads, the menu, the assistant and billing are Crewfit's. */
+const onCrewfit = () => lines.current().brand === 'crewfit';
+const lineId = () => lines.current().id;
 
 /** The text of a message, whatever kind it is — what the inbox list shows as a preview. */
 function describe(message) {
@@ -213,6 +237,10 @@ async function receiveMessage(message, profileName) {
 
     wa.markRead(message.id);          // not awaited: blue ticks are not worth a delay
 
+    // Normless has no menu, assistant or routing of its own yet: its messages wait for a person.
+    // Crewfit's menu, AI and away message must never answer a Normless customer.
+    if (!onCrewfit()) return;
+
     // The menu, if one is switched on. It answers the opening questions and hands over when it
     // stops being useful; a conversation a person has taken is never interrupted by it.
     try {
@@ -294,13 +322,16 @@ const inTurn = (job) => {
 
 /** The thread with a number, made without routing or a menu: for messages that are not new. */
 async function quietThread(phone, name) {
+    const line = lineId();
     return db.transaction(async (c) => {
         const contact = (await c.query(
-            `INSERT INTO wa_contacts (phone, profile_name) VALUES ($1, $2)
-             ON CONFLICT (phone) DO UPDATE SET profile_name = COALESCE(wa_contacts.profile_name, EXCLUDED.profile_name)
-             RETURNING id, lead_id`, [phone, name || null])).rows[0];
+            `INSERT INTO wa_contacts (line_id, phone, profile_name) VALUES ($3, $1, $2)
+             ON CONFLICT (line_id, phone) DO UPDATE SET profile_name = COALESCE(wa_contacts.profile_name, EXCLUDED.profile_name)
+             RETURNING id, lead_id, customer_id`, [phone, name || null, line])).rows[0];
         const locked = (await c.query('SELECT lead_id FROM wa_contacts WHERE id = $1 FOR UPDATE', [contact.id])).rows[0];
-        if (!locked?.lead_id) {
+        if (!onCrewfit()) {
+            if (!contact.customer_id) await linkCustomer(c, contact.id, phone);
+        } else if (!locked?.lead_id) {
             // An old chat is not a new enquiry: it goes in as one already being talked to.
             const leadId = (await c.query(
                 `INSERT INTO crewfit_leads (name, phone, source, status)
@@ -311,10 +342,24 @@ async function quietThread(phone, name) {
             await c.query('UPDATE wa_contacts SET lead_id = $2 WHERE id = $1', [contact.id, leadId]);
         }
         return (await c.query(
-            `INSERT INTO wa_conversations (contact_id) VALUES ($1)
+            `INSERT INTO wa_conversations (contact_id, line_id) VALUES ($1, $2)
              ON CONFLICT (contact_id) DO UPDATE SET contact_id = EXCLUDED.contact_id
-             RETURNING id`, [contact.id])).rows[0];
+             RETURNING id`, [contact.id, line])).rows[0];
     });
+}
+
+/**
+ * A Normless customer is somebody who has bought from the shop: the Shopify customer with this
+ * number, matched on the last ten digits because Shopify keeps numbers however they were typed.
+ */
+async function linkCustomer(c, contactId, phone) {
+    const last10 = String(phone).slice(-10);
+    if (last10.length < 10) return;
+    const hit = (await c.query(
+        `SELECT id FROM customers
+          WHERE RIGHT(REGEXP_REPLACE(COALESCE(phone, ''), '\\D', '', 'g'), 10) = $1
+          ORDER BY orders_count DESC NULLS LAST, id LIMIT 1`, [last10])).rows[0];
+    if (hit) await c.query('UPDATE wa_contacts SET customer_id = $2 WHERE id = $1', [contactId, hit.id]);
 }
 
 /** Move a thread's "last message" on, but never back to something older. */
@@ -411,9 +456,9 @@ async function receiveContacts(value) {
         const name = item.contact.full_name || item.contact.first_name || null;
         // The name the shop saved them under beats the one they gave themselves on WhatsApp.
         const c = (await db.query(
-            `INSERT INTO wa_contacts (phone, profile_name) VALUES ($1, $2)
-             ON CONFLICT (phone) DO UPDATE SET profile_name = COALESCE(EXCLUDED.profile_name, wa_contacts.profile_name)
-             RETURNING lead_id`, [phone, name])).rows[0];
+            `INSERT INTO wa_contacts (line_id, phone, profile_name) VALUES ($3, $1, $2)
+             ON CONFLICT (line_id, phone) DO UPDATE SET profile_name = COALESCE(EXCLUDED.profile_name, wa_contacts.profile_name)
+             RETURNING lead_id`, [phone, name, lineId()])).rows[0];
         if (c?.lead_id && name) await db.query(`UPDATE crewfit_leads SET name = COALESCE(name, $2) WHERE id = $1`, [c.lead_id, name]);
         n++;
     }
@@ -445,14 +490,16 @@ async function receiveStatus(status) {
  * to settle, and the conversation insert leans on a unique index rather than on timing.
  */
 async function threadFor(phone, profileName, referral) {
+    const line = lineId();
+    const crewfit = onCrewfit();
     return db.transaction(async (c) => {
         const contact = (await c.query(
-            `INSERT INTO wa_contacts (phone, profile_name)
-             VALUES ($1, $2)
-             ON CONFLICT (phone) DO UPDATE
+            `INSERT INTO wa_contacts (line_id, phone, profile_name)
+             VALUES ($3, $1, $2)
+             ON CONFLICT (line_id, phone) DO UPDATE
                 SET profile_name = COALESCE(EXCLUDED.profile_name, wa_contacts.profile_name)
-             RETURNING id, phone, profile_name, lead_id`,
-            [phone, profileName])).rows[0];
+             RETURNING id, phone, profile_name, lead_id, customer_id`,
+            [phone, profileName, line])).rows[0];
 
         // Locked for the rest of the transaction, so two messages cannot both decide this number
         // has no lead yet and raise one each.
@@ -460,7 +507,9 @@ async function threadFor(phone, profileName, referral) {
             `SELECT lead_id FROM wa_contacts WHERE id = $1 FOR UPDATE`, [contact.id])).rows[0];
 
         let leadId = locked?.lead_id || null;
-        if (!leadId) {
+        // Normless: no enquiry to raise — the customer is matched to Shopify's instead.
+        if (!crewfit && !contact.customer_id) await linkCustomer(c, contact.id, phone);
+        if (crewfit && !leadId) {
             // The enquiry exists whether or not anybody answers it: that is the point of writing
             // it down here rather than leaving it in a chat thread.
             leadId = (await c.query(
@@ -473,8 +522,8 @@ async function threadFor(phone, profileName, referral) {
         }
 
         const conversation = (await c.query(
-            `INSERT INTO wa_conversations (contact_id, ad_referral, last_message_at, assigned_to)
-             VALUES ($1,$2,CURRENT_TIMESTAMP,$3)
+            `INSERT INTO wa_conversations (contact_id, ad_referral, last_message_at, assigned_to, line_id)
+             VALUES ($1,$2,CURRENT_TIMESTAMP,$3,$4)
              ON CONFLICT (contact_id) DO UPDATE
                 -- Reopened rather than duplicated: the same person asking again is the same
                 -- thread, and splitting it hides half the history. The ad that first brought
@@ -483,7 +532,8 @@ async function threadFor(phone, profileName, referral) {
                     status = 'open', updated_at = CURRENT_TIMESTAMP
              RETURNING *`,
             [contact.id, referral ? JSON.stringify(referral) : null,
-                await routing.forNewConversation(c, { fromAd: !!referral })])).rows[0];
+                // Crewfit's teams and caps share out Crewfit's enquiries; Normless's wait unassigned.
+                crewfit ? await routing.forNewConversation(c, { fromAd: !!referral }) : null, line])).rows[0];
 
         return { contact, conversation };
     });
@@ -493,12 +543,39 @@ async function threadFor(phone, profileName, referral) {
    The inbox — behind the usual sign-in
    ════════════════════════════════════════════════════════════════════════════════════════════ */
 
+/**
+ * The router is mounted once per brand (index.js): /api/whatsapp for Crewfit and
+ * /api/nl-whatsapp for Normless, each behind wa-line's scope, so req.waLine says whose inbox this
+ * is. Each brand has its own pair of grants.
+ */
+const GRANTS = {
+    crewfit: { view: 'can_view_whatsapp', manage: 'can_manage_whatsapp' },
+    normless: { view: 'can_view_wa_normless', manage: 'can_manage_wa_normless' },
+};
 router.use(async (req, res, next) => {
     try {
-        if (!await hasPermission(req, 'can_view_whatsapp')) return res.status(403).json({ error: 'Access denied' });
-        req.waManager = await hasPermission(req, 'can_manage_whatsapp');
-        next();
+        const grants = GRANTS[req.waLine?.brand];
+        if (!grants) return res.status(404).json({ error: 'No such WhatsApp inbox' });
+        if (!await hasPermission(req, grants.view)) return res.status(403).json({ error: 'Access denied' });
+        req.waManager = await hasPermission(req, grants.manage);
+        lines.resume(req, next);
     } catch (err) { next(err); }
+});
+
+/**
+ * What only Crewfit's inbox has: leads and their statuses, the catalogue, orders, quotes,
+ * billing, mockups, the menu and its settings. Normless's inbox gets its own in later phases;
+ * until then these answer 404 there rather than acting on a Normless chat with Crewfit's tools.
+ */
+const CREWFIT_ONLY = [
+    /^\/leads\//, /^\/statuses$/, /^\/catalogue(-pdf)?$/, /^\/orders\//, /^\/flows/, /^\/admin(\/|$)/,
+    /^\/settings$/, /^\/conversations\/\d+\/(product|orders|catalogue-pdf|billing|payment-qr|quotes|mockups|mode)(\/|$)/,
+];
+router.use((req, res, next) => {
+    if (req.waLine?.brand !== 'crewfit' && CREWFIT_ONLY.some(rx => rx.test(req.path))) {
+        return res.status(404).json({ error: 'Not part of this inbox yet' });
+    }
+    next();
 });
 
 /**
@@ -508,9 +585,12 @@ router.use(async (req, res, next) => {
  * by every route, so no route can forget it.
  */
 function visibility(req, params) {
-    if (req.waManager) return 'TRUE';
+    // Only this brand's threads, always: the line is the first thing every query checks.
+    params.push(req.waLine?.id ?? -1);
+    const line = `c.line_id = $${params.length}`;
+    if (req.waManager) return line;
     params.push(String(req.user?.username || '').toLowerCase());
-    return `(LOWER(COALESCE(c.assigned_to,'')) = $${params.length} OR c.assigned_to IS NULL)`;
+    return `(${line} AND (LOWER(COALESCE(c.assigned_to,'')) = $${params.length} OR c.assigned_to IS NULL))`;
 }
 
 // Connecting the number is an account change: admins and owners only.
@@ -574,7 +654,9 @@ router.get('/health', async (req, res) => {
 router.get('/config', (req, res) => {
     res.json({
         configured: wa.configured(),
+        brand: req.waLine?.brand,
         canManage: !!req.waManager,
+        canConnect: ['admin', 'owner'].includes(req.user?.role),
         windowHours: wa.WINDOW_HOURS,
         maxUploadMb: wa.MAX_MEDIA_MB,
     });
@@ -732,7 +814,7 @@ const upload = multer({
 });
 
 const takeFile = (req, res, next) => upload.single('file')(req, res, (err) => {
-    if (!err) return next();
+    if (!err) return lines.resume(req, next);
     const known = { LIMIT_FILE_SIZE: `Files must be under ${wa.MAX_MEDIA_MB}MB` };
     res.status(400).json({ error: known[err.code] || err.message || 'Could not read that file' });
 });
@@ -873,7 +955,7 @@ router.get('/agents', async (req, res) => {
         const r = await db.query(
             `SELECT username, role FROM admin_users
               WHERE COALESCE(is_active, true) = true
-                AND (role IN ('owner','admin') OR COALESCE(can_view_whatsapp, false) = true)
+                AND (role IN ('owner','admin') OR COALESCE(${GRANTS[req.waLine.brand].view}, false) = true)
               ORDER BY LOWER(username)`);
         res.json({ agents: r.rows });
     } catch (err) {
@@ -1331,7 +1413,7 @@ router.get('/conversations/:id/mockups', async (req, res) => {
 });
 
 router.post('/conversations/:id/mockups', (req, res, next) => mockUpload.array('files', 10)(req, res, (err) => {
-    if (!err) return next();
+    if (!err) return lines.resume(req, next);
     res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? 'Each mockup must be under 15MB' : err.message });
 }), async (req, res) => {
     try {
@@ -1441,7 +1523,7 @@ router.get('/quick-replies', async (req, res) => {
     try {
         const r = await db.query(
             `SELECT id, title, body, sort_order, created_by FROM wa_quick_replies
-              ORDER BY sort_order, LOWER(title)`);
+              WHERE line_id = $1 ORDER BY sort_order, LOWER(title)`, [req.waLine.id]);
         res.json({ quickReplies: r.rows });
     } catch (err) {
         console.error('whatsapp quick replies error:', err);
@@ -1458,10 +1540,10 @@ router.post('/quick-replies', async (req, res) => {
         const body = trim(req.body?.body);
         if (!title || !body) return res.status(400).json({ error: 'A saved reply needs a name and some words' });
         const r = await db.query(
-            `INSERT INTO wa_quick_replies (title, body, sort_order, created_by)
-             VALUES ($1,$2,COALESCE((SELECT MAX(sort_order) + 1 FROM wa_quick_replies), 0),$3)
+            `INSERT INTO wa_quick_replies (title, body, sort_order, created_by, line_id)
+             VALUES ($1,$2,COALESCE((SELECT MAX(sort_order) + 1 FROM wa_quick_replies WHERE line_id = $4), 0),$3,$4)
              RETURNING id, title, body, sort_order, created_by`,
-            [title, body, req.user?.username || null]);
+            [title, body, req.user?.username || null, req.waLine.id]);
         res.status(201).json({ quickReply: r.rows[0] });
     } catch (err) {
         console.error('whatsapp quick reply create error:', err);
@@ -1471,9 +1553,10 @@ router.post('/quick-replies', async (req, res) => {
 
 const ownReply = async (req, res, next) => {
     try {
-        if (req.waManager) return next();
-        const r = await db.query('SELECT created_by FROM wa_quick_replies WHERE id = $1', [req.params.id]);
+        const r = await db.query('SELECT created_by FROM wa_quick_replies WHERE id = $1 AND line_id = $2',
+            [req.params.id, req.waLine.id]);
         if (!r.rows[0]) return res.status(404).json({ error: 'That saved reply is gone' });
+        if (req.waManager) return next();
         if (String(r.rows[0].created_by || '').toLowerCase() !== String(req.user?.username || '').toLowerCase()) {
             return res.status(403).json({ error: 'Only whoever saved it, or a manager, can change this reply' });
         }
@@ -1494,7 +1577,7 @@ router.patch('/quick-replies/:id', ownReply, async (req, res) => {
         if (!sets.length) return res.status(400).json({ error: 'Nothing to change' });
         const r = await db.query(
             `UPDATE wa_quick_replies SET ${sets.join(', ')}, updated_at = CURRENT_TIMESTAMP
-              WHERE id = $1 RETURNING id, title, body, sort_order, created_by`, params);
+              WHERE id = $1 AND line_id = ${req.waLine.id} RETURNING id, title, body, sort_order, created_by`, params);
         if (!r.rows[0]) return res.status(404).json({ error: 'That saved reply is gone' });
         res.json({ quickReply: r.rows[0] });
     } catch (err) {
@@ -1505,7 +1588,7 @@ router.patch('/quick-replies/:id', ownReply, async (req, res) => {
 
 router.delete('/quick-replies/:id', ownReply, async (req, res) => {
     try {
-        await db.query('DELETE FROM wa_quick_replies WHERE id = $1', [req.params.id]);
+        await db.query('DELETE FROM wa_quick_replies WHERE id = $1 AND line_id = $2', [req.params.id, req.waLine.id]);
         res.json({ ok: true });
     } catch (err) {
         console.error('whatsapp quick reply delete error:', err);
@@ -1741,7 +1824,7 @@ router.get('/templates', async (req, res) => {
     try {
         const r = await db.query(
             `SELECT id, name, language, category, status, body_text, variables, header_kind, var_map, synced_at
-               FROM wa_templates WHERE status = 'APPROVED' ORDER BY LOWER(name)`);
+               FROM wa_templates WHERE status = 'APPROVED' AND line_id = $1 ORDER BY LOWER(name)`, [req.waLine.id]);
         res.json({ templates: r.rows.map(t => ({ ...t, var_map: safeJson(t.var_map, []) })) });
     } catch (err) {
         console.error('whatsapp templates error:', err);
@@ -1756,21 +1839,21 @@ router.post('/templates/sync', manager, async (req, res) => {
         const startedAt = new Date();
         for (const t of templates) {
             await db.query(
-                `INSERT INTO wa_templates (name, language, category, status, body_text, variables, header_kind, synced_at)
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,CURRENT_TIMESTAMP)
-                 ON CONFLICT (name, language) DO UPDATE
+                `INSERT INTO wa_templates (name, language, category, status, body_text, variables, header_kind, synced_at, line_id)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,CURRENT_TIMESTAMP,$8)
+                 ON CONFLICT (line_id, name, language) DO UPDATE
                     SET category = EXCLUDED.category, status = EXCLUDED.status,
                         body_text = EXCLUDED.body_text, variables = EXCLUDED.variables,
                         header_kind = EXCLUDED.header_kind, synced_at = CURRENT_TIMESTAMP`,
-                [t.name, t.language, t.category, t.status, t.body_text, t.variables, t.header_kind]);
+                [t.name, t.language, t.category, t.status, t.body_text, t.variables, t.header_kind, req.waLine.id]);
         }
         // Anything Meta no longer has was deleted or rejected there; offering it would only
         // produce a refusal at the worst moment. Everything still on the account was just
         // stamped, so what the sync did not touch is what Meta no longer carries.
         if (templates.length) {
-            await db.query('DELETE FROM wa_templates WHERE synced_at < $1', [startedAt]);
+            await db.query('DELETE FROM wa_templates WHERE synced_at < $1 AND line_id = $2', [startedAt, req.waLine.id]);
         }
-        const r = await db.query(`SELECT COUNT(*)::int n FROM wa_templates WHERE status = 'APPROVED'`);
+        const r = await db.query(`SELECT COUNT(*)::int n FROM wa_templates WHERE status = 'APPROVED' AND line_id = $1`, [req.waLine.id]);
         res.json({ synced: templates.length, approved: r.rows[0].n });
     } catch (err) {
         if (err instanceof wa.WhatsAppError) return res.status(502).json({ error: err.message });
@@ -1792,7 +1875,7 @@ router.post('/conversations/:id/template', async (req, res) => {
         if (!name) return res.status(400).json({ error: 'Which template?' });
 
         const t = (await db.query(
-            `SELECT * FROM wa_templates WHERE name = $1 AND language = $2`, [name, language])).rows[0];
+            `SELECT * FROM wa_templates WHERE name = $1 AND language = $2 AND line_id = $3`, [name, language, req.waLine.id])).rows[0];
         if (!t) return res.status(404).json({ error: 'That template is not on this account — sync them again' });
         if (t.status !== 'APPROVED') return res.status(400).json({ error: `Meta has that template as ${t.status}` });
         // Meta refuses a template with a gap in it; better to say which gap, here.
@@ -1883,7 +1966,7 @@ router.get('/report', async (req, res) => {
             [...scope, days]);
 
         // What the enquiries became. A lead is only counted as won when somebody marked it so.
-        const outcomes = await db.query(
+        const outcomes = req.waLine.brand !== 'crewfit' ? { rows: [] } : await db.query(
             `SELECT l.status, COUNT(*)::int AS n
                FROM crewfit_leads l
               WHERE l.source = 'whatsapp' AND l.created_at > CURRENT_DATE - $1::int

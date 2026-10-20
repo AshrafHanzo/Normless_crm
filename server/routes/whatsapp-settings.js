@@ -130,7 +130,8 @@ async function teamPayload() {
                 u.wa_max_open,
                 (u.role IN ('owner','admin') OR COALESCE(u.can_manage_whatsapp, false)) AS is_manager,
                 (SELECT COUNT(*)::int FROM wa_conversations v
-                  WHERE LOWER(v.assigned_to) = LOWER(u.username) AND v.status = 'open') AS open_chats,
+                  WHERE LOWER(v.assigned_to) = LOWER(u.username) AND v.status = 'open'
+                    AND v.line_id = (SELECT id FROM wa_lines WHERE brand = 'crewfit')) AS open_chats,
                 COALESCE((SELECT ARRAY_AGG(t.team_id ORDER BY t.team_id) FROM wa_team_members t
                            WHERE LOWER(t.username) = LOWER(u.username)), '{}') AS team_ids
            FROM admin_users u
@@ -386,7 +387,7 @@ router.get('/templates', async (req, res) => {
     try {
         const r = await db.query(
             `SELECT id, name, language, category, status, body_text, variables, header_kind, var_map, synced_at
-               FROM wa_templates ORDER BY LOWER(name), language`);
+               FROM wa_templates WHERE line_id = (SELECT id FROM wa_lines WHERE brand = 'crewfit') ORDER BY LOWER(name), language`);
         res.json({
             templates: r.rows.map(t => ({ ...t, var_map: safeJson(t.var_map, []) })),
             canCreate: !!wa.wabaId() && wa.configured(),
@@ -403,7 +404,7 @@ router.put('/templates/:id', async (req, res) => {
         const map = Array.isArray(req.body?.var_map) ? req.body.var_map.map(v => (VAR_SOURCES.includes(v) ? v : '')) : null;
         if (!map) return res.status(400).json({ error: 'Nothing to change' });
         const r = await db.query(
-            `UPDATE wa_templates SET var_map = $2 WHERE id = $1
+            `UPDATE wa_templates SET var_map = $2 WHERE id = $1 AND line_id = (SELECT id FROM wa_lines WHERE brand = 'crewfit')
              RETURNING id, name, language, category, status, body_text, variables, header_kind, var_map, synced_at`,
             [req.params.id, JSON.stringify(map)]);
         if (!r.rows[0]) return res.status(404).json({ error: 'That template is gone — sync again' });
@@ -448,9 +449,9 @@ router.post('/templates', async (req, res) => {
             throw err;
         }
         const r = await db.query(
-            `INSERT INTO wa_templates (name, language, category, status, body_text, variables, var_map, synced_at)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,CURRENT_TIMESTAMP)
-             ON CONFLICT (name, language) DO UPDATE SET category = EXCLUDED.category, status = EXCLUDED.status,
+            `INSERT INTO wa_templates (name, language, category, status, body_text, variables, var_map, synced_at, line_id)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,CURRENT_TIMESTAMP,(SELECT id FROM wa_lines WHERE brand = 'crewfit'))
+             ON CONFLICT (line_id, name, language) DO UPDATE SET category = EXCLUDED.category, status = EXCLUDED.status,
                  body_text = EXCLUDED.body_text, variables = EXCLUDED.variables, var_map = EXCLUDED.var_map,
                  synced_at = CURRENT_TIMESTAMP
              RETURNING id, name, language, category, status, body_text, variables, header_kind, var_map, synced_at`,
@@ -659,7 +660,7 @@ router.get('/order-messages', async (req, res) => {
         const s = await getSettings();
         // Pending ones too: a template just submitted is linked at once and works once approved.
         const templates = await db.query(
-            `SELECT id, name, language, variables, status FROM wa_templates WHERE status IN ('APPROVED','PENDING','IN_APPEAL') ORDER BY LOWER(name)`);
+            `SELECT id, name, language, variables, status FROM wa_templates WHERE status IN ('APPROVED','PENDING','IN_APPEAL') AND line_id = (SELECT id FROM wa_lines WHERE brand = 'crewfit') ORDER BY LOWER(name)`);
         res.json({
             messages: Object.entries(MESSAGES).map(([key, m]) => ({
                 key, label: m.label, trigger: m.auto || null,
@@ -686,7 +687,7 @@ router.put('/order-messages/:key', async (req, res) => {
         }
         if ('template_id' in b) {
             const id = b.template_id ? Number(b.template_id) : null;
-            if (id && !(await db.query(`SELECT 1 FROM wa_templates WHERE id = $1 AND status IN ('APPROVED','PENDING','IN_APPEAL')`, [id])).rows[0]) {
+            if (id && !(await db.query(`SELECT 1 FROM wa_templates WHERE id = $1 AND line_id = (SELECT id FROM wa_lines WHERE brand = 'crewfit') AND status IN ('APPROVED','PENDING','IN_APPEAL')`, [id])).rows[0]) {
                 return res.status(400).json({ error: 'That template was rejected or removed at Meta' });
             }
             await putSetting(`order_tpl_${req.params.key}`, id ? String(id) : null, req.user?.username);
