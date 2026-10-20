@@ -46,7 +46,8 @@ ticket form and vocabulary). No second ticket system.
    connecting.
 2. Once Meta approves the app, connect each number from its own brand: Crewfit › WhatsApp ›
    Settings › Connect, and Normless › WhatsApp › Settings › Connect.
-3. Tell us the Returns & Exchange Center link (the app Normless uses for ₹198 exchanges).
+3. Returns & Exchange Center (AfterShip): https://normless.store/apps/aftership-returns-center —
+   the bot sends this link for size exchanges and returns.
 
 ### Phase 1 — two lines in one CRM (foundation, no visible change for Crewfit)
 
@@ -87,8 +88,12 @@ ticket form and vocabulary). No second ticket system.
 - `nl_products`: nightly + on-demand sync of active products (title, handle, type, price,
   compare-at price → "on sale", variants with size and stock, images, tags, product URL on
   normless.store). Uses the existing `fetchProducts`.
-- `nl_size_charts`: one chart image per product type (Oversize, Tanks, Joggers, …), uploaded in
-  Settings; the bot sends the one for the product's type.
+- Size charts are already in Shopify, as one of each product's photos (`Oversized_Tshirt_Size_Chart.png`,
+  `Tanks_size_chart.png`, …): 79 of the 86 active products have one. The sync picks it out by its
+  file name and the bot sends that product's own chart. For the 7 without one (2 joggers, 3
+  hoodies, a tee and the mask) Settings can set a chart per product type; with neither, the bot
+  says a person will share the measurements and hands over — it never sends a tee chart for a
+  hoodie.
 - Policies: refund/exchange and shipping policies pulled from Shopify's `policies.json` and
   cached; edited in Shopify, never in the CRM.
 - `nl_faqs`: short extra answers written in Settings (COD advance, international shipping,
@@ -121,8 +126,9 @@ Two layers, like Crewfit:
   customer asks for a person · two ungrounded answers · no order found after two tries ·
   upset customer · optional order value above ₹X. Handovers go to the Normless team by the
   existing round-robin assignment.
-- Hours: outside hours the bot still answers; handovers wait for the morning with an honest
-  "our team will reply after 10 am".
+- Hours: the team replies **9 am – 6 pm**. Outside those hours the bot still answers; a handover
+  is told honestly that the team replies from 9 am.
+- Language: the bot replies in **English** by default.
 - Every bot reply is logged in Activity with the tool calls it used, so a wrong answer can be
   traced.
 
@@ -163,9 +169,12 @@ Utility templates only: `nl_ticket_raised`, `nl_ticket_update`, `nl_replacement_
 Phase 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8. Phases 1 and 2 are useful on their own (a shared inbox for
 Normless with Shopify context) even before the bot is switched on.
 
-## Questions before building
+## Answers (21 Oct 2026)
 
-1. The Returns & Exchange Center link (and which app it is).
-2. Who is on the Normless support team, and what reply time can we promise customers?
-3. Do you have size charts per product type as images, or should we build them from a table?
-4. Should the bot reply in Hindi/Tamil when the customer writes in it, or always English?
+1. Returns & Exchange Center: https://normless.store/apps/aftership-returns-center
+2. Reply time: the team answers 9 am – 6 pm.
+3. Size charts: in Shopify, as a product photo on each product (79 of 86 today).
+4. Language: English by default.
+
+Still open: who is on the Normless support team — set in Admin with the new Normless WhatsApp
+permissions, and shared out by round robin once Phase 4 adds routing.
