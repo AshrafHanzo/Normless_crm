@@ -125,7 +125,7 @@ const SORTS = {
 const AGING = `(COALESCE(resolved_on, CURRENT_DATE) - raised_on)`;
 const FIELDS = `id, ref_no, order_number, shopify_order_id, customer_name, customer_phone,
                 customer_email, source, nature, reason, payment_status, request, status, progress,
-                action, ops_note, forward_awb, return_awb, assigned_to, images,
+                action, ops_note, forward_awb, return_awb, assigned_to, images, wa_conversation_id,
                 TO_CHAR(raised_on,'YYYY-MM-DD') AS raised_on,
                 TO_CHAR(resolved_on,'YYYY-MM-DD') AS resolved_on,
                 created_by, created_at, updated_at, ${AGING} AS aging`;

@@ -7,6 +7,8 @@ import CrewfitOrderDrawer from './CrewfitOrderDrawer'
 import { PdfThumb, PdfViewer } from '../../components/PdfPreview'
 import WaQuoteDrawer from './WaQuoteDrawer'
 import { WA_BRANDS } from './waBrand'
+import TicketDrawer from '../support/TicketDrawer'
+import { refOf } from '../support/ticket'
 
 const FILTERS = [
   { key: 'mine', label: 'Mine' },
@@ -252,6 +254,12 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
   const [snippetQuery, setSnippetQuery] = useState('')
   const [newReply, setNewReply] = useState(null)        // { title, body } while saving a new reply
   const [loading, setLoading] = useState(true)
+  // Normless: the Shopify customer behind the chat, and a support ticket being raised from it.
+  const [shop, setShop] = useState(null)               // { customer, orders, tickets, media }
+  const [ticketDraft, setTicketDraft] = useState(null)  // the new ticket's prefill, while the drawer is open
+  const [ticketOptions, setTicketOptions] = useState(null)
+  const [ticketPhotos, setTicketPhotos] = useState([])  // chat photo message ids to copy onto it
+  const [ticketNotify, setTicketNotify] = useState(true)
 
   const feedRef = useRef(null)
   const threadRef = useRef(null)
@@ -348,7 +356,13 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
     const n = await apiFetch(`${API}/conversations/${id}/notes`)
     if (n && !n.error) setNotes(n.notes || [])
     loadActivity(id)
-    if (cf) { loadOrders(id); loadMockups(id) }
+    if (cf) { loadOrders(id); loadMockups(id) } else { setShop(null); loadShop(id) }
+  }
+
+  const loadShop = async (id = thread?.id) => {
+    if (!id) return
+    const r = await apiFetch(`${API}/conversations/${id}/customer`)
+    if (r && !r.error) setShop(r)
   }
 
   const loadMockups = async (id = thread?.id) => {
@@ -415,6 +429,64 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
     if (!id) return
     const r = await apiFetch(`${API}/conversations/${id}/activity`)
     if (r && !r.error) setActivity(r.activity || [])
+  }
+
+  /* ── Normless: support tickets from the chat ───────────────────────────────────────────── */
+
+  const canTicket = ['admin', 'owner'].includes(user?.role) || !!user?.can_edit_support
+  const chatPhotos = messages.filter(m => m.direction === 'in' && m.media_url && /^image\/(jpeg|png|webp)$/.test(m.media_mime || ''))
+
+  /** Open Support's own ticket form, filled in from the chat and, when given, one order. */
+  const raiseTicket = async (order = null) => {
+    if (!ticketOptions) {
+      const o = await apiFetch('/api/support/options')
+      if (!o || o.error) return toast.error(o?.error || 'Could not open Support')
+      setTicketOptions(o)
+    }
+    const c = shop?.customer
+    // The latest photos the customer sent are the likely proof; a person unticks what is not.
+    setTicketPhotos(chatPhotos.slice(-8).map(m => m.id))
+    setTicketNotify(!!thread.window_open)
+    setTicketDraft({
+      order_number: order?.order_number || '',
+      customer_name: c?.name || thread.profile_name || '',
+      customer_phone: thread.phone_pretty || '',
+      customer_email: c?.email || '',
+      source: 'WhatsApp',
+    })
+  }
+
+  const ticketRaised = async (ticket, isNew) => {
+    setTicketDraft(null)
+    if (!isNew || !ticket?.id) return
+    const link = await apiFetch(`${API}/conversations/${thread.id}/ticket`, {
+      method: 'POST', body: JSON.stringify({ ticket_id: ticket.id, message_ids: ticketPhotos }),
+    })
+    if (!link || link.error) toast.error(link?.error || 'The ticket was raised, but not tied to this chat')
+    else if (link.copied) toast.success(`${link.copied} photo${link.copied === 1 ? '' : 's'} from the chat added to ${refOf(ticket)}`)
+    if (ticketNotify && thread.window_open) {
+      const first = (shop?.customer?.first_name || thread.profile_name || '').split(' ')[0]
+      const text = `Thanks${first ? ` ${first}` : ''}, we've raised ticket ${refOf(ticket)}${ticket.order_number ? ` for order ${ticket.order_number}` : ''}. `
+        + 'Our team will get back to you here between 9 am and 6 pm. You can reply in this chat anytime to ask about it.'
+      const r = await apiFetch(`${API}/conversations/${thread.id}/messages`, { method: 'POST', body: JSON.stringify({ body: text }) })
+      if (r && !r.error && r.message) appendSent(r.message)
+      else toast.error(r?.error || 'The ticket was raised, but the message to the customer did not go')
+    }
+    setSideTab('tickets')
+    loadShop()
+    loadActivity()
+  }
+
+  /** Where an order is, written for the customer — put in the reply box to check before sending. */
+  const orderStatusText = (o) => {
+    const items = o.items.map(i => `${i.title}${i.variant ? ` (${i.variant})` : ''}`).join(', ')
+    const lines = [`Your order ${o.order_number}${items ? ` — ${items}` : ''}:`]
+    if (o.state === 'Cancelled') lines.push('This order was cancelled.')
+    else if (o.state === 'Shipped') {
+      lines.push(`Shipped${o.shipped_at ? ` on ${day(o.shipped_at)}` : ''}${o.dispatch?.courier ? ` with ${o.dispatch.courier}` : ''}.`)
+      if (o.dispatch?.tracking_url) lines.push(`Track it here: ${o.dispatch.tracking_url}`)
+    } else lines.push('It hasn’t shipped yet — orders go out within 1–3 business days.')
+    setDraft(lines.join('\n'))
   }
 
   // Normless has no settings tab for templates yet: a manager pulls the approved ones from Meta here.
@@ -1446,21 +1518,97 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
               <h2>{thread.display_name}</h2>
               <span>Since {day(thread.created_at)}</span>
             </div>
+            <div className="wa-side-actions">
+              <button type="button" className="btn btn-primary wa-span-2" disabled={!canTicket}
+                title={canTicket ? 'Opens a Support ticket filled in from this chat' : 'Needs edit access to Support'}
+                onClick={() => raiseTicket(shop?.orders?.[0] || null)}><Icon name="plus" size={14} /> Raise support ticket</button>
+            </div>
             <div className="wa-side-tabs" role="tablist">
-              {[['customer', 'Customer'], ['activity', 'Activity']].map(([k, label]) => (
+              {[['customer', 'Customer'], ['tickets', `Tickets${shop?.tickets?.length ? ` (${shop.tickets.length})` : ''}`], ['activity', 'Activity']].map(([k, label]) => (
                 <button key={k} type="button" role="tab" aria-selected={sideTab === k}
                   className={`wa-side-tab${sideTab === k ? ' wa-side-tab-on' : ''}`} onClick={() => setSideTab(k)}>{label}</button>
               ))}
             </div>
             {sideTab === 'customer' && (
               <>
-                <div className="was-facts wa-nl-facts">
-                  <div><span>WhatsApp</span><b>{thread.phone_pretty}</b></div>
-                  {thread.profile_name && <div><span>Name on WhatsApp</span><b>{thread.profile_name}</b></div>}
-                  <div><span>Shopify customer</span><b>{thread.customer_id ? 'Matched by phone number' : 'No customer with this number'}</b></div>
-                </div>
+                {!shop ? <div className="loader"><div className="spinner" /></div> : (
+                  <>
+                    <div className="wa-nl-card">
+                      {shop.customer ? (
+                        <>
+                          <div className="wa-nl-card-head"><b>{shop.customer.name || thread.display_name}</b><span>Shopify customer</span></div>
+                          <div className="wa-nl-stats">
+                            <div><span>Orders</span><b>{shop.customer.orders_count ?? 0}</b></div>
+                            <div><span>Spent</span><b>{money(shop.customer.total_spent)}</b></div>
+                            <div><span>Since</span><b>{day(shop.customer.created_at)}</b></div>
+                          </div>
+                          {shop.customer.email && <div className="wa-nl-muted">{shop.customer.email}</div>}
+                        </>
+                      ) : (
+                        <div className="wa-nl-muted">No Shopify customer has {thread.phone_pretty} on file. Orders shipped to this number still show below.</div>
+                      )}
+                    </div>
+
+                    <div className="form-section">Orders</div>
+                    {!shop.orders.length && <p className="wa-empty">No orders found for this number. Ask the customer for their order number.</p>}
+                    {shop.orders.map((o, i) => {
+                      const tickets = shop.tickets.filter(t => o.tickets.includes(t.id))
+                      const days = o.shipped_at ? Math.floor((Date.now() - new Date(o.shipped_at).getTime()) / 86400000) : null
+                      return (
+                        <div key={o.order_number} className={`wa-order${i === 0 ? ' wa-order-latest' : ''}`}>
+                          <div className="wa-order-head">
+                            <span className="wa-order-ref">{o.order_number}</span>
+                            <span className="wa-pill" style={pillStyle(o.state === 'Shipped' ? '#34d399' : o.state === 'Cancelled' ? '#f87171' : '#60a5fa')}>{o.state}</span>
+                            <span className="wa-order-total">{money(o.total_price)}</span>
+                          </div>
+                          <div className="wa-order-meta">
+                            <span>{o.items.map(it => `${it.title}${it.variant ? ` · ${it.variant}` : ''}${it.quantity > 1 ? ` ×${it.quantity}` : ''}`).join(', ') || 'No items recorded'}</span>
+                          </div>
+                          <div className="wa-order-meta">
+                            <span>Ordered {day(o.created_at)}</span>
+                            {o.shipped_at && <span>· shipped {day(o.shipped_at)}{o.dispatch?.courier ? ` by ${o.dispatch.courier}` : ''}</span>}
+                            {o.dispatch?.tracking_url && <a href={o.dispatch.tracking_url} target="_blank" rel="noreferrer">· track {o.dispatch.awb ? `…${String(o.dispatch.awb).slice(-4)}` : ''} ↗</a>}
+                          </div>
+                          {/* What the refund policy turns on, so nobody has to remember it. */}
+                          <ul className="wa-nl-checks">
+                            <li className={o.payment.key === 'partial_cod' ? 'warn' : ''}>{o.payment.label}</li>
+                            {days != null && <li>Shipped {days === 0 ? 'today' : `${days} day${days === 1 ? '' : 's'} ago`} — damage or wrong-item claims need the unboxing video, within 24h of delivery</li>}
+                            {i === 0 && <li className={shop.media.photos ? 'ok' : ''}>{shop.media.photos ? `${shop.media.photos} photo${shop.media.photos === 1 ? '' : 's'} sent in this chat` : 'No photos sent in this chat'}</li>}
+                            {i === 0 && <li className={shop.media.videos ? 'ok' : ''}>{shop.media.videos ? 'Video sent in this chat (unboxing?)' : 'No unboxing video in this chat'}</li>}
+                            {tickets.map(t => <li key={t.id} className="warn">Earlier ticket {refOf(t)} · {t.nature || 'request'} · {t.status}</li>)}
+                          </ul>
+                          <div className="wa-order-actions">
+                            <button type="button" className="mini-btn" disabled={!thread.window_open}
+                              title={thread.window_open ? 'Puts the status in the reply box to check and send' : 'The customer has to write first'}
+                              onClick={() => orderStatusText(o)}>Order status</button>
+                            <button type="button" className="mini-btn" disabled={!canTicket} onClick={() => raiseTicket(o)}>Raise ticket</button>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </>
+                )}
                 {filesAndNotes}
               </>
+            )}
+            {sideTab === 'tickets' && (
+              <div className="wa-orders">
+                {!shop?.tickets?.length && <p className="wa-empty">No support tickets for this customer yet.</p>}
+                {(shop?.tickets || []).map(t => (
+                  <div key={t.id} className="wa-order">
+                    <div className="wa-order-head">
+                      <a className="wa-order-ref" href={`/support?focus=${t.id}`}>{refOf(t)}</a>
+                      <span className="wa-pill" style={pillStyle(t.status === 'Closed' ? '#34d399' : '#fbbf24')}>{t.status}</span>
+                      <span className="wa-order-total">{t.order_number || ''}</span>
+                    </div>
+                    <div className="wa-order-meta">
+                      <span>{[t.nature, t.reason].filter(Boolean).join(' · ')}</span>
+                      <span>· {t.progress}{t.action ? ` · ${t.action}` : ''}</span>
+                      <span>· raised {day(t.raised_on)}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
             )}
             {sideTab === 'activity' && (
               <ul className="wa-activity">
@@ -1740,6 +1888,30 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
             if (andSend) sendQuote({ ...q, sent_at: null })
             else toast.success(`Quote #${q.id} saved — send it from Orders & quotes`)
           }} />
+      )}
+
+      {ticketDraft && thread && (
+        <TicketDrawer ticket={ticketDraft} options={ticketOptions} canEdit={canTicket}
+          onClose={() => setTicketDraft(null)} onSaved={ticketRaised}>
+          <div className="form-section">From the WhatsApp chat</div>
+          {chatPhotos.length ? (
+            <div className="wa-nl-pick" role="group" aria-label="Photos to copy onto the ticket">
+              {chatPhotos.slice(-12).map(m => (
+                <label key={m.id} className={ticketPhotos.includes(m.id) ? 'on' : ''}>
+                  <input type="checkbox" checked={ticketPhotos.includes(m.id)}
+                    onChange={e => setTicketPhotos(p => (e.target.checked ? [...p, m.id].slice(-8) : p.filter(x => x !== m.id)))} />
+                  <img src={fileUrl(m.media_url)} alt={`Photo sent ${day(m.sent_at)}`} loading="lazy" />
+                </label>
+              ))}
+            </div>
+          ) : <p className="label-hint">The customer hasn’t sent any photos in this chat.</p>}
+          <p className="label-hint">Ticked photos are copied onto the ticket. Videos stay in the chat, which the ticket links to.</p>
+          <label className="page-check">
+            <input type="checkbox" checked={ticketNotify && !!thread.window_open} disabled={!thread.window_open}
+              onChange={e => setTicketNotify(e.target.checked)} />
+            {thread.window_open ? 'Tell the customer the ticket number on WhatsApp' : 'Can’t message the customer — the 24-hour window has closed'}
+          </label>
+        </TicketDrawer>
       )}
 
       <CrewfitOrderDrawer target={orderTarget} onClose={() => { setOrderTarget(null); quoteToLink.current = null }}

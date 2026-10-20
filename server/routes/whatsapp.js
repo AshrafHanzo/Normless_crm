@@ -1500,6 +1500,183 @@ router.post('/conversations/:id/mockups/send', async (req, res) => {
 });
 
 /** The enquiry's timeline: status moves, hand-offs, orders, payments, messages sent for it. */
+/* ── Normless: the shop's customer behind a chat ─────────────────────────────────────────────
+   A Normless chat is nearly always about an order: where it is, the wrong size, a torn seam. So
+   the side panel shows who the customer is in Shopify, what they bought, where each parcel is,
+   what the refund policy says about it, and the support tickets already raised — and a ticket
+   can be raised from the chat with the customer's photos already on it. */
+
+const NORMLESS_ONLY = /^\/conversations\/\d+\/(customer|ticket)(\/|$)/;
+router.use((req, res, next) => (NORMLESS_ONLY.test(req.path) && req.waLine?.brand !== 'normless'
+    ? res.status(404).json({ error: 'Not part of this inbox' }) : next()));
+
+const last10 = (v) => String(v || '').replace(/\D+/g, '').slice(-10);
+const TICKET_FIELDS = `id, ref_no, order_number, nature, reason, status, progress, action,
+                       TO_CHAR(raised_on,'YYYY-MM-DD') AS raised_on, wa_conversation_id`;
+
+/** Payment as the refund policy reads it: a partial-COD advance is never refunded. */
+function paymentKind(financialStatus) {
+    const s = String(financialStatus || '').toUpperCase();
+    if (s === 'PAID') return { key: 'prepaid', label: 'Prepaid' };
+    if (s === 'PARTIALLY_PAID') return { key: 'partial_cod', label: 'Partial COD — the advance is not refundable' };
+    if (s === 'PENDING') return { key: 'cod', label: 'Cash on delivery' };
+    if (s.includes('REFUNDED')) return { key: 'refunded', label: s === 'REFUNDED' ? 'Refunded' : 'Partly refunded' };
+    return { key: 'other', label: s ? s.charAt(0) + s.slice(1).toLowerCase().replace(/_/g, ' ') : 'Unknown' };
+}
+
+router.get('/conversations/:id/customer', async (req, res) => {
+    try {
+        const conversation = await loadConversation(req, req.params.id);
+        if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
+        const phone10 = last10(conversation.phone);
+
+        // Customers are synced from Shopify after the chat may have started, so a thread with no
+        // match yet is matched again whenever it is opened.
+        let customerId = conversation.customer_id;
+        if (!customerId && phone10.length === 10) {
+            customerId = (await db.query(
+                `SELECT id FROM customers
+                  WHERE RIGHT(REGEXP_REPLACE(COALESCE(phone, ''), '\\D', '', 'g'), 10) = $1
+                  ORDER BY orders_count DESC NULLS LAST, id LIMIT 1`, [phone10])).rows[0]?.id || null;
+            if (customerId) {
+                await db.query(
+                    `UPDATE wa_contacts SET customer_id = $2
+                      WHERE id = (SELECT contact_id FROM wa_conversations WHERE id = $1)`, [conversation.id, customerId]);
+            }
+        }
+        const customer = customerId ? (await db.query(
+            `SELECT id, shopify_id, first_name, last_name, email, phone, orders_count, total_spent, tags, created_at
+               FROM customers WHERE id = $1`, [customerId])).rows[0] || null : null;
+
+        // Their orders: by the Shopify customer, and by the phone the parcel went to — a guest
+        // checkout, or an order placed for somebody else, is only findable the second way.
+        const orders = (await db.query(
+            `SELECT o.order_number, o.shopify_id, o.created_at, o.total_price, o.financial_status,
+                    o.fulfillment_status, o.cancelled_at, o.on_hold, o.fulfilled_at, o.line_items_json
+               FROM orders o
+              WHERE ($1::text IS NOT NULL AND o.customer_shopify_id = $1)
+                 OR o.order_number IN (SELECT p.order_number FROM packed_orders p
+                                        WHERE $2 <> '' AND RIGHT(REGEXP_REPLACE(COALESCE(p.customer_phone, ''), '\\D', '', 'g'), 10) = $2)
+              ORDER BY o.created_at DESC NULLS LAST
+              LIMIT 12`, [customer?.shopify_id || null, phone10])).rows;
+        const numbers = orders.map(o => o.order_number);
+
+        const packed = numbers.length ? (await db.query(
+            `SELECT order_number, awb, courier, tracking_url, packed_at, ship_city, ship_pincode
+               FROM packed_orders WHERE order_number = ANY($1)`, [numbers])).rows : [];
+        const dispatchOf = new Map(packed.map(p => [p.order_number, p]));
+
+        const tickets = (await db.query(
+            `SELECT ${TICKET_FIELDS} FROM support_tickets
+              WHERE order_number = ANY($1)
+                 OR ($2 <> '' AND RIGHT(REGEXP_REPLACE(COALESCE(customer_phone, ''), '\\D', '', 'g'), 10) = $2)
+                 OR wa_conversation_id = $3
+              ORDER BY raised_on DESC, id DESC LIMIT 20`, [numbers, phone10, conversation.id])).rows;
+
+        // What the customer has sent in this chat: the refund policy turns on photos and an
+        // unboxing video, so the panel says whether they are here.
+        const media = (await db.query(
+            `SELECT COUNT(*) FILTER (WHERE media_mime LIKE 'image/%')::int AS photos,
+                    COUNT(*) FILTER (WHERE media_mime LIKE 'video/%')::int AS videos
+               FROM wa_messages WHERE conversation_id = $1 AND direction = 'in' AND media_url IS NOT NULL`,
+            [conversation.id])).rows[0];
+
+        res.json({
+            customer: customer && {
+                ...customer,
+                name: [customer.first_name, customer.last_name].filter(Boolean).join(' ').trim() || null,
+            },
+            orders: orders.map(o => {
+                const dispatch = dispatchOf.get(o.order_number) || null;
+                return {
+                    order_number: o.order_number,
+                    created_at: o.created_at,
+                    total_price: o.total_price,
+                    payment: paymentKind(o.financial_status),
+                    state: o.cancelled_at ? 'Cancelled' : o.on_hold ? 'On hold'
+                        : dispatch || String(o.fulfillment_status).toUpperCase() === 'FULFILLED' ? 'Shipped' : 'Not shipped yet',
+                    shipped_at: dispatch?.packed_at || o.fulfilled_at || null,
+                    items: safeJson(o.line_items_json, []).map(i => ({ title: i.title, variant: i.variant, quantity: i.quantity, price: i.price })),
+                    dispatch: dispatch && {
+                        awb: dispatch.awb, courier: dispatch.courier,
+                        // The courier's own link when the packing bench saved one; Delhivery's
+                        // tracker otherwise, which is what nearly every parcel ships with.
+                        tracking_url: dispatch.tracking_url || (dispatch.awb ? `https://www.delhivery.com/track-v2/package/${encodeURIComponent(dispatch.awb)}` : null),
+                        city: dispatch.ship_city, pincode: dispatch.ship_pincode,
+                    },
+                    tickets: tickets.filter(t => t.order_number === o.order_number).map(t => t.id),
+                };
+            }),
+            tickets,
+            media,
+        });
+    } catch (err) {
+        console.error('whatsapp customer error:', err);
+        res.status(500).json({ error: 'Could not load the customer' });
+    }
+});
+
+/**
+ * Tie a support ticket raised from this chat to it, and copy the customer's photos onto it.
+ *
+ * The ticket itself is raised through the Support API, with Support's own permission; this only
+ * adds what the chat knows. Photos are copied rather than linked, so the ticket keeps its proof
+ * even if the chat's files are ever cleared. Videos stay in the chat, which the ticket now links to.
+ */
+const TICKET_IMAGE_TYPES = /^image\/(jpeg|png|webp)$/;
+const TICKET_MAX_IMAGES = 8;
+router.post('/conversations/:id/ticket', async (req, res) => {
+    try {
+        if (!await hasPermission(req, 'can_edit_support')) {
+            return res.status(403).json({ error: 'Raising a support ticket needs edit access to Support' });
+        }
+        const conversation = await loadConversation(req, req.params.id);
+        if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
+        const ticketId = parseInt(req.body?.ticket_id, 10) || 0;
+        const ticket = (await db.query('SELECT id, ref_no, images FROM support_tickets WHERE id = $1', [ticketId])).rows[0];
+        if (!ticket) return res.status(404).json({ error: 'That ticket is gone' });
+
+        const ids = (Array.isArray(req.body?.message_ids) ? req.body.message_ids : []).map(Number).filter(Boolean);
+        const picked = ids.length ? (await db.query(
+            `SELECT id, media_url, media_mime FROM wa_messages
+              WHERE conversation_id = $1 AND id = ANY($2) AND media_url IS NOT NULL ORDER BY id`,
+            [conversation.id, ids])).rows.filter(m => TICKET_IMAGE_TYPES.test(m.media_mime || '')) : [];
+
+        let images = safeJson(ticket.images, []);
+        const dir = path.join(__dirname, '..', 'uploads', 'support', String(ticket.id));
+        const uploadsRoot = path.join(__dirname, '..', 'uploads');
+        let copied = 0;
+        for (const m of picked) {
+            if (images.length >= TICKET_MAX_IMAGES) break;
+            // Only files under the WhatsApp uploads: the stored URL decides the path, so it is
+            // checked rather than trusted.
+            const from = path.join(uploadsRoot, String(m.media_url).replace(/^\/uploads\//, ''));
+            if (!from.startsWith(path.join(uploadsRoot, 'whatsapp') + path.sep)) continue;
+            const name = `${Date.now()}-wa${m.id}${path.extname(from).toLowerCase().replace(/[^a-z0-9.]/g, '') || '.jpg'}`;
+            try {
+                await fsp.mkdir(dir, { recursive: true });
+                await fsp.copyFile(from, path.join(dir, name));
+                images = [...images, `/uploads/support/${ticket.id}/${name}`];
+                copied++;
+            } catch (err) {
+                console.error('whatsapp ticket photo copy failed:', err.message);
+            }
+        }
+        await db.query(
+            `UPDATE support_tickets SET wa_conversation_id = $2, images = $3, updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
+            [ticket.id, conversation.id, JSON.stringify(images)]);
+        const ref = `CS-${String(ticket.ref_no ?? 0).padStart(4, '0')}`;
+        await orders.logActivity({
+            conversationId: conversation.id, kind: 'ticket', actor: req.user?.username,
+            body: `${String(req.user?.username || '').split('@')[0]} raised ${ref}${copied ? ` with ${copied} photo${copied === 1 ? '' : 's'} from the chat` : ''}`,
+        });
+        res.json({ ok: true, ref, copied, images });
+    } catch (err) {
+        console.error('whatsapp ticket link error:', err);
+        res.status(500).json({ error: 'The ticket was raised, but could not be tied to this chat' });
+    }
+});
+
 router.get('/conversations/:id/activity', async (req, res) => {
     try {
         const conversation = await loadConversation(req, req.params.id);

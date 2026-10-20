@@ -3274,3 +3274,24 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .was-sync > div { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 12px; border-radius: var(--radius-md); background: var(--bg-secondary); }
 .was-sync small { font-size: 12px; color: var(--text-secondary); }
 .was-warn-card { border-color: color-mix(in srgb, var(--warning) 50%, var(--border)); }
+
+/* ── Normless WhatsApp: the Shopify customer beside the chat ─────────────────────────────── */
+.wa-nl-card { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; border-radius: var(--radius-md); background: var(--bg-tertiary); border: 1px solid var(--border); margin-bottom: 4px; }
+.wa-nl-card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.wa-nl-card-head span { font-size: 11.5px; color: var(--text-muted); }
+.wa-nl-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.wa-nl-stats div { display: flex; flex-direction: column; gap: 2px; }
+.wa-nl-stats span { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; }
+.wa-nl-stats b { font-size: 15px; }
+.wa-nl-muted { font-size: 12.5px; color: var(--text-secondary); line-height: 1.5; }
+.wa-order-latest { border-color: color-mix(in srgb, var(--primary) 45%, transparent); }
+.wa-nl-checks { list-style: none; margin: 8px 0; padding: 8px 0 0; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--text-secondary); }
+.wa-nl-checks li { display: flex; gap: 7px; line-height: 1.4; }
+.wa-nl-checks li::before { content: '•'; color: var(--text-muted); }
+.wa-nl-checks li.ok::before { content: '✓'; color: var(--success); }
+.wa-nl-checks li.warn::before { content: '!'; color: var(--warning); font-weight: 700; }
+.wa-nl-pick { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.wa-nl-pick label { position: relative; width: 84px; height: 84px; border-radius: 10px; overflow: hidden; border: 2px solid var(--border); cursor: pointer; }
+.wa-nl-pick label.on { border-color: var(--primary); }
+.wa-nl-pick img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.wa-nl-pick input { position: absolute; top: 6px; left: 6px; accent-color: var(--primary); }

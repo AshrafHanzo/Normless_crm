@@ -1833,6 +1833,8 @@ async function ensureSupportSchema() {
             -- screenshot of what the customer sent. Paths under /uploads/support/<ticket>/, the
             -- same shape the Crewfit order images use.
             ALTER TABLE support_tickets ADD COLUMN IF NOT EXISTS images TEXT;
+            -- The Normless WhatsApp chat a ticket was raised from, so each opens the other.
+            ALTER TABLE support_tickets ADD COLUMN IF NOT EXISTS wa_conversation_id INTEGER;
             CREATE UNIQUE INDEX IF NOT EXISTS support_tickets_ref_idx ON support_tickets (ref_no);
             CREATE INDEX IF NOT EXISTS support_tickets_order_idx ON support_tickets (order_number);
             CREATE INDEX IF NOT EXISTS support_tickets_raised_idx ON support_tickets (raised_on DESC);

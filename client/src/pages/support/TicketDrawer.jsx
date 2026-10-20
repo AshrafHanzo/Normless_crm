@@ -53,7 +53,7 @@ function AwbField({ label, hint, value, disabled, link, onChange }) {
  * requirement: a customer can write in about an order too old to be in the CRM, and the ticket
  * still has to be raisable.
  */
-export default function TicketDrawer({ ticket, options, onClose, onSaved, onDelete, canEdit }) {
+export default function TicketDrawer({ ticket, options, onClose, onSaved, onDelete, canEdit, children }) {
   const apiFetch = useApi()
   const toast = useToast()
   const { API_URL } = useAuth()
@@ -102,9 +102,9 @@ export default function TicketDrawer({ ticket, options, onClose, onSaved, onDele
   }
 
   // An existing ticket shows its order without being asked — the parcel and its waybill are the
-  // context for every decision on the page.
+  // context for every decision on the page. So does one raised from a WhatsApp chat about an order.
   useEffect(() => {
-    if (ticket?.id && ticket.order_number) pull(true)
+    if (ticket?.order_number) pull(true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ticket?.id])
 
@@ -209,6 +209,7 @@ export default function TicketDrawer({ ticket, options, onClose, onSaved, onDele
                 Raised {day(ticket.raised_on)} · {ticket.aging} day{ticket.aging === 1 ? '' : 's'}
                 {ticket.status === 'Closed' ? ` · closed ${day(ticket.resolved_on)}` : ' open'}
                 {ticket.created_by ? ` · by ${String(ticket.created_by).split('@')[0]}` : ''}
+                {ticket.wa_conversation_id && <> · <a href={`/whatsapp?c=${ticket.wa_conversation_id}`}>Open the WhatsApp chat</a></>}
               </div>
             )}
           </div>
@@ -310,6 +311,9 @@ export default function TicketDrawer({ ticket, options, onClose, onSaved, onDele
                 onView={(i) => setViewing(i)}
               />
             )}
+
+            {/* Whatever the page that opened this adds — the WhatsApp inbox puts the chat's photos here. */}
+            {children}
 
             <div className="form-section">What we did</div>
             <div className="form-row">
