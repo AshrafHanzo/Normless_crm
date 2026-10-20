@@ -935,20 +935,6 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
 
   /* ── The page ────────────────────────────────────────────────────────────────────────── */
 
-  if (config && !config.configured) {
-    return (
-      <div className="page">
-        <div className="page-header"><h1>WhatsApp</h1></div>
-        <div className="bank-check bank-check-bad">
-          <b>WhatsApp is not connected yet</b>
-          <div>
-            The number has to be set up in Meta first, and its keys put in the server environment.
-            Until then nothing can be sent or received.
-          </div>
-        </div>
-      </div>
-    )
-  }
 
   // The customer's files and the team's notes: in Crewfit's Lead tab and Normless's Customer tab.
   const filesAndNotes = (
@@ -1036,13 +1022,22 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
         </div>
       </header>
 
+      {/* Not connected yet: the inbox still opens — chats can be read and settings reached —
+          and the banner says where to connect, instead of the page being replaced by a notice. */}
       {health && !health.ok && (
         <div className="wa-health" role="alert">
           <Icon name="alert" size={16} />
           <div>
-            <b>{health.reason === 'token_expired' ? 'WhatsApp is disconnected' : 'WhatsApp is not answering'}</b>
-            <span>{health.message}</span>
+            <b>{health.reason === 'not_configured' ? `${brand.name}'s WhatsApp number isn't connected yet`
+              : health.reason === 'token_expired' ? 'WhatsApp is disconnected' : 'WhatsApp is not answering'}</b>
+            <span>{health.reason === 'not_configured'
+              ? (config?.canConnect ? 'Connect it from Settings › Connect WhatsApp once Meta has approved the app. Until then nothing can be sent or received.'
+                : 'An admin connects it from WhatsApp settings. Until then nothing can be sent or received.')
+              : health.message}</span>
           </div>
+          {health.reason === 'not_configured' && config?.canConnect && (
+            <Link to={`${brand.path}/settings/connect`} className="mini-btn">Connect</Link>
+          )}
           <button type="button" className="mini-btn" onClick={async () => setHealth(await apiFetch(`${API}/health?fresh=1`))}>Check again</button>
         </div>
       )}
