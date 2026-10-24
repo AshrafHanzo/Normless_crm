@@ -77,14 +77,42 @@ function resolveUpload(src) {
     return IMAGE.test(full) ? full : null;
 }
 
+const cachePath = (file, width) => path.join(CACHE_ROOT, String(width),
+    `${crypto.createHash('sha1').update(`${file}|${width}`).digest('hex')}.jpg`);
+
+// The sizes the pages actually ask for: the order list, the galleries, and the viewer. A photo is
+// decoded once and all three are written from it, because the decode is nearly all of the six
+// seconds a render takes here — rendering them one request at a time tripled the wait.
+const SET = [96, 320, 1280];
+
+// One render per photo at a time: a gallery and its viewer asking for the same picture share it.
+const rendering = new Map();
+
+/** Render every missing size of one upload. Resolves once they are all on disk. */
+function render(file, width, { background = false } = {}) {
+    const widths = [...new Set([...SET, width])];
+    const outs = widths.map(w => ({ width: w, out: cachePath(file, w) })).filter(o => !fs.existsSync(o.out));
+    if (!outs.length) return Promise.resolve();
+    if (rendering.has(file)) return rendering.get(file);
+    const job = resize.toFiles(file, outs, { background }).finally(() => rendering.delete(file));
+    rendering.set(file, job);
+    return job;
+}
+
+// How long a page waits for a render before it is sent the original photo instead. The viewer is
+// the one someone is staring at, so it waits least; small thumbnails wait longer, because the
+// original is a 4MB photograph and a list of them is a lot to download. The render carries on
+// either way, so the next look is instant.
+const PATIENCE_MS = (width) => (width >= 1280 ? 1500 : 8000);
+
 /** GET /api/thumb?src=/uploads/crewfit/123/photo.jpeg&w=96 */
 router.get('/', async (req, res) => {
     const file = resolveUpload(req.query.src);
     if (!file) return res.status(400).json({ error: 'Not an uploaded image' });
 
     const width = WIDTHS.has(parseInt(req.query.w, 10)) ? parseInt(req.query.w, 10) : DEFAULT_WIDTH;
-    const key = crypto.createHash('sha1').update(`${file}|${width}`).digest('hex');
-    const cached = path.join(CACHE_ROOT, String(width), `${key}.jpg`);
+    const cached = cachePath(file, width);
+    const original = String(req.query.src).split('?')[0];
 
     const send = () => {
         res.setHeader('Content-Type', 'image/jpeg');
@@ -93,26 +121,68 @@ router.get('/', async (req, res) => {
         res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
         fs.createReadStream(cached).pipe(res);
     };
+    // The original instead, for now. Not cached, so the next request gets the thumbnail.
+    const fallBack = () => { res.setHeader('Cache-Control', 'no-store'); res.redirect(original); };
 
     // Straight to the original when there is no resizer at all: slow beats broken.
-    if (!loadResizer()) return res.redirect(String(req.query.src).split('?')[0]);
+    if (!loadResizer()) return fallBack();
 
     try {
         if (fs.existsSync(cached)) return send();
         if (!fs.existsSync(file)) return res.status(404).json({ error: 'That image is not here' });
 
-        await fsp.mkdir(path.dirname(cached), { recursive: true });
-        // Rendered on the resizer thread rather than here. jimp is a second of solid arithmetic
-        // per photograph, and on this thread it stops the server answering anything at all — a
-        // page asking for a few hundred thumbnails made even the cached ones take six seconds.
-        await resize.toFile(file, width, cached);
-        send();
+        // Rendered on the resizer thread rather than here: jimp is seconds of solid arithmetic
+        // per photograph, and on this thread it stops the server answering anything at all.
+        const job = render(file, width);
+        let timer;
+        const waited = await Promise.race([
+            job.then(() => 'done'),
+            new Promise(r => { timer = setTimeout(() => r('late'), PATIENCE_MS(width)); }),
+        ]);
+        clearTimeout(timer);
+        if (waited === 'done' && fs.existsSync(cached)) return send();
+        job.catch(err => console.error('thumb failed for', file, '-', err.message));
+        fallBack();
     } catch (err) {
         console.error('thumb failed for', file, '-', err.message);
         // Fall back to the original rather than a broken image: slow beats missing.
-        res.redirect(String(req.query.src).split('?')[0]);
+        fallBack();
     }
 });
 
+/**
+ * Render, in the background, every size that is not on disk yet — so a photo is ready before
+ * anybody opens it. Run at start-up and then every so often for new uploads; one photo at a time,
+ * and always behind anything somebody is actually waiting for.
+ */
+let warming = false;
+async function warm() {
+    if (warming || !loadResizer()) return;
+    warming = true;
+    let done = 0;
+    try {
+        const files = [];
+        const walk = async (dir) => {
+            for (const entry of await fsp.readdir(dir, { withFileTypes: true }).catch(() => [])) {
+                const full = path.join(dir, entry.name);
+                if (entry.isDirectory()) await walk(full);
+                else if (IMAGE.test(entry.name)) files.push(full);
+            }
+        };
+        await walk(UPLOAD_ROOT);
+        for (const file of files) {
+            if (SET.every(w => fs.existsSync(cachePath(file, w)))) continue;
+            // Somebody is waiting on a picture: let theirs go first.
+            while (resize.waiting > 0) await new Promise(r => setTimeout(r, 2000));
+            try { await render(file, SET[0], { background: true }); done++; }
+            catch (err) { if (!/too many/.test(err.message)) console.error('thumb warm failed for', file, '-', err.message); }
+        }
+    } finally {
+        warming = false;
+        if (done) console.log(`thumbnails: rendered ${done} photo${done === 1 ? '' : 's'} ahead of time`);
+    }
+}
+
 module.exports = router;
 module.exports.WIDTHS = WIDTHS;
+module.exports.warm = warm;

@@ -2086,6 +2086,14 @@ app.listen(PORT, async () => {
     await ensureSyncSchema();
     await ensureBackupSchema();
 
+    // Thumbnails rendered ahead of time, so opening a gallery never waits on a resize: once a
+    // minute after start-up (the server has better things to do while it boots), then every half
+    // hour for whatever was uploaded since. One photo at a time, behind anything somebody is
+    // actually looking at.
+    const thumbs = require('./routes/thumbs');
+    setTimeout(() => thumbs.warm().catch(e => console.error('thumb warm:', e.message)), 60 * 1000).unref();
+    setInterval(() => thumbs.warm().catch(e => console.error('thumb warm:', e.message)), 30 * 60 * 1000).unref();
+
     // START AUTO-SYNC IMMEDIATELY (no user action needed!)
     startAutoSync();
 

@@ -27,6 +27,23 @@ parentPort.on('message', async (job) => {
         if (!Jimp) throw new Error('no resizer');
         const img = await Jimp.read(job.file);
 
+        // Several sizes from one decode. Decoding a phone photo is nearly all of the cost — six
+        // seconds on this server — and the list, the gallery and the viewer each want their own
+        // size of the same picture. Largest first, each smaller one scaled from the one before.
+        if (job.outs) {
+            let current = img;
+            for (const { width, out } of [...job.outs].sort((a, b) => b.width - a.width)) {
+                if (current.getWidth() > width) current = current.clone().scaleToFit(width, Jimp.AUTO);
+                current.quality(job.quality || 72);
+                // Ends in .jpg so jimp writes a JPEG whatever the original was.
+                const tmp = `${out}.${process.pid}.${job.id}.tmp.jpg`;
+                await fs.promises.mkdir(path.dirname(out), { recursive: true });
+                await current.writeAsync(tmp);
+                await fs.promises.rename(tmp, out);
+            }
+            return reply({ ok: true });
+        }
+
         if (job.fit) {
             // Longest side, for a copy somebody is going to look at.
             if (Math.max(img.bitmap.width, img.bitmap.height) > job.fit) img.scaleToFit(job.fit, job.fit);
