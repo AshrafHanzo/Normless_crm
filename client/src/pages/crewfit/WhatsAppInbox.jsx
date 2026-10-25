@@ -243,8 +243,6 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
   const [templates, setTemplates] = useState([])
   const [picking, setPicking] = useState(null)        // the template being filled in
   const [values, setValues] = useState([])
-  const [report, setReport] = useState(null)
-  const [showReport, setShowReport] = useState(false)
   const [noteDraft, setNoteDraft] = useState('')
   const [lead, setLead] = useState(leadFormFrom(null))
   const [sideTab, setSideTab] = useState(cf ? 'lead' : 'customer')   // 'lead' | 'orders' | 'activity' | 'customer'
@@ -904,12 +902,6 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
     toast.success(on ? 'New chats start with the menu' : 'The menu is off — new chats come straight to the team')
   }
 
-  const openReport = async () => {
-    setShowReport(true)
-    const r = await apiFetch(`${API}/report?days=30`)
-    if (r && !r.error) setReport(r)
-  }
-
   const setMode = async (mode) => {
     const r = await apiFetch(`${API}/conversations/${thread.id}/mode`, {
       method: 'POST', body: JSON.stringify({ mode }),
@@ -1044,7 +1036,9 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
               <span>{menuFlow.is_active ? 'Menu answers new chats' : 'Menu off — new chats come to you'}</span>
             </label>
           )}
-          <button type="button" className="btn btn-secondary btn-sm" onClick={openReport}><Icon name="trending" size={14} /> Numbers</button>
+          {config?.canManage
+            ? <Link to={`${brand.path}/dashboard`} className="btn btn-secondary btn-sm"><Icon name="trending" size={14} /> Dashboard</Link>
+            : cf && <Link to={`${brand.path}/me`} className="btn btn-secondary btn-sm"><Icon name="trending" size={14} /> My performance</Link>}
           {config?.canManage && (
             <Link to={`${brand.path}/settings`} className="btn btn-secondary btn-sm">
               <Icon name="settings" size={14} /> Settings
@@ -1117,56 +1111,6 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
               </span>
             </div>
             <PdfViewer url={preview.url} />
-          </div>
-        </div>
-      )}
-
-      {showReport && (
-        <div className="modal-backdrop" onClick={() => setShowReport(false)}>
-          <div className="studio-open wa-report" onClick={e => e.stopPropagation()}>
-            <div className="studio-result-head">
-              <h3>The last 30 days</h3>
-              <button type="button" className="btn-icon" aria-label="Close" onClick={() => setShowReport(false)}>
-                <Icon name="close" size={15} />
-              </button>
-            </div>
-            {!report ? <div className="loader"><div className="spinner" /></div> : (
-              <>
-                <div className="bank-facts">
-                  <div><span>Enquiries</span><b>{report.perDay.reduce((n, d) => n + d.enquiries, 0)}</b></div>
-                  <div><span>Answered by a person</span><b>{report.whoAnswered.people}</b></div>
-                  <div><span>Touched by menu or assistant</span><b>{report.whoAnswered.robots}</b></div>
-                  {cf && <div><span>Won</span>
-                    <b>{report.outcomes.filter(o => statusOf[o.status]?.stage === 'won').reduce((n, o) => n + o.n, 0)}</b></div>}
-                </div>
-
-                {cf && <>
-                <div className="form-section">By status</div>
-                <ul className="wa-report-list">
-                  {report.outcomes.map(o => <li key={o.status}><span>{statusLook(o.status).name}</span><b>{o.n}</b></li>)}
-                  {!report.outcomes.length && <li className="wa-report-none">Nothing yet.</li>}
-                </ul>
-                </>}
-
-                <div className="form-section">Where they came from</div>
-                <ul className="wa-report-list">
-                  {report.sources.map(s => <li key={s.source}><span>{s.source}</span><b>{s.enquiries}</b></li>)}
-                  {!report.sources.length && <li className="wa-report-none">Nothing yet.</li>}
-                </ul>
-
-                <div className="form-section">How quickly each person answered</div>
-                <ul className="wa-report-list">
-                  {report.response.map(r => (
-                    <li key={r.rep}>
-                      <span>{r.rep === 'unassigned' ? 'Nobody yet' : short(r.rep)}</span>
-                      <b>{r.minutes != null ? `${r.minutes} min` : '—'}
-                        <em>{r.answered} answered{r.unanswered ? `, ${r.unanswered} not` : ''}</em></b>
-                    </li>
-                  ))}
-                  {!report.response.length && <li className="wa-report-none">Nothing yet.</li>}
-                </ul>
-              </>
-            )}
           </div>
         </div>
       )}

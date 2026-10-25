@@ -756,6 +756,35 @@ router.get('/badge', async (req, res) => {
     }
 });
 
+/* ── Dashboard ───────────────────────────────────────────────────────────────────────────────
+   The whole line's numbers are for managers and admins; on Crewfit, everyone has their own page. */
+
+const dashboard = require('../services/wa-dashboard');
+const isAdminRole = (req) => ['owner', 'admin'].includes(req.user?.role);
+
+router.get('/dashboard', async (req, res) => {
+    try {
+        if (!req.waManager && !isAdminRole(req)) return res.status(403).json({ error: 'The dashboard is for WhatsApp managers' });
+        const lineId = req.waLine.id;
+        res.json(req.waLine.brand === 'normless' ? await dashboard.normless(lineId, req.query) : await dashboard.crewfit(lineId, req.query));
+    } catch (err) {
+        console.error('whatsapp dashboard error:', err);
+        res.status(500).json({ error: 'Could not work out the dashboard' });
+    }
+});
+
+router.get('/dashboard/me', async (req, res) => {
+    try {
+        if (req.waLine.brand !== 'crewfit') return res.status(404).json({ error: 'Not part of this inbox' });
+        // Someone else's page: only for managers and admins (from the team table).
+        const whose = req.query.user && (req.waManager || isAdminRole(req)) ? String(req.query.user) : req.user?.username;
+        res.json({ ...(await dashboard.myPerformance(req.waLine.id, whose, req.query)), canSeeTeam: !!(req.waManager || isAdminRole(req)) });
+    } catch (err) {
+        console.error('whatsapp my performance error:', err);
+        res.status(500).json({ error: 'Could not work out the numbers' });
+    }
+});
+
 router.get('/conversations', async (req, res) => {
     try {
         const params = [];

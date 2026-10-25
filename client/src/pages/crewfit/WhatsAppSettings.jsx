@@ -69,6 +69,8 @@ export default function WhatsAppSettings({ brand: brandKey = 'crewfit' }) {
         <h1>{brand.key === 'crewfit' ? 'WhatsApp' : `${brand.name} WhatsApp`}</h1>
         <nav className="wa-seg" aria-label="WhatsApp">
           <NavLink to={brand.path} end className="wa-seg-item">Inbox</NavLink>
+          <NavLink to={`${brand.path}/dashboard`} className="wa-seg-item">Dashboard</NavLink>
+          {brand.key === 'crewfit' && <NavLink to={`${brand.path}/me`} className="wa-seg-item">Performance</NavLink>}
           <NavLink to={`${brand.path}/settings`} className="wa-seg-item wa-seg-on">Settings</NavLink>
         </nav>
       </header>
