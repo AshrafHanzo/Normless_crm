@@ -243,7 +243,7 @@ export function useWaCalls({ API, apiFetch, toast }) {
     return () => clearInterval(t)
   }, [active])
 
-  useEffect(() => () => { ringer.current.stop(); teardown() }, [])
+  useEffect(() => () => { ringer.current.stop(); teardown() }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ── Placing a call ──────────────────────────────────────────────────────────────────── */
 
@@ -393,7 +393,8 @@ export function WaCallDock({ calls, onOpen }) {
               <button type="button" className="wa-call-who" onClick={() => onOpen?.(active.conversation_id)} title="Open the chat">
                 <b>{active.display_name || 'Customer'}</b>
                 <span>{elapsed != null ? mmss(elapsed) : (STATUS_WORDS[active.status] || active.status)}{micOff ? ' · muted' : ''}</span>
-                {recording && <span className="wa-call-recording" title="This call is being recorded"><i aria-hidden="true" />Recording</span>}
+                {/* Only once answered: a call nobody picks up is not kept. */}
+                {recording && (active.answered_at || active.status === 'accepted') && <span className="wa-call-recording" title="This call is being recorded"><i aria-hidden="true" />Recording</span>}
               </button>
               <button type="button" className={`wa-call-btn${micOff ? ' wa-call-btn-on' : ''}`} onClick={toggleMic}
                 aria-pressed={micOff} title={micOff ? 'Unmute your microphone' : 'Mute your microphone'}>
