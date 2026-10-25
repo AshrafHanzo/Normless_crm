@@ -3390,3 +3390,44 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .nl-phone-in div { padding: 8px 10px; line-height: 1.45; }
 .nl-phone-in span { display: block; text-align: center; padding: 8px; border-top: 1px solid rgba(255,255,255,.08); color: #53bdeb; font-weight: 600; }
 .wa-demo-chip { background: rgba(251, 191, 36, 0.15); color: #fcd34d; }
+
+/* ── Normless: the bot's Try it chat, team names, and the template manager ─────────────── */
+.nl-try-chat { flex-direction: column; align-items: stretch; gap: 8px; max-height: 420px; overflow-y: auto; }
+.nl-try-msg { display: flex; flex-direction: column; gap: 6px; max-width: 88%; }
+.nl-try-msg.customer { align-self: flex-end; }
+.nl-try-msg.bot { align-self: flex-start; }
+.nl-try-text { padding: 8px 11px; border-radius: 10px; font-size: 13px; line-height: 1.45; white-space: pre-wrap; background: var(--surface-active); }
+.nl-try-msg.bot .nl-try-text { background: color-mix(in srgb, var(--primary) 22%, var(--surface)); }
+.nl-try-media { margin: 0; border-radius: 10px; overflow: hidden; background: var(--surface-active); }
+.nl-try-media img { display: block; width: 100%; max-height: 180px; object-fit: cover; }
+.nl-try-media figcaption { padding: 6px 10px; font-size: 12px; white-space: pre-wrap; color: var(--text-secondary); }
+.nl-try-handover { font-size: 12px; color: var(--warning); }
+.nl-name { width: 100%; padding: 6px 9px; border-radius: 8px; background: var(--surface); border: 1px solid var(--border); color: var(--text-primary); font: inherit; }
+.nl-tpl-layout { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
+.nl-tpl-list { flex: 1 1 320px; max-width: 420px; margin: 0; }
+.nl-tpl-detail { flex: 999 1 380px; margin: 0; }
+.nl-tpl-items { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; max-height: 560px; overflow-y: auto; }
+.nl-tpl-item { width: 100%; text-align: left; display: flex; flex-direction: column; gap: 3px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--bg-tertiary); color: var(--text-primary); font: inherit; cursor: pointer; }
+.nl-tpl-item.on { border-color: var(--primary); }
+.nl-tpl-item-head { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+.nl-tpl-item-head b { font-size: 13px; overflow-wrap: anywhere; }
+.nl-tpl-item-meta { font-size: 11.5px; color: var(--text-muted); }
+.nl-tpl-item-body { font-size: 12.5px; color: var(--text-secondary); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.nl-tpl-phone { max-width: 360px; padding: 16px 12px; border-radius: 14px; background: #0b141a; display: flex; flex-direction: column; gap: 4px; }
+.nl-tpl-bubble { position: relative; background: #202c33; color: #e9edef; border-radius: 0 10px 10px 10px; padding: 8px 10px 18px; font-size: 13.5px; line-height: 1.45; display: flex; flex-direction: column; gap: 6px; }
+.nl-tpl-body { white-space: pre-wrap; }
+.nl-tpl-footer { color: #8696a0; font-size: 12px; }
+.nl-tpl-time { position: absolute; right: 8px; bottom: 4px; font-size: 10px; color: #8696a0; }
+.nl-tpl-button { display: flex; justify-content: center; align-items: center; gap: 6px; padding: 9px; border-radius: 10px; background: #202c33; color: #53bdeb; font-size: 13px; font-weight: 600; }
+.nl-tpl-editor { display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start; }
+.nl-tpl-form { flex: 999 1 380px; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.nl-tpl-preview-col { flex: 1 1 280px; display: flex; flex-direction: column; gap: 8px; position: sticky; top: 0; }
+.nl-tpl-examples { display: flex; flex-direction: column; gap: 6px; }
+.nl-tpl-examples input, .nl-tpl-btn-row input, .nl-tpl-btn-row select { padding: 7px 10px; border-radius: 8px; background: var(--surface); border: 1px solid var(--border); color: var(--text-primary); font: inherit; }
+.nl-tpl-btn-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.nl-tpl-btn-row input { flex: 1 1 160px; }
+.nl-table td.ok { color: var(--success); }
+.nl-tpl-editor { overflow-x: hidden; }
+.nl-tpl-preview-col { min-width: 0; }
+.nl-tpl-phone { box-sizing: border-box; width: 100%; }
+@media (max-width: 900px) { .nl-tpl-preview-col { position: static; } }

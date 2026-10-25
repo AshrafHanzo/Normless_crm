@@ -26,11 +26,12 @@ function useNlSettings() {
   const [draft, setDraft] = useState(null)
   const [canEdit, setCanEdit] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [botReady, setBotReady] = useState(true)
 
   useEffect(() => {
     apiFetch(`${brand.api}/nl/settings`).then(r => {
       if (!r || r.error) return toast.error(r?.error || 'Could not read the settings')
-      setSaved(r.settings); setDraft(r.settings); setCanEdit(!!r.canEdit)
+      setSaved(r.settings); setDraft(r.settings); setCanEdit(!!r.canEdit); setBotReady(!!r.botReady)
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -53,7 +54,7 @@ function useNlSettings() {
       toast.success('Saved')
     }
   }
-  return { saved, draft, set, dirty, save, saving, canEdit }
+  return { saved, draft, set, dirty, save, saving, canEdit, botReady }
 }
 
 /** What Shopify has: policies and products with their size charts. */
@@ -89,7 +90,7 @@ function BotCard({ s }) {
         <Toggle on={bot.enabled} label="Bot answers new chats" disabled={!s.canEdit} onChange={v => set({ enabled: v })} />
         <div>
           <b>Bot answers new chats</b>
-          <span className="was-hint">Off: every chat goes straight to the team. The bot is being built next — this switch takes effect the day it can answer.</span>
+          <span className="was-hint">On: the bot answers every chat and hands sensitive ones to a person. Off: every chat goes straight to the team.</span>
         </div>
       </div>
       <div className="form-row">
@@ -229,7 +230,7 @@ function HandoffCard({ s }) {
       </ul>
       <div className="nl-row-head nl-row-top">
         <b>Send handovers to</b>
-        <span className="was-hint">The Normless team — unassigned, anyone on the team picks it up</span>
+        <span className="was-hint">Whoever on the Normless team has the fewest open chats — they’re introduced to the customer by name. Set the team in Settings › Team.</span>
       </div>
     </section>
   )
@@ -247,21 +248,52 @@ function NeverCard() {
   )
 }
 
-function TryIt() {
+function TryIt({ ready }) {
+  const apiFetch = useApi()
+  const toast = useToast()
+  const brand = useWaBrand()
+  const [turns, setTurns] = useState([])      // { role: 'customer' | 'bot', text, sent?, handOver? }
+  const [draft, setDraft] = useState('')
+  const [busy, setBusy] = useState(false)
+  const ask = async () => {
+    const text = draft.trim()
+    if (!text) return
+    const next = [...turns, { role: 'customer', text }]
+    setTurns(next); setDraft(''); setBusy(true)
+    const r = await apiFetch(`${brand.api}/nl/bot/try`, { method: 'POST', body: JSON.stringify({ turns: next.filter(t => t.text).map(t => ({ role: t.role, text: t.text })) }) })
+    setBusy(false)
+    if (!r || r.error) { toast.error(r?.error || 'The bot could not answer'); return }
+    setTurns(t => [...t, { role: 'bot', text: r.reply || '', sent: r.sent || [], handOver: r.handOver }])
+  }
   return (
     <aside className="was-card nl-try" aria-label="Try the bot">
-      <h3>Try it</h3>
+      <div className="was-card-head">
+        <h3>Try it</h3>
+        {!!turns.length && <button type="button" className="mini-btn" onClick={() => setTurns([])}>Start over</button>}
+      </div>
       <p className="was-hint" style={{ margin: 0 }}>Ask like a customer. Nothing is sent on WhatsApp.</p>
-      <div className="nl-try-feed">
-        <div className="nl-try-note">
-          <Icon name="spark" size={16} />
-          <span>The bot is the next part of the build. Once it is in, this is where you test it — with these settings and Shopify’s products and policies — before switching it on.</span>
-        </div>
+      <div className="nl-try-feed nl-try-chat">
+        {!ready && <div className="nl-try-note"><Icon name="alert" size={16} /><span>The bot needs an Anthropic API key on the server before it can answer.</span></div>}
+        {ready && !turns.length && <div className="nl-try-note"><Icon name="spark" size={16} /><span>Try “Is the AMG tee oversized?”, “Where is my order?” or “I want a refund”.</span></div>}
+        {turns.map((t, i) => (
+          <div key={i} className={`nl-try-msg ${t.role}`}>
+            {t.sent?.map((x, k) => (
+              <figure key={k} className="nl-try-media">
+                <img src={x.image} alt="" loading="lazy" />
+                <figcaption>{x.text}</figcaption>
+              </figure>
+            ))}
+            {t.text && <div className="nl-try-text">{t.text}</div>}
+            {t.handOver && <div className="nl-try-handover">Would hand over: {t.handOver.reason}</div>}
+          </div>
+        ))}
+        {busy && <div className="nl-try-msg bot"><div className="nl-try-text"><span className="wa-spin" aria-hidden="true" /> Thinking…</div></div>}
       </div>
-      <div className="was-inline">
-        <input className="input" aria-label="Test message" placeholder="Type a question…" disabled style={{ flex: 1 }} />
-        <button type="button" className="btn btn-primary btn-sm" disabled>Ask</button>
-      </div>
+      <form className="was-inline" onSubmit={e => { e.preventDefault(); ask() }}>
+        <input className="input" aria-label="Test message" placeholder="Type a question…" value={draft} disabled={!ready || busy}
+          onChange={e => setDraft(e.target.value)} style={{ flex: 1 }} />
+        <button type="submit" className="btn btn-primary btn-sm" disabled={!ready || busy || !draft.trim()}>Ask</button>
+      </form>
     </aside>
   )
 }
@@ -278,6 +310,12 @@ export function NlBotTab() {
       <Head title="Normless bot" actions={s.canEdit && <SaveButton dirty={s.dirty(...sections)} saving={s.saving} label="Save" onClick={() => s.save(...sections)} />}>
         Answers customers on the Normless number. People step in only when a rule below says so.
       </Head>
+      {!s.botReady && (
+        <section className="was-card was-warn-card">
+          <h3>The bot can’t answer yet</h3>
+          <p className="was-hint" style={{ margin: 0 }}>It needs an Anthropic API key in the server’s settings (ANTHROPIC_API_KEY). Until then every chat waits for a person.</p>
+        </section>
+      )}
       <div className="nl-grid">
         <div className="nl-col">
           <BotCard s={s} />
@@ -285,7 +323,7 @@ export function NlBotTab() {
           <HandoffCard s={s} />
           <NeverCard />
         </div>
-        <TryIt />
+        <TryIt ready={s.botReady} />
       </div>
     </>
   )
@@ -471,27 +509,51 @@ export function NlRepliesTab() {
 
 export function NlTeamTab() {
   const apiFetch = useApi()
+  const toast = useToast()
   const brand = useWaBrand()
   const [members, setMembers] = useState(null)
-  useEffect(() => { apiFetch(`${brand.api}/nl/team`).then(r => setMembers(r?.members || [])) }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  const [names, setNames] = useState({})
+  const load = () => apiFetch(`${brand.api}/nl/team`).then(r => {
+    setMembers(r?.members || [])
+    setNames(Object.fromEntries((r?.members || []).map(m => [m.username, m.wa_display_name || ''])))
+  })
+  useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  const saveName = async (m) => {
+    if ((names[m.username] || '') === (m.wa_display_name || '')) return
+    const r = await apiFetch(`${brand.api}/nl/team/${encodeURIComponent(m.username)}`, { method: 'PUT', body: JSON.stringify({ display_name: names[m.username] }) })
+    if (!r || r.error) return toast.error(r?.error || 'Could not save that')
+    toast.success(`Customers will see “${r.display_name}”`)
+    load()
+  }
   return (
     <>
-      <Head title="Team">Who answers Normless’s chats. Give someone access in Admin › their user › Normless › WhatsApp inbox.</Head>
+      <Head title="Team">
+        Who answers Normless’s chats. The bot hands chats to people marked “Gets chats”, whoever has the fewest open, and
+        introduces them by the name below. Give someone the Normless WhatsApp inbox in Admin › their user to add them.
+      </Head>
       {!members ? <Loading /> : (
         <section className="was-card">
+          {!members.some(m => m.in_queue) && (
+            <p className="was-bad" style={{ margin: 0 }}>Nobody gets handed-over chats yet — they wait in “Needs a person”. Tick “WhatsApp inbox” under Normless for your support team in Admin.</p>
+          )}
           <table className="nl-table">
-            <thead><tr><th>Person</th><th>Access</th><th>Open chats</th><th>Last signed in</th></tr></thead>
+            <thead><tr><th>Person</th><th>Name customers see</th><th>Gets chats</th><th>Open chats</th></tr></thead>
             <tbody>
               {members.map(m => (
                 <tr key={m.username}>
-                  <td>{m.username.split('@')[0]}</td>
-                  <td>{m.is_manager ? 'Every chat, can reassign' : 'Own chats'}</td>
+                  <td>{m.username}<div className="was-hint">{m.is_manager ? 'Every chat, can reassign' : 'Own chats'}</div></td>
+                  <td>
+                    <input className="nl-name" aria-label={`Name customers see for ${m.username}`} placeholder={m.default_name}
+                      value={names[m.username] ?? ''} onChange={e => setNames(n => ({ ...n, [m.username]: e.target.value }))}
+                      onBlur={() => saveName(m)} onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur() }} />
+                  </td>
+                  <td className={m.in_queue ? 'ok' : ''}>{m.in_queue ? 'Yes' : 'No — owner/admin view only'}</td>
                   <td>{m.open_chats}</td>
-                  <td>{fmtWhen(m.last_login)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
+          <p className="was-hint" style={{ margin: 0 }}>Leave the name empty to use the first part of their login ({members[0]?.default_name ? `e.g. “${members[0].default_name}”` : 'their first name'}).</p>
         </section>
       )}
     </>
@@ -532,33 +594,238 @@ export function NlHoursTab() {
   )
 }
 
+const STATUS_LOOK = { APPROVED: 'success', PENDING: 'pending', IN_APPEAL: 'pending', REJECTED: 'error', PAUSED: 'error', DISABLED: 'error' }
+const fill = (text, values) => String(text || '').replace(/\{\{\s*(\d+)\s*\}\}/g, (m, n) => values?.[Number(n) - 1] || m)
+
+/** A template as the customer will see it on WhatsApp. */
+function TemplatePreview({ header, headerExample, body, examples, footer, buttons }) {
+  return (
+    <div className="nl-tpl-phone" aria-label="Preview">
+      <div className="nl-tpl-bubble">
+        {header && <b className="nl-tpl-header">{fill(header, [headerExample])}</b>}
+        <div className="nl-tpl-body">{fill(body, examples) || <span className="was-hint">The message appears here</span>}</div>
+        {footer && <small className="nl-tpl-footer">{footer}</small>}
+        <span className="nl-tpl-time">12:04</span>
+      </div>
+      {(buttons || []).filter(b => b.text).map((b, i) => (
+        <div key={i} className="nl-tpl-button">
+          <Icon name={b.type === 'URL' ? 'eye' : b.type === 'PHONE_NUMBER' ? 'phone' : 'refresh'} size={13} /> {b.text}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/** The editor's form from a template's Meta parts. */
+function formFrom(t) {
+  const c = t?.components || []
+  const header = c.find(x => x.type === 'HEADER' && x.format === 'TEXT')
+  const body = c.find(x => x.type === 'BODY')
+  const footer = c.find(x => x.type === 'FOOTER')
+  const buttons = c.find(x => x.type === 'BUTTONS')?.buttons || []
+  return {
+    name: t?.name || '', category: t?.category || 'UTILITY', language: t?.language || 'en',
+    header: header?.text || '', header_example: header?.example?.header_text?.[0] || '',
+    body: body?.text || t?.body_text || '', examples: body?.example?.body_text?.[0] || [],
+    footer: footer?.text || '',
+    buttons: buttons.map(b => ({ type: b.type, text: b.text || '', url: b.url || '', phone_number: b.phone_number || '', example: b.example?.[0] || '' })),
+  }
+}
+
+function TemplateEditor({ template, onClose, onSaved }) {
+  const apiFetch = useApi()
+  const toast = useToast()
+  const brand = useWaBrand()
+  const editing = !!template?.id
+  const [f, setF] = useState(() => formFrom(template))
+  const [saving, setSaving] = useState(false)
+  const set = (patch) => setF(x => ({ ...x, ...patch }))
+  const gaps = [...new Set((f.body.match(/\{\{\s*(\d+)\s*\}\}/g) || []).map(m => Number(m.replace(/\D/g, ''))))].sort((a, b) => a - b)
+  const setButton = (i, patch) => set({ buttons: f.buttons.map((b, k) => (k === i ? { ...b, ...patch } : b)) })
+  const save = async () => {
+    setSaving(true)
+    const r = await apiFetch(editing ? `${brand.api}/nl/templates/${template.id}` : `${brand.api}/nl/templates`,
+      { method: editing ? 'PUT' : 'POST', body: JSON.stringify(f) })
+    setSaving(false)
+    if (!r || r.error) return toast.error(r?.error || 'Meta refused that', { duration: 0 })
+    toast.success(editing ? 'Sent to Meta for review again' : 'Sent to Meta for review — usually approved within minutes to hours')
+    onSaved(r.template)
+  }
+  return (
+    <div className="drawer-overlay" onClick={onClose}>
+      <div className="drawer drawer-wide" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={editing ? `Edit ${template.name}` : 'New template'}>
+        <div className="drawer-header">
+          <div>
+            <h2>{editing ? `Edit ${template.name}` : 'New template'}</h2>
+            <div className="packed-sub">{editing ? 'Meta reviews it again. An approved template can be edited once a day.' : 'Meta reviews every template before it can be sent.'}</div>
+          </div>
+          <button type="button" className="btn-icon" aria-label="Close" onClick={onClose}><Icon name="close" size={16} /></button>
+        </div>
+        <div className="drawer-body nl-tpl-editor">
+          <div className="nl-tpl-form">
+            <div className="form-row">
+              <div className="input-group">
+                <label htmlFor="tpl-name">Name <span className="label-hint">lower case, numbers, _</span></label>
+                <input id="tpl-name" value={f.name} disabled={editing} placeholder="order_shipped"
+                  onChange={e => set({ name: e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '_') })} />
+              </div>
+              <div className="input-group">
+                <label htmlFor="tpl-cat">Category</label>
+                <select id="tpl-cat" value={f.category} disabled={editing} onChange={e => set({ category: e.target.value })}>
+                  <option value="UTILITY">Utility — orders, updates</option>
+                  <option value="MARKETING">Marketing — offers, carts</option>
+                </select>
+              </div>
+              <div className="input-group">
+                <label htmlFor="tpl-lang">Language</label>
+                <select id="tpl-lang" value={f.language} disabled={editing} onChange={e => set({ language: e.target.value })}>
+                  <option value="en">English</option><option value="en_US">English (US)</option><option value="hi">Hindi</option><option value="ta">Tamil</option>
+                </select>
+              </div>
+            </div>
+            <div className="input-group">
+              <label htmlFor="tpl-head">Header <span className="label-hint">optional, 60 characters, one gap at most</span></label>
+              <input id="tpl-head" value={f.header} maxLength={60} placeholder="Your order {{1}} is on its way" onChange={e => set({ header: e.target.value })} />
+              {/\{\{1\}\}/.test(f.header) && <input aria-label="Header example" value={f.header_example} placeholder="Example for {{1}}" onChange={e => set({ header_example: e.target.value })} />}
+            </div>
+            <div className="input-group">
+              <label htmlFor="tpl-body">Message <span className="label-hint">use {'{{1}}'}, {'{{2}}'} … for what changes each time</span></label>
+              <textarea id="tpl-body" rows={6} maxLength={1024} value={f.body} placeholder={'Hi {{1}}, your order {{2}} has shipped with {{3}}.'} onChange={e => set({ body: e.target.value })} />
+            </div>
+            {!!gaps.length && (
+              <div className="nl-tpl-examples">
+                <span className="was-hint">Examples Meta’s reviewers read</span>
+                {gaps.map(n => (
+                  <input key={n} aria-label={`Example for {{${n}}}`} placeholder={`{{${n}}} e.g. ${['Meera', '#12151', 'Delhivery', '₹699'][n - 1] || 'value'}`}
+                    value={f.examples[n - 1] || ''} onChange={e => { const ex = [...f.examples]; ex[n - 1] = e.target.value; set({ examples: ex }) }} />
+                ))}
+              </div>
+            )}
+            <div className="input-group">
+              <label htmlFor="tpl-foot">Footer <span className="label-hint">optional, 60 characters</span></label>
+              <input id="tpl-foot" value={f.footer} maxLength={60} placeholder="Normless" onChange={e => set({ footer: e.target.value })} />
+            </div>
+            <div className="nl-row-head"><b>Buttons</b><span className="was-hint">optional</span></div>
+            {f.buttons.map((b, i) => (
+              <div key={i} className="nl-tpl-btn-row">
+                <select aria-label="Button type" value={b.type} onChange={e => setButton(i, { type: e.target.value })}>
+                  <option value="QUICK_REPLY">Quick reply</option><option value="URL">Link</option><option value="PHONE_NUMBER">Call</option>
+                </select>
+                <input aria-label="Button text" maxLength={25} placeholder="Button text" value={b.text} onChange={e => setButton(i, { text: e.target.value })} />
+                {b.type === 'URL' && <input aria-label="Link" placeholder="https://normless.store/… (end with {{1}} to vary it)" value={b.url} onChange={e => setButton(i, { url: e.target.value })} />}
+                {b.type === 'URL' && /\{\{1\}\}$/.test(b.url) && <input aria-label="Example link" placeholder="Full example link" value={b.example} onChange={e => setButton(i, { example: e.target.value })} />}
+                {b.type === 'PHONE_NUMBER' && <input aria-label="Phone number" placeholder="+91 86674 58532" value={b.phone_number} onChange={e => setButton(i, { phone_number: e.target.value })} />}
+                <button type="button" className="btn-icon" aria-label="Remove button" onClick={() => set({ buttons: f.buttons.filter((_, k) => k !== i) })}><Icon name="trash" size={13} /></button>
+              </div>
+            ))}
+            {f.buttons.length < 10 && <button type="button" className="mini-btn" onClick={() => set({ buttons: [...f.buttons, { type: 'QUICK_REPLY', text: '', url: '', phone_number: '', example: '' }] })}>+ Add a button</button>}
+          </div>
+          <div className="nl-tpl-preview-col">
+            <div className="was-hint">Preview, with your examples filled in</div>
+            <TemplatePreview header={f.header} headerExample={f.header_example} body={f.body} examples={f.examples} footer={f.footer} buttons={f.buttons} />
+          </div>
+        </div>
+        <div className="drawer-footer">
+          <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
+          <button type="button" className="btn btn-primary" disabled={saving || !f.name || !f.body.trim()} onClick={save}>
+            {saving ? 'Sending to Meta…' : editing ? 'Save and resubmit' : 'Submit for review'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function NlTemplatesTab() {
   const apiFetch = useApi()
   const toast = useToast()
   const brand = useWaBrand()
-  const [list, setList] = useState(null)
+  const [data, setData] = useState(null)
   const [syncing, setSyncing] = useState(false)
-  const load = () => apiFetch(`${brand.api}/templates`).then(r => setList(r?.templates || []))
+  const [query, setQuery] = useState('')
+  const [status, setStatus] = useState('ALL')
+  const [picked, setPicked] = useState(null)
+  const [editing, setEditing] = useState(null)        // a template, or {} for a new one
+  const load = () => apiFetch(`${brand.api}/nl/templates`).then(r => setData(r && !r.error ? r : { templates: [], error: r?.error }))
   useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
   const sync = async () => {
     setSyncing(true)
     const r = await apiFetch(`${brand.api}/templates/sync`, { method: 'POST' })
     setSyncing(false)
     if (!r || r.error) return toast.error(r?.error || 'Could not read the templates from Meta')
-    load(); toast.success(`${r.approved} approved template${r.approved === 1 ? '' : 's'}`)
+    await load(); toast.success(`${r.synced} templates synced, ${r.approved} approved`)
   }
+  const remove = async (t) => {
+    if (!await toast.confirm({ title: `Delete ${t.name}?`, message: 'It is deleted at Meta too, in every language. Automatic messages that use it stop until another template is chosen. The name can’t be reused for 30 days.', confirmLabel: 'Delete', danger: true })) return
+    const r = await apiFetch(`${brand.api}/nl/templates/${t.id}`, { method: 'DELETE' })
+    if (!r || r.error) return toast.error(r?.error || 'Could not delete that')
+    setPicked(null); load(); toast.success(`${t.name} deleted`)
+  }
+  const list = (data?.templates || []).filter(t => (status === 'ALL' || t.status === status || (status === 'PENDING' && t.status === 'IN_APPEAL'))
+    && (!query || `${t.name} ${t.body_text}`.toLowerCase().includes(query.toLowerCase())))
+  const counts = (data?.templates || []).reduce((n, t) => ({ ...n, [t.status]: (n[t.status] || 0) + 1 }), {})
+  const current = picked && (data?.templates || []).find(t => t.id === picked)
+  const pf = current && formFrom(current)
   return (
     <>
-      <Head title="Templates" actions={<button type="button" className="btn btn-secondary btn-sm" disabled={syncing} onClick={sync}><Icon name="refresh" size={13} /> {syncing ? 'Syncing…' : 'Sync from Meta'}</button>}>
-        What can be sent after a customer has been quiet for 24 hours. Meta approves them for Normless’s own WhatsApp account, once the number is connected.
+      <Head title="Templates" actions={<>
+        <button type="button" className="btn btn-secondary btn-sm" disabled={syncing} onClick={sync}><Icon name="refresh" size={13} /> {syncing ? 'Syncing…' : 'Sync from Meta'}</button>
+        {data?.canEdit && <button type="button" className="btn btn-primary btn-sm" disabled={!data?.connected} onClick={() => setEditing({})}><Icon name="plus" size={13} /> New template</button>}
+      </>}>
+        Messages Meta approved for Normless — the only kind WhatsApp lets you send once a customer has been quiet for 24 hours.
       </Head>
-      {!list ? <Loading /> : (
-        <section className="was-card">
-          {!list.length && <p className="was-hint">No approved templates on Normless’s account yet. Connect the number, then sync.</p>}
-          {list.map(t => (
-            <div key={t.id} className="nl-faq"><b>{t.name}</b><span className="was-hint">{t.body_text}</span></div>
-          ))}
-        </section>
+      {!data ? <Loading /> : (
+        <div className="nl-tpl-layout">
+          <section className="was-card nl-tpl-list">
+            <input className="input" aria-label="Search templates" placeholder="Search by name or words" value={query} onChange={e => setQuery(e.target.value)} />
+            <div className="nl-days" role="group" aria-label="Status">
+              {[['ALL', 'All'], ['APPROVED', 'Approved'], ['PENDING', 'In review'], ['REJECTED', 'Rejected']].map(([k, label]) => (
+                <button key={k} type="button" aria-pressed={status === k} className={`chip${status === k ? ' chip-on' : ''}`} onClick={() => setStatus(k)}>
+                  {label} {k === 'ALL' ? (data.templates || []).length : (counts[k] || 0) + (k === 'PENDING' ? (counts.IN_APPEAL || 0) : 0)}
+                </button>
+              ))}
+            </div>
+            {!list.length && <p className="was-hint">{data.templates?.length ? 'No template matches.' : 'None yet — sync from Meta, or write a new one.'}</p>}
+            <ul className="nl-tpl-items">
+              {list.map(t => (
+                <li key={t.id}>
+                  <button type="button" className={`nl-tpl-item${picked === t.id ? ' on' : ''}`} onClick={() => setPicked(t.id)}>
+                    <span className="nl-tpl-item-head"><b>{t.name}</b><span className={`status-badge ${STATUS_LOOK[t.status] || ''}`}>{t.status === 'IN_APPEAL' ? 'In review' : String(t.status || '').toLowerCase()}</span></span>
+                    <span className="nl-tpl-item-meta">{String(t.category || '').toLowerCase()} · {t.language}</span>
+                    <span className="nl-tpl-item-body">{t.body_text}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </section>
+          <section className="was-card nl-tpl-detail">
+            {!current ? <p className="was-hint">Pick a template to preview it.</p> : (
+              <>
+                <div className="was-card-head">
+                  <h3>{current.name}</h3>
+                  {data.canEdit && (
+                    <span className="was-inline">
+                      <button type="button" className="btn btn-secondary btn-sm" onClick={() => setEditing(current)}><Icon name="edit" size={13} /> Edit</button>
+                      <button type="button" className="btn btn-secondary btn-sm" onClick={() => remove(current)}><Icon name="trash" size={13} /> Delete</button>
+                    </span>
+                  )}
+                </div>
+                <div className="was-facts">
+                  <div><span>Status</span><b>{current.status}</b></div>
+                  <div><span>Category</span><b>{current.category}</b></div>
+                  <div><span>Language</span><b>{current.language}</b></div>
+                  <div><span>Gaps</span><b>{current.variables || 0}</b></div>
+                </div>
+                {current.rejected_reason && current.rejected_reason !== 'NONE' && <p className="was-bad">Meta rejected it: {current.rejected_reason}</p>}
+                <TemplatePreview header={pf.header} headerExample={pf.header_example} body={pf.body} examples={pf.examples} footer={pf.footer} buttons={pf.buttons} />
+              </>
+            )}
+          </section>
+        </div>
+      )}
+      {editing && (
+        <TemplateEditor template={editing.id ? editing : null} onClose={() => setEditing(null)}
+          onSaved={(t) => { setEditing(null); load(); setPicked(t.id) }} />
       )}
     </>
   )

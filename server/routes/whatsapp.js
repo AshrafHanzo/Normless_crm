@@ -34,6 +34,9 @@ const extras = require('../services/wa-extras');
 const billing = require('../services/wa-billing');
 const connectSvc = require('../services/wa-connect');
 const lines = require('../services/wa-line');
+const nlShop = require('../services/nl-shop');
+const nlBot = require('../services/nl-bot');
+const nlHandover = require('../services/nl-handover');
 
 const router = express.Router();
 
@@ -237,9 +240,13 @@ async function receiveMessage(message, profileName) {
 
     wa.markRead(message.id);          // not awaited: blue ticks are not worth a delay
 
-    // Normless has no menu, assistant or routing of its own yet: its messages wait for a person.
-    // Crewfit's menu, AI and away message must never answer a Normless customer.
-    if (!onCrewfit()) return;
+    // Normless has its own bot (nl-bot); Crewfit's menu, assistant and away message must never
+    // answer a Normless customer.
+    if (!onCrewfit()) {
+        try { await nlBot.onInbound({ id: conversation.id, phone }); }
+        catch (err) { console.error('normless bot error:', err.message); }
+        return;
+    }
 
     // The menu, if one is switched on. It answers the opening questions and hands over when it
     // stops being useful; a conversation a person has taken is never interrupted by it.
@@ -569,7 +576,7 @@ router.use(async (req, res, next) => {
  */
 const CREWFIT_ONLY = [
     /^\/leads\//, /^\/statuses$/, /^\/catalogue(-pdf)?$/, /^\/orders\//, /^\/flows/, /^\/admin(\/|$)/,
-    /^\/settings$/, /^\/conversations\/\d+\/(product|orders|catalogue-pdf|billing|payment-qr|quotes|mockups|mode)(\/|$)/,
+    /^\/settings$/, /^\/conversations\/\d+\/(product|orders|catalogue-pdf|billing|payment-qr|quotes|mockups)(\/|$)/,
 ];
 router.use((req, res, next) => {
     if (req.waLine?.brand !== 'crewfit' && CREWFIT_ONLY.some(rx => rx.test(req.path))) {
@@ -922,8 +929,9 @@ router.post('/conversations/:id/messages', takeFile, async (req, res) => {
                 SET last_message_at = CURRENT_TIMESTAMP, last_message_preview = $2,
                     status = 'open', updated_at = CURRENT_TIMESTAMP,
                     -- Answering a thread claims it: an unassigned conversation somebody has
-                    -- replied to is not unassigned any more.
-                    assigned_to = COALESCE(assigned_to, $3)
+                    -- replied to is not unassigned any more, and the Normless bot stops answering.
+                    assigned_to = COALESCE(assigned_to, $3),
+                    mode = CASE WHEN line_id = (SELECT id FROM wa_lines WHERE brand = 'normless') THEN 'human' ELSE mode END
               WHERE id = $1`,
             [conversation.id, (body || `Sent ${type}`).slice(0, 200), req.user?.username || null]);
 
@@ -971,6 +979,33 @@ router.patch('/conversations/:id', async (req, res) => {
             sets.push(`status = $${params.length}`);
         }
         if (!sets.length) return res.status(400).json({ error: 'Nothing to change' });
+
+        // Normless: a person given a chat is introduced to the customer by name and the bot steps
+        // back; a closed chat goes back to the bot for the customer's next message.
+        if (req.waLine.brand === 'normless') {
+            const next = 'assigned_to' in req.body ? trim(req.body.assigned_to) : undefined;
+            if (next && next.toLowerCase() !== String(conversation.assigned_to || '').toLowerCase() && !conversation.is_demo) {
+                await nlHandover.assign(conversation, next, { actor: req.user?.username });
+            } else if (next) {
+                await db.query(`UPDATE wa_conversations SET assigned_to = $2, mode = 'human', updated_at = CURRENT_TIMESTAMP WHERE id = $1`, [conversation.id, next]);
+            } else if (next === null) {
+                await db.query(`UPDATE wa_conversations SET assigned_to = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $1`, [conversation.id]);
+            }
+            if ('status' in req.body) {
+                const closing = String(req.body.status) === 'closed';
+                await db.query(
+                    `UPDATE wa_conversations SET status = $2,
+                            mode = CASE WHEN $2 = 'closed' THEN 'ai' ELSE mode END,
+                            assigned_to = CASE WHEN $2 = 'closed' THEN NULL ELSE assigned_to END,
+                            nl_handoff_at = CASE WHEN $2 = 'closed' THEN NULL ELSE nl_handoff_at END,
+                            updated_at = CURRENT_TIMESTAMP
+                      WHERE id = $1`, [conversation.id, closing ? 'closed' : 'open']);
+                await orders.logActivity({ conversationId: conversation.id, kind: 'status', actor: req.user?.username,
+                    body: closing ? `${String(req.user?.username || '').split('@')[0]} closed the chat — the bot answers if they write again`
+                        : `${String(req.user?.username || '').split('@')[0]} reopened the chat` });
+            }
+            return res.json({ conversation: await loadConversation(req, conversation.id) });
+        }
 
         await db.query(
             `UPDATE wa_conversations SET ${sets.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
@@ -1553,19 +1588,7 @@ const NORMLESS_ONLY = /^\/conversations\/\d+\/(customer|ticket)(\/|$)/;
 router.use((req, res, next) => (NORMLESS_ONLY.test(req.path) && req.waLine?.brand !== 'normless'
     ? res.status(404).json({ error: 'Not part of this inbox' }) : next()));
 
-const last10 = (v) => String(v || '').replace(/\D+/g, '').slice(-10);
-const TICKET_FIELDS = `id, ref_no, order_number, nature, reason, status, progress, action,
-                       TO_CHAR(raised_on,'YYYY-MM-DD') AS raised_on, wa_conversation_id`;
-
-/** Payment as the refund policy reads it: a partial-COD advance is never refunded. */
-function paymentKind(financialStatus) {
-    const s = String(financialStatus || '').toUpperCase();
-    if (s === 'PAID') return { key: 'prepaid', label: 'Prepaid' };
-    if (s === 'PARTIALLY_PAID') return { key: 'partial_cod', label: 'Partial COD — the advance is not refundable' };
-    if (s === 'PENDING') return { key: 'cod', label: 'Cash on delivery' };
-    if (s.includes('REFUNDED')) return { key: 'refunded', label: s === 'REFUNDED' ? 'Refunded' : 'Partly refunded' };
-    return { key: 'other', label: s ? s.charAt(0) + s.slice(1).toLowerCase().replace(/_/g, ' ') : 'Unknown' };
-}
+const { paymentKind } = require('../services/nl-shop');
 
 /** The demo chat's panel: the design's own example, invented, so no real customer is shown. */
 function demoCustomer() {
@@ -1595,88 +1618,7 @@ router.get('/conversations/:id/customer', async (req, res) => {
         const conversation = await loadConversation(req, req.params.id);
         if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
         if (isDemo(conversation)) return res.json(demoCustomer());
-        const phone10 = last10(conversation.phone);
-
-        // Customers are synced from Shopify after the chat may have started, so a thread with no
-        // match yet is matched again whenever it is opened.
-        let customerId = conversation.customer_id;
-        if (!customerId && phone10.length === 10) {
-            customerId = (await db.query(
-                `SELECT id FROM customers
-                  WHERE RIGHT(REGEXP_REPLACE(COALESCE(phone, ''), '\\D', '', 'g'), 10) = $1
-                  ORDER BY orders_count DESC NULLS LAST, id LIMIT 1`, [phone10])).rows[0]?.id || null;
-            if (customerId) {
-                await db.query(
-                    `UPDATE wa_contacts SET customer_id = $2
-                      WHERE id = (SELECT contact_id FROM wa_conversations WHERE id = $1)`, [conversation.id, customerId]);
-            }
-        }
-        const customer = customerId ? (await db.query(
-            `SELECT id, shopify_id, first_name, last_name, email, phone, orders_count, total_spent, tags, created_at
-               FROM customers WHERE id = $1`, [customerId])).rows[0] || null : null;
-
-        // Their orders: by the Shopify customer, and by the phone the parcel went to — a guest
-        // checkout, or an order placed for somebody else, is only findable the second way.
-        const orders = (await db.query(
-            `SELECT o.order_number, o.shopify_id, o.created_at, o.total_price, o.financial_status,
-                    o.fulfillment_status, o.cancelled_at, o.on_hold, o.fulfilled_at, o.line_items_json
-               FROM orders o
-              WHERE ($1::text IS NOT NULL AND o.customer_shopify_id = $1)
-                 OR o.order_number IN (SELECT p.order_number FROM packed_orders p
-                                        WHERE $2 <> '' AND RIGHT(REGEXP_REPLACE(COALESCE(p.customer_phone, ''), '\\D', '', 'g'), 10) = $2)
-              ORDER BY o.created_at DESC NULLS LAST
-              LIMIT 12`, [customer?.shopify_id || null, phone10])).rows;
-        const numbers = orders.map(o => o.order_number);
-
-        const packed = numbers.length ? (await db.query(
-            `SELECT order_number, awb, courier, tracking_url, packed_at, ship_city, ship_pincode
-               FROM packed_orders WHERE order_number = ANY($1)`, [numbers])).rows : [];
-        const dispatchOf = new Map(packed.map(p => [p.order_number, p]));
-
-        const tickets = (await db.query(
-            `SELECT ${TICKET_FIELDS} FROM support_tickets
-              WHERE order_number = ANY($1)
-                 OR ($2 <> '' AND RIGHT(REGEXP_REPLACE(COALESCE(customer_phone, ''), '\\D', '', 'g'), 10) = $2)
-                 OR wa_conversation_id = $3
-              ORDER BY raised_on DESC, id DESC LIMIT 20`, [numbers, phone10, conversation.id])).rows;
-
-        // What the customer has sent in this chat: the refund policy turns on photos and an
-        // unboxing video, so the panel says whether they are here.
-        const media = (await db.query(
-            `SELECT COUNT(*) FILTER (WHERE media_mime LIKE 'image/%')::int AS photos,
-                    COUNT(*) FILTER (WHERE media_mime LIKE 'video/%')::int AS videos
-               FROM wa_messages WHERE conversation_id = $1 AND direction = 'in' AND media_url IS NOT NULL`,
-            [conversation.id])).rows[0];
-
-        res.json({
-            customer: customer && {
-                ...customer,
-                name: [customer.first_name, customer.last_name].filter(Boolean).join(' ').trim() || null,
-            },
-            orders: orders.map(o => {
-                const dispatch = dispatchOf.get(o.order_number) || null;
-                return {
-                    order_number: o.order_number,
-                    created_at: o.created_at,
-                    total_price: o.total_price,
-                    payment: paymentKind(o.financial_status),
-                    state: o.cancelled_at ? 'Cancelled' : o.on_hold ? 'On hold'
-                        : dispatch || String(o.fulfillment_status).toUpperCase() === 'FULFILLED' ? 'Shipped' : 'Not shipped yet',
-                    shipped_at: dispatch?.packed_at || o.fulfilled_at || null,
-                    items: safeJson(o.line_items_json, []).map(i => ({ title: i.title, variant: i.variant, quantity: i.quantity, price: i.price })),
-                    dispatch: dispatch && {
-                        awb: dispatch.awb, courier: dispatch.courier,
-                        // The courier's own link when the packing bench saved one; Delhivery's
-                        // tracker otherwise, which is what nearly every parcel ships with.
-                        tracking_url: dispatch.tracking_url || (dispatch.awb ? `https://www.delhivery.com/track-v2/package/${encodeURIComponent(dispatch.awb)}` : null),
-                        city: dispatch.ship_city, pincode: dispatch.ship_pincode,
-                    },
-                    tickets: tickets.filter(t => t.order_number === o.order_number).map(t => t.id),
-                };
-            }),
-            tickets,
-            media,
-        });
+        res.json(await nlShop.customerFor(conversation));
     } catch (err) {
         console.error('whatsapp customer error:', err);
         res.status(500).json({ error: 'Could not load the customer' });
@@ -1986,6 +1928,27 @@ router.post('/conversations/:id/mode', async (req, res) => {
         if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
         const next = String(req.body?.mode || '');
         if (!['human', 'flow', 'ai'].includes(next)) return res.status(400).json({ error: 'Unknown mode' });
+
+        // Normless: "Take over" stops the bot and gives the chat to whoever clicked; "Hand back to
+        // the bot" lets it answer again.
+        if (req.waLine.brand === 'normless') {
+            if (next === 'human') {
+                if (conversation.is_demo) await db.query(`UPDATE wa_conversations SET mode = 'human', assigned_to = $2 WHERE id = $1`, [conversation.id, req.user?.username]);
+                else await nlHandover.assign(conversation, req.user?.username, { actor: req.user?.username });
+            } else if (next === 'ai') {
+                if (!await nlBot.enabled(req.waLine.id)) {
+                    return res.status(400).json({ error: process.env.ANTHROPIC_API_KEY ? 'The bot is switched off — turn it on in WhatsApp › Settings › Bot' : 'The bot has no Anthropic API key on the server yet' });
+                }
+                await db.query(
+                    `UPDATE wa_conversations SET mode = 'ai', assigned_to = NULL, nl_handoff_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
+                    [conversation.id]);
+                await orders.logActivity({ conversationId: conversation.id, kind: 'status', actor: req.user?.username,
+                    body: `${String(req.user?.username || '').split('@')[0]} handed the chat back to the bot` });
+            } else {
+                return res.status(400).json({ error: 'Normless has no menu flow' });
+            }
+            return res.json({ conversation: await loadConversation(req, conversation.id) });
+        }
         // Taking over from the billing questions keeps what was collected; it is already on the lead.
 
         if (next === 'human') {
@@ -2084,13 +2047,16 @@ router.post('/templates/sync', manager, async (req, res) => {
         const startedAt = new Date();
         for (const t of templates) {
             await db.query(
-                `INSERT INTO wa_templates (name, language, category, status, body_text, variables, header_kind, synced_at, line_id)
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,CURRENT_TIMESTAMP,$8)
+                `INSERT INTO wa_templates (name, language, category, status, body_text, variables, header_kind, synced_at, line_id, meta_id, components, rejected_reason)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,CURRENT_TIMESTAMP,$8,$9,$10,$11)
                  ON CONFLICT (line_id, name, language) DO UPDATE
                     SET category = EXCLUDED.category, status = EXCLUDED.status,
                         body_text = EXCLUDED.body_text, variables = EXCLUDED.variables,
-                        header_kind = EXCLUDED.header_kind, synced_at = CURRENT_TIMESTAMP`,
-                [t.name, t.language, t.category, t.status, t.body_text, t.variables, t.header_kind, req.waLine.id]);
+                        header_kind = EXCLUDED.header_kind, synced_at = CURRENT_TIMESTAMP,
+                        meta_id = EXCLUDED.meta_id, components = EXCLUDED.components,
+                        rejected_reason = EXCLUDED.rejected_reason`,
+                [t.name, t.language, t.category, t.status, t.body_text, t.variables, t.header_kind, req.waLine.id,
+                    t.meta_id, JSON.stringify(t.components || []), t.rejected_reason]);
         }
         // Anything Meta no longer has was deleted or rejected there; offering it would only
         // produce a refusal at the worst moment. Everything still on the account was just

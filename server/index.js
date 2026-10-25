@@ -1785,6 +1785,16 @@ async function ensureWaLinesSchema() {
             -- Normless's inbox has its own pair of grants; Crewfit keeps can_view/manage_whatsapp.
             -- What a manager set for the line's inbox and bot (Normless's settings live here).
             ALTER TABLE wa_lines ADD COLUMN IF NOT EXISTS settings TEXT;
+            -- The name a customer sees when a person takes a Normless chat ("this is Priya from the
+            -- Normless team"); taken from the login when not set.
+            ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS wa_display_name TEXT;
+            -- When the Normless bot last handed a chat to the team, so it does not take the chat
+            -- back while it waits for somebody to pick it up.
+            ALTER TABLE wa_conversations ADD COLUMN IF NOT EXISTS nl_handoff_at TIMESTAMP;
+            -- A template's Meta id and its full parts, so it can be previewed and edited in the CRM.
+            ALTER TABLE wa_templates ADD COLUMN IF NOT EXISTS meta_id TEXT;
+            ALTER TABLE wa_templates ADD COLUMN IF NOT EXISTS components TEXT;
+            ALTER TABLE wa_templates ADD COLUMN IF NOT EXISTS rejected_reason TEXT;
             ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_wa_normless BOOLEAN DEFAULT false;
             ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_manage_wa_normless BOOLEAN DEFAULT false;
         `);

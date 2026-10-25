@@ -173,6 +173,20 @@ async function sendText(phone, text, { preview = true } = {}) {
 }
 
 /**
+ * A photo that is already online — a Shopify product shot or size chart — sent by its address.
+ * WhatsApp fetches it itself, so nothing is downloaded or uploaded here.
+ */
+async function sendImageLink(phone, link, caption = '') {
+    const image = { link: String(link) };
+    if (caption) image.caption = String(caption).slice(0, 1024);
+    const data = await graph(`/${PHONE_ID()}/messages`, {
+        method: 'POST',
+        body: { messaging_product: 'whatsapp', recipient_type: 'individual', to: phone, type: 'image', image },
+    });
+    return data?.messages?.[0]?.id || null;
+}
+
+/**
  * A file to a customer, by uploading it to Meta first.
  *
  * Two steps because Meta will not take a file and a message in one request: the file is uploaded,
@@ -318,6 +332,8 @@ async function fetchTemplates() {
             out.push({
                 name: t.name, language: t.language, category: t.category, status: t.status,
                 body_text: text, variables, header_kind: header?.format || null,
+                // Kept whole for previewing and editing: header, body, footer and buttons as Meta has them.
+                meta_id: t.id || null, components: t.components || [], rejected_reason: t.rejected_reason || null,
             });
         }
         after = page?.paging?.cursors?.after && page?.paging?.next ? page.paging.cursors.after : null;
@@ -446,7 +462,7 @@ function verifySignature(rawBody, header) {
 
 module.exports = {
     configured, checkToken, phoneNumberId: PHONE_ID, wabaId: WABA_ID, graph, GRAPH, normalisePhone, prettyPhone, windowOpen, windowLeftMs,
-    sendText, sendMedia, sendButtons, sendList, createTemplate, downloadMedia, markRead, verifySignature, CAP,
+    sendText, sendMedia, sendImageLink, sendButtons, sendList, createTemplate, downloadMedia, markRead, verifySignature, CAP,
     fetchTemplates, sendTemplate, renderTemplate, whatsappImage,
     WhatsAppError, MEDIA_ROOT, MAX_MEDIA_MB, WINDOW_HOURS,
 };

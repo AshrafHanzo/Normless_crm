@@ -886,7 +886,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
     })
     if (!r || r.error) return toast.error(r?.error || 'Could not change who is answering')
     setThread(r.conversation)
-    toast.success(mode === 'human' ? 'You have the conversation' : 'The menu is asking')
+    toast.success(mode === 'human' ? 'You have the conversation' : mode === 'ai' ? (cf ? 'The assistant is answering' : 'The bot is answering again') : 'The menu is asking')
   }
 
   const setStatus = async (status) => {
@@ -1286,7 +1286,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                   {thread.mode === 'flow' || thread.mode === 'ai' || thread.mode === 'billing' ? (
                     <>
                       <span className="wa-mode wa-mode-bot">
-                        {thread.mode === 'ai' ? 'assistant is answering' : thread.mode === 'billing' ? 'collecting billing details' : 'menu is answering'}
+                        {thread.mode === 'ai' ? (cf ? 'assistant is answering' : 'Bot is answering') : thread.mode === 'billing' ? 'collecting billing details' : 'menu is answering'}
                       </span>
                       <button type="button" className="mini-btn" onClick={() => setMode('human')}>Take over</button>
                     </>
@@ -1300,8 +1300,12 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                       )}
                     </>
                   )}
-                  {!cf && thread.assigned_to?.toLowerCase() !== user?.username?.toLowerCase() && (
-                    <button type="button" className="btn btn-primary btn-sm" onClick={() => assign(user?.username)}>Take over</button>
+                  {!cf && thread.mode !== 'ai' && thread.assigned_to?.toLowerCase() !== user?.username?.toLowerCase() && (
+                    <button type="button" className="btn btn-primary btn-sm" title="Gives you the chat and tells the customer who is helping"
+                      onClick={() => assign(user?.username)}>Take over</button>
+                  )}
+                  {!cf && thread.mode !== 'ai' && thread.status !== 'closed' && (
+                    <button type="button" className="mini-btn" title="The bot answers this chat again" onClick={() => setMode('ai')}>Hand back to bot</button>
                   )}
                   {!cf && (
                     <button type="button" className="btn btn-secondary btn-sm" disabled={!canTicket}
