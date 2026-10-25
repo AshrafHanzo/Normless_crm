@@ -356,7 +356,7 @@ router.get('/automations', async (req, res) => {
             copies: (await copies.plan(req.waLine.id)).map(t => ({ name: t.name, from: t.from, exists: t.exists })),
             buttonBase: links.BUTTON_BASE(),
             // The webhook address carries its secret, so only a manager sees it.
-            webhook: req.waManager ? `${links.PUBLIC_BASE()}/api/hooks/razorpay/abandoned?api_key=${cfg.webhook_secret}` : null,
+            webhook: req.waManager ? `${links.PUBLIC_BASE()}/api/hooks/carts/abandoned?api_key=${cfg.webhook_secret}` : null,
             carts: await auto.cartStats(req.waLine.id),
             recent: await auto.recent(req.waLine.id, { limit: 60 }),
             canEdit: !!req.waManager,

@@ -323,7 +323,9 @@ app.use('/api/support', authMiddleware, require('./routes/support'));
 app.use('/api/whatsapp/webhook', require('./routes/whatsapp').webhook);
 // Public, no login: Razorpay's abandoned carts (the address carries its own secret), and our
 // short links for template buttons, which are what a customer taps.
-app.use('/api/hooks/razorpay', require('./routes/nl-razorpay'));
+// Razorpay's dashboard refuses a webhook address with "razorpay" in it, so carts come in on
+// /api/hooks/carts; the first address stays answering in case it was saved anywhere.
+app.use(['/api/hooks/carts', '/api/hooks/razorpay'], require('./routes/nl-razorpay'));
 app.use('/go', require('./services/nl-links').router());
 // One inbox router, mounted once per brand: Crewfit's number and Normless's, each scoped to its
 // own line so neither can read or answer the other's customers. One webhook serves both — Meta

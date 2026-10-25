@@ -3,7 +3,8 @@
  *
  * Razorpay posts a checkout here when a customer leaves it (Magic Checkout › Platform Settings ›
  * abandoned cart webhook). It sends no signature, so the address itself carries a secret made by
- * the CRM (…/abandoned?api_key=<uuid>, the shape Razorpay's dashboard accepts) — shown in WhatsApp settings › Templates › Abandoned cart — and anything posted to a
+ * the CRM (/api/hooks/carts/abandoned?api_key=<uuid>: Razorpay's dashboard refuses an address
+ * containing the word "razorpay") — shown in WhatsApp settings › Templates › Abandoned cart — and anything posted to a
  * wrong address is refused. Answered at once; the reminders go out later (nl-automations).
  */
 

@@ -76,7 +76,7 @@ function WebhookCard({ data }) {
   const c = data.carts || {}
   return (
     <section className="was-card">
-      <div className="was-card-head"><h3>Razorpay abandoned-cart webhook</h3>
+      <div className="was-card-head"><h3>Abandoned-cart webhook for Razorpay</h3>
         <span className={`status-badge ${c.last_at ? 'success' : 'pending'}`}>{c.last_at ? `Last cart ${fmtWhen(c.last_at)}` : 'No carts received yet'}</span>
       </div>
       {data.webhook ? (
