@@ -3123,6 +3123,61 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .wa-activity-dot.k-status { background: var(--warning); }
 .wa-activity-when { display: block; font-size: 11px; color: var(--text-muted); margin-top: 2px; }
 .wa-bubble-auto { border: 1px dashed color-mix(in srgb, var(--primary) 50%, transparent); }
+
+/* ---- WhatsApp inbox: voice calls and muted chats ------------------------------------------- */
+.wa-head-icon {
+  width: 32px; height: 32px; display: grid; place-items: center; flex: none;
+  border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface);
+  color: var(--text-secondary); cursor: pointer;
+}
+.wa-head-icon:hover:not(:disabled) { border-color: var(--border-hover); color: var(--text-primary); }
+.wa-head-icon:disabled { opacity: .5; cursor: not-allowed; }
+.wa-head-icon-on { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 45%, transparent); }
+.wa-thread-muted { display: inline-flex; color: var(--text-muted); }
+.wa-unread-muted { background: var(--bg-tertiary); color: var(--text-secondary); }
+.wa-bubble-call { border-left: 3px solid var(--success); }
+.wa-bubble-call-missed { border-left-color: var(--danger); }
+.wa-call-back { margin-top: 6px; display: inline-flex; align-items: center; gap: 4px; }
+
+.wa-call-dock {
+  position: fixed; right: 16px; bottom: 16px; z-index: 900;
+  display: flex; flex-direction: column; gap: 8px; width: min(440px, calc(100vw - 32px));
+}
+.wa-call-bar, .wa-call-ring {
+  display: flex; align-items: center; gap: 8px; padding: 10px 12px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+}
+.wa-call-ring { border-color: color-mix(in srgb, var(--success) 55%, var(--border)); }
+.wa-call-pulse {
+  width: 34px; height: 34px; flex: none; display: grid; place-items: center; border-radius: 50%;
+  background: color-mix(in srgb, var(--success) 18%, transparent); color: var(--success);
+}
+.wa-call-pulse-ring { animation: wa-ring 1.2s ease-in-out infinite; }
+@keyframes wa-ring { 0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--success) 45%, transparent); } 50% { box-shadow: 0 0 0 8px transparent; } }
+@media (prefers-reduced-motion: reduce) { .wa-call-pulse-ring { animation: none; } }
+.wa-call-who {
+  flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start;
+  border: 0; background: none; padding: 0; font: inherit; color: var(--text-primary); cursor: pointer; text-align: left;
+}
+.wa-call-who b, .wa-call-who span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wa-call-who span { font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.wa-call-btn {
+  flex: none; display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 52px; padding: 6px 6px 4px;
+  border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface);
+  color: var(--text-secondary); font: inherit; font-size: 10.5px; font-weight: 600; cursor: pointer;
+}
+.wa-call-btn:hover:not(:disabled) { border-color: var(--border-hover); color: var(--text-primary); }
+.wa-call-btn:disabled { opacity: .5; cursor: not-allowed; }
+.wa-call-btn-on { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 45%, transparent); }
+.wa-call-accept { background: var(--success); border-color: var(--success); color: #fff; }
+.wa-call-accept:hover:not(:disabled) { color: #fff; filter: brightness(1.08); }
+.wa-call-end { background: var(--danger); border-color: var(--danger); color: #fff; }
+.wa-call-end:hover:not(:disabled) { color: #fff; filter: brightness(1.08); }
+@media (max-width: 480px) {
+  .wa-call-btn span { display: none; }
+  .wa-call-btn { min-width: 40px; padding: 8px; }
+}
 .wa-side-tabs { display: flex; gap: 4px; margin: 4px 0 12px; border-bottom: 1px solid var(--border); }
 .wa-side-tab { flex: 1; min-height: 36px; border: 0; background: none; color: var(--text-secondary); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; border-bottom: 2px solid transparent; }
 .wa-side-tab-on { color: var(--text-primary); border-bottom-color: var(--primary); }

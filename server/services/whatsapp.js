@@ -102,9 +102,9 @@ class WhatsAppError extends Error {
 }
 
 /** One call to Meta. The token goes in here and nowhere else. */
-async function graph(pathname, { method = 'GET', body = null, raw = false } = {}) {
+async function graph(pathname, { method = 'GET', body = null, raw = false, version = null } = {}) {
     if (!configured()) throw new WhatsAppError('WhatsApp is not configured on this server');
-    const res = await fetch(`${GRAPH}${pathname}`, {
+    const res = await fetch(`${version ? `https://graph.facebook.com/${version}` : GRAPH}${pathname}`, {
         method,
         headers: {
             Authorization: `Bearer ${TOKEN()}`,

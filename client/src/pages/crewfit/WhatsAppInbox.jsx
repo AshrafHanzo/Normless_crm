@@ -9,6 +9,7 @@ import WaQuoteDrawer from './WaQuoteDrawer'
 import { WA_BRANDS } from './waBrand'
 import TicketDrawer from '../support/TicketDrawer'
 import { refOf } from '../support/ticket'
+import { useWaCalls, WaCallDock } from './WaCalls'
 
 const FILTERS = [
   { key: 'mine', label: 'Mine' },
@@ -217,6 +218,8 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
   // Files the server keeps under /uploads are served from the API, which is another origin in dev.
   const fileUrl = (u) => (u && u.startsWith('/') ? `${API_URL}${u}` : u)
   const [params, setParams] = useSearchParams()
+  // Voice calls: the call button, the ring for a customer's call, the in-call bar.
+  const calls = useWaCalls({ API, apiFetch, toast })
 
   const [config, setConfig] = useState(null)
   const [filter, setFilter] = useState(params.get('filter') || 'all')
@@ -564,6 +567,17 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
     return () => clearInterval(t)
   }, [])
 
+  // A call's line in the thread changes as the call goes (ringing → 4 min 10 s, or missed), which
+  // the poll for new messages cannot see, so the thread is re-read whole when calls change.
+  useEffect(() => {
+    if (!openId || !calls.version) return
+    apiFetch(`${API}/conversations/${openId}/messages`).then(all => {
+      if (!all || all.error || !all.messages) return
+      setMessages(list => [...all.messages, ...list.filter(x => x.id > (all.messages.at(-1)?.id || 0))])
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [calls.version])
+
   // Follow the conversation down as it grows, unless the person has scrolled up to read history.
   useEffect(() => {
     const el = feedRef.current
@@ -822,6 +836,22 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
     const r = await apiFetch(`/api/crewfit/orders/${order.id}`)
     if (!r || r.error) return toast.error(r?.error || 'Could not open that order')
     setOrderTarget(r)
+  }
+
+  /** Mute this chat for me: no badge from it. Unmuting brings its unread count back. */
+  const toggleMute = async () => {
+    const muted = !thread.muted
+    const r = await apiFetch(`${API}/conversations/${thread.id}/mute`, { method: 'PUT', body: JSON.stringify({ muted }) })
+    if (!r || r.error) return toast.error(r?.error || 'Could not change that')
+    setThread(t => (t && t.id === thread.id ? { ...t, muted } : t))
+    setConversations(list => list.map(c => (c.id === thread.id ? { ...c, muted } : c)))
+    loadConversations()
+  }
+
+  const startCall = async () => {
+    if (thread?.is_demo) return toast.info('This is the demo chat — calls only go to real customers.')
+    const asked = await calls.call(thread)
+    if (asked?.id) appendSent(asked)
   }
 
   const assign = async (username) => {
@@ -1209,7 +1239,8 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                                 : <span className="wa-pill" style={pillStyle('#34d399')}>Answered</span>)}
                           {!cf && c.open_ticket_ref && <span className="wa-pill" style={pillStyle('#60a5fa')}>{refOf({ ref_no: c.open_ticket_ref })}</span>}
                           <span className="wa-thread-owner">{c.assigned_to ? short(c.assigned_to) : 'Unassigned'}</span>
-                          {!!c.unread_count && <span className="wa-unread">{c.unread_count}</span>}
+                          {c.muted && <span className="wa-thread-muted" title="Muted for you"><Icon name="bellOff" size={12} /></span>}
+                          {!!c.unread_count && <span className={`wa-unread${c.muted ? ' wa-unread-muted' : ''}`}>{c.unread_count}</span>}
                         </span>
                       </span>
                     </button>
@@ -1263,6 +1294,19 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                   </button>
                 )}
                 <div className="wa-chat-actions">
+                  <button type="button" className="wa-head-icon" onClick={startCall}
+                    disabled={calls.busy || !!calls.active}
+                    title={calls.active ? 'You are on a call' : calls.settings && !calls.settings.enabled
+                      ? 'Call on WhatsApp (calling is not switched on for this number yet)' : 'Call on WhatsApp'}
+                    aria-label="Call on WhatsApp">
+                    <Icon name="phone" size={16} />
+                  </button>
+                  <button type="button" className={`wa-head-icon${thread.muted ? ' wa-head-icon-on' : ''}`} onClick={toggleMute}
+                    aria-pressed={!!thread.muted}
+                    title={thread.muted ? 'Muted for you — unread messages here do not count. Click to unmute.' : 'Mute this chat for you'}
+                    aria-label={thread.muted ? 'Unmute chat' : 'Mute chat'}>
+                    <Icon name={thread.muted ? 'bellOff' : 'bell'} size={16} />
+                  </button>
                   {thread.window_open ? (
                     thread.window_left_ms < 6 * 3600 * 1000 && (
                       <span className="wa-window-chip"><Icon name="clock" size={13} /> {windowLabel(thread.window_left_ms)}</span>
@@ -1334,7 +1378,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                   return (
                     <div key={m.id}>
                       {newDay && <div className="wa-day">{day(m.sent_at)}</div>}
-                      <div className={`wa-bubble${mine ? ' wa-bubble-out' : ''}${(m.sender_type === 'bot' || m.sender_type === 'ai') ? ' wa-bubble-bot' : ''}${m.sender_type === 'auto' ? ' wa-bubble-auto' : ''}${m.status === 'failed' ? ' wa-bubble-bad' : ''}`}>
+                      <div className={`wa-bubble${mine ? ' wa-bubble-out' : ''}${m.type === 'call' ? ` wa-bubble-call${/Missed|declined|Declined|no answer|failed/.test(m.body || '') ? ' wa-bubble-call-missed' : ''}` : ''}${(m.sender_type === 'bot' || m.sender_type === 'ai') ? ' wa-bubble-bot' : ''}${m.sender_type === 'auto' ? ' wa-bubble-auto' : ''}${m.status === 'failed' ? ' wa-bubble-bad' : ''}`}>
                         {m.media_url && /^image\//.test(m.media_mime || '') && (
                           <div className="wa-media-wrap">
                             <a href={fileUrl(m.media_url)} target="_blank" rel="noreferrer">
@@ -1351,6 +1395,9 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                             onOpen={() => m.media_url && setPreview({ url: fileUrl(m.media_url), name: m.media_name, mime: m.media_mime })} />
                         )}
                         {m.body && <div className="wa-text">{m.body}</div>}
+                        {m.type === 'call' && !mine && /Missed/.test(m.body || '') && !calls.active && (
+                          <button type="button" className="mini-btn wa-call-back" onClick={startCall}><Icon name="phone" size={12} /> Call back</button>
+                        )}
                         <div className="wa-meta">
                           {m.type === 'template' && <span>template</span>}
                           {mine && (m.sender_type === 'phone' ? <span>from the phone app</span> : m.sender_type === 'auto' ? <span>sent automatically</span> : m.sender_type === 'bot' ? <span>{cf ? 'menu' : 'bot'}</span>
@@ -1998,6 +2045,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
           loadActivity()
           if (saved?.sl_no) { setSideTab('orders'); toast.success(`CF-${saved.sl_no} is on this chat — send the summary from the Orders tab`) }
         }} />
+      <WaCallDock calls={calls} onOpen={(id) => id && id !== openId && openConversation(id)} />
     </div>
   )
 }

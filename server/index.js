@@ -1863,6 +1863,37 @@ async function ensureWaLinesSchema() {
                 value TEXT,
                 PRIMARY KEY (line_id, key)
             );
+            -- WhatsApp voice calls, both ways. The audio never touches the server; this is the
+            -- record (and which browser picked up). The SDPs are kept only while the call is set up.
+            CREATE TABLE IF NOT EXISTS wa_calls (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                line_id INTEGER NOT NULL REFERENCES wa_lines(id),
+                conversation_id INTEGER REFERENCES wa_conversations(id) ON DELETE CASCADE,
+                message_id INTEGER,
+                wacid TEXT UNIQUE,                   -- WhatsApp's call id
+                direction TEXT NOT NULL,             -- 'in' (customer called) | 'out' (we called)
+                -- calling | ringing | connecting | accepted | completed | missed | rejected | no_answer | failed
+                status TEXT NOT NULL DEFAULT 'ringing',
+                started_by TEXT,                     -- who placed an outgoing call
+                answered_by TEXT,                    -- who took an incoming one
+                offer_sdp TEXT,
+                answer_sdp TEXT,
+                answered_at TIMESTAMPTZ,
+                ended_at TIMESTAMPTZ,
+                duration_sec INTEGER,
+                error TEXT,
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS wa_calls_live_idx ON wa_calls (line_id, created_at) WHERE ended_at IS NULL;
+            CREATE INDEX IF NOT EXISTS wa_calls_thread_idx ON wa_calls (conversation_id, id);
+            -- A chat somebody has muted: no sound, no badge for them. Per person, not per chat.
+            CREATE TABLE IF NOT EXISTS wa_conversation_mutes (
+                conversation_id INTEGER NOT NULL REFERENCES wa_conversations(id) ON DELETE CASCADE,
+                username TEXT NOT NULL,              -- lower-cased admin_users.username
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (conversation_id, username)
+            );
         `);
     } catch (err) {
         console.error('ensureWaLinesSchema error:', err.message);

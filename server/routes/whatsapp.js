@@ -37,6 +37,7 @@ const lines = require('../services/wa-line');
 const nlShop = require('../services/nl-shop');
 const nlBot = require('../services/nl-bot');
 const nlHandover = require('../services/nl-handover');
+const calls = require('../services/wa-calls');
 
 const router = express.Router();
 
@@ -129,6 +130,11 @@ async function handleChange(change, value) {
     if (change.field === 'history') { await inTurn(() => lines.run(line, () => receiveHistory(value))); return; }
     if (change.field === 'smb_app_state_sync') { await inTurn(() => lines.run(line, () => receiveContacts(value))); return; }
     if (change.field === 'account_update') { await connectSvc.accountUpdate(value); return; }
+    // Voice calls: their own field, with their own `statuses` that are not message ticks.
+    if (change.field === 'calls') {
+        await calls.receive(value, { threadFor: (phone, name) => threadFor(phone, name, null) });
+        return;
+    }
     const profileByPhone = new Map(
         (value.contacts || []).map(c => [c.wa_id, c?.profile?.name || null]));
 
@@ -150,6 +156,9 @@ function describe(message) {
         case 'text': return message.text?.body || '';
         case 'button': return message.button?.text || '';
         case 'interactive':
+            if (message.interactive?.type === 'call_permission_reply') {
+                return calls.describePermissionReply(message.interactive.call_permission_reply);
+            }
             return message.interactive?.button_reply?.title
                 || message.interactive?.list_reply?.title || '';
         case 'image': return message.image?.caption || '📷 Photo';
@@ -209,7 +218,7 @@ async function receiveMessage(message, profileName) {
     // Was this the opening message? Only then does a menu start; mid-conversation it would be
     // an interruption.
     const isFirst = (await db.query(
-        `SELECT COUNT(*)::int n FROM wa_messages WHERE conversation_id = $1 AND direction = 'in'`,
+        `SELECT COUNT(*)::int n FROM wa_messages WHERE conversation_id = $1 AND direction = 'in' AND type <> 'call'`,
         [conversation.id])).rows[0].n <= 1;
 
     await db.query(
@@ -239,6 +248,9 @@ async function receiveMessage(message, profileName) {
     }
 
     wa.markRead(message.id);          // not awaited: blue ticks are not worth a delay
+
+    // Allow / Don't allow on a call permission request: written down, never answered by a bot.
+    if (message.interactive?.type === 'call_permission_reply') return;
 
     // Normless has its own bot (nl-bot); Crewfit's menu, assistant and away message must never
     // answer a Normless customer.
@@ -789,7 +801,9 @@ router.get('/conversations', async (req, res) => {
         const tally = await db.query(
             `SELECT COUNT(*) FILTER (WHERE c.status = 'open') AS open,
                     COUNT(*) FILTER (WHERE c.status = 'open' AND c.assigned_to IS NULL) AS unassigned,
-                    COALESCE(SUM(c.unread_count), 0) AS unread,
+                    -- A chat this person muted adds nothing to their badge.
+                    COALESCE(SUM(c.unread_count) FILTER (WHERE NOT EXISTS (SELECT 1 FROM wa_conversation_mutes mu
+                              WHERE mu.conversation_id = c.id AND mu.username = ${me})), 0) AS unread,
                     COUNT(*) FILTER (WHERE c.status = 'open' AND c.mode = 'human' AND ${LAST_DIRECTION} = 'in')::int AS waiting,
                     COUNT(*) FILTER (WHERE c.status = 'open' AND c.mode IN ('flow', 'ai'))::int AS bot,
                     COUNT(*) FILTER (WHERE c.status = 'open' AND LOWER(COALESCE(c.assigned_to, '')) = ${me})::int AS mine,
@@ -797,12 +811,25 @@ router.get('/conversations', async (req, res) => {
                     COUNT(*) FILTER (WHERE c.status = 'closed')::int AS closed
                ${LIST_FROM} WHERE ${vis}`, tallyParams);
 
-        res.json({ conversations: rows.rows.map(shapeConversation), tally: tally.rows[0] });
+        const muted = await mutedFor(req, rows.rows.map(r => r.id));
+        res.json({
+            conversations: rows.rows.map(r => ({ ...shapeConversation(r), muted: muted.has(r.id) })),
+            tally: tally.rows[0],
+        });
     } catch (err) {
         console.error('whatsapp conversations error:', err);
         res.status(500).json({ error: 'Could not load the conversations' });
     }
 });
+
+/** Which of these chats this person has muted. */
+async function mutedFor(req, ids) {
+    if (!ids.length) return new Set();
+    const r = await db.query(
+        `SELECT conversation_id FROM wa_conversation_mutes WHERE username = $1 AND conversation_id = ANY($2::int[])`,
+        [String(req.user?.username || '').toLowerCase(), ids]);
+    return new Set(r.rows.map(x => x.conversation_id));
+}
 
 /** One thread's header: who it is, what we know about them, who it belongs to. */
 async function loadConversation(req, id) {
@@ -815,7 +842,8 @@ async function loadConversation(req, id) {
                 TO_CHAR(l.needed_by, 'YYYY-MM-DD') AS needed_by, l.quoted_amount, l.received_amount
            ${LIST_FROM}
           WHERE c.id = $1 AND ${visibility(req, params)}`, params);
-    return r.rows[0] ? shapeConversation(r.rows[0]) : null;
+    if (!r.rows[0]) return null;
+    return { ...shapeConversation(r.rows[0]), muted: (await mutedFor(req, [r.rows[0].id])).size > 0 };
 }
 
 router.get('/conversations/:id', async (req, res) => {
@@ -1032,6 +1060,237 @@ router.patch('/conversations/:id', async (req, res) => {
         console.error('whatsapp update error:', err);
         res.status(500).json({ error: 'Could not update that conversation' });
     }
+});
+
+/** Mute or unmute a chat for the person asking: no sound, no notification, no badge from it. */
+router.put('/conversations/:id/mute', async (req, res) => {
+    try {
+        const conversation = await loadConversation(req, req.params.id);
+        if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
+        const me = String(req.user?.username || '').toLowerCase();
+        if (req.body?.muted) {
+            await db.query(`INSERT INTO wa_conversation_mutes (conversation_id, username) VALUES ($1, $2)
+                            ON CONFLICT DO NOTHING`, [conversation.id, me]);
+        } else {
+            await db.query(`DELETE FROM wa_conversation_mutes WHERE conversation_id = $1 AND username = $2`, [conversation.id, me]);
+        }
+        res.json({ muted: !!req.body?.muted });
+    } catch (err) {
+        console.error('whatsapp mute error:', err);
+        res.status(500).json({ error: 'Could not change that' });
+    }
+});
+
+/* ── Voice calls ─────────────────────────────────────────────────────────────────────────────
+   Signalling only: the browser makes the WebRTC offer or answer, these routes pass it to Meta,
+   and the audio goes straight between the browser and the customer's phone. See wa-calls.js
+   for Meta's rules. */
+
+const callError = (res, err, fallback) => {
+    if (err instanceof wa.WhatsAppError) {
+        return res.status(err.code === 138006 ? 409 : 502).json({ error: err.message, code: err.code, need_permission: err.code === 138006 });
+    }
+    console.error(fallback, err);
+    return res.status(500).json({ error: fallback });
+};
+
+/** A call row as the browser sees it. The SDP is handed only to the person on the call. */
+const shapeCall = (row, req, conversation = null) => {
+    const me = String(req.user?.username || '').toLowerCase();
+    const mine = [row.started_by, row.answered_by].some(u => String(u || '').toLowerCase() === me);
+    return {
+        id: row.id, conversation_id: row.conversation_id, direction: row.direction, status: row.status,
+        started_by: row.started_by, answered_by: row.answered_by, answered_at: row.answered_at,
+        ended_at: row.ended_at, duration_sec: row.duration_sec, error: row.error, created_at: row.created_at,
+        mine,
+        ...(mine ? { answer_sdp: row.direction === 'out' ? row.answer_sdp : undefined } : {}),
+        ...(row.direction === 'in' && row.status === 'ringing' ? { offer_sdp: row.offer_sdp } : {}),
+        ...(conversation ? { display_name: conversation.display_name, phone_pretty: conversation.phone_pretty } : {}),
+    };
+};
+
+/** A call this person may act on: on a chat they can see, on this line. */
+async function loadCall(req, id) {
+    const params = [id];
+    const r = await db.query(
+        `SELECT w.*, c.id AS cid FROM wa_calls w JOIN wa_conversations c ON c.id = w.conversation_id
+          WHERE w.id = $1 AND ${visibility(req, params)}`, params);
+    return r.rows[0] || null;
+}
+
+/** Is calling switched on for this number? Asked by the inbox once, cached on the server. */
+router.get('/calls/settings', async (req, res) => {
+    try {
+        if (!wa.configured()) return res.json({ enabled: false, status: 'NOT_CONFIGURED', canManage: !!req.waManager });
+        const s = await calls.getSettings({ fresh: req.query.fresh === '1' });
+        res.json({ enabled: s.status === 'ENABLED', status: s.status || 'NOT_SET',
+            callback_permission: s.callback_permission_status || null, canManage: !!req.waManager });
+    } catch (err) {
+        res.json({ enabled: false, status: 'ERROR', error: err.message, canManage: !!req.waManager });
+    }
+});
+
+router.put('/calls/settings', async (req, res) => {
+    if (!req.waManager) return res.status(403).json({ error: 'Only a WhatsApp manager can switch calling on or off' });
+    try {
+        const s = await calls.setEnabled(!!req.body?.enabled);
+        res.json({ enabled: s.status === 'ENABLED', status: s.status, callback_permission: s.callback_permission_status || null, canManage: true });
+    } catch (err) { callError(res, err, 'Could not change the calling setting'); }
+});
+
+/**
+ * What the inbox polls for: customer calls ringing on chats this person can see, and any call
+ * of their own still going.
+ */
+router.get('/calls/live', async (req, res) => {
+    try {
+        await calls.sweepStale();
+        const params = [];
+        const vis = visibility(req, params);
+        params.push(String(req.user?.username || '').toLowerCase());
+        const me = `$${params.length}`;
+        const r = await db.query(
+            `SELECT w.*, k.phone, k.profile_name, l.name AS lead_name,
+                    NULLIF(TRIM(CONCAT(cu.first_name, ' ', cu.last_name)), '') AS customer_name
+               FROM wa_calls w
+               JOIN wa_conversations c ON c.id = w.conversation_id
+               JOIN wa_contacts k ON k.id = c.contact_id
+               LEFT JOIN crewfit_leads l ON l.id = k.lead_id
+               LEFT JOIN customers cu ON cu.id = k.customer_id
+              WHERE ${vis} AND w.ended_at IS NULL
+                AND ((w.direction = 'in' AND w.status = 'ringing')
+                     OR LOWER(COALESCE(w.started_by, '')) = ${me} OR LOWER(COALESCE(w.answered_by, '')) = ${me})
+              ORDER BY w.id DESC LIMIT 10`, params);
+        res.json({
+            calls: r.rows.map(row => shapeCall(row, req, {
+                display_name: row.lead_name || row.customer_name || row.profile_name || wa.prettyPhone(row.phone),
+                phone_pretty: wa.prettyPhone(row.phone),
+            })),
+        });
+    } catch (err) {
+        console.error('whatsapp live calls error:', err);
+        res.status(500).json({ error: 'Could not check for calls' });
+    }
+});
+
+/** The calls on one chat, for the thread's call lines. */
+router.get('/conversations/:id/calls', async (req, res) => {
+    try {
+        const conversation = await loadConversation(req, req.params.id);
+        if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
+        const r = await db.query(`SELECT * FROM wa_calls WHERE conversation_id = $1 ORDER BY id DESC LIMIT 200`, [conversation.id]);
+        res.json({ calls: r.rows.map(row => shapeCall(row, req)) });
+    } catch (err) {
+        console.error('whatsapp calls error:', err);
+        res.status(500).json({ error: 'Could not load the calls' });
+    }
+});
+
+/** May we ring this customer? */
+router.get('/conversations/:id/call-permission', async (req, res) => {
+    try {
+        const conversation = await loadConversation(req, req.params.id);
+        if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
+        if (isDemo(conversation)) return demoRefusal(res);
+        res.json({ ...(await calls.permission(conversation.phone)), window_open: conversation.window_open });
+    } catch (err) { callError(res, err, 'Could not check the call permission'); }
+});
+
+/** Ask the customer, in the chat, whether we may call them. Only inside the 24-hour window. */
+router.post('/conversations/:id/call-permission', async (req, res) => {
+    try {
+        const conversation = await loadConversation(req, req.params.id);
+        if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
+        if (isDemo(conversation)) return demoRefusal(res);
+        if (!conversation.window_open) {
+            return res.status(409).json({ error: 'This chat is past the 24-hour window — the customer has to write first (or call us) before we can ask to call.', window_closed: true });
+        }
+        const text = trim(req.body?.body) || 'May we give you a quick WhatsApp call about this?';
+        const wamid = await calls.sendPermissionRequest(conversation.phone, text);
+        const row = await db.query(
+            `INSERT INTO wa_messages (conversation_id, wamid, direction, sender_type, sender_user, type, body, status)
+             VALUES ($1,$2,'out','user',$3,'interactive',$4,'sent')
+             RETURNING id, wamid, direction, sender_type, sender_user, type, body, status, error, sent_at`,
+            [conversation.id, wamid, req.user?.username || null, `📞 Asked to call: ${text}`]);
+        await db.query(`UPDATE wa_conversations SET last_message_at = CURRENT_TIMESTAMP, last_message_preview = $2 WHERE id = $1`,
+            [conversation.id, '📞 Asked permission to call']);
+        res.status(201).json({ message: row.rows[0] });
+    } catch (err) { callError(res, err, 'Could not send the call permission request'); }
+});
+
+/** Ring the customer. `sdp` is the browser's offer, with its ICE candidates gathered in. */
+router.post('/conversations/:id/calls', async (req, res) => {
+    try {
+        const conversation = await loadConversation(req, req.params.id);
+        if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
+        if (isDemo(conversation)) return demoRefusal(res);
+        const sdp = String(req.body?.sdp || '');
+        if (!/^v=0/.test(sdp)) return res.status(400).json({ error: 'No call offer was sent' });
+        const row = await calls.startOutbound({ conversation, username: req.user?.username || null, sdp });
+        await db.query(`UPDATE wa_conversations SET assigned_to = COALESCE(assigned_to, $2) WHERE id = $1`,
+            [conversation.id, req.user?.username || null]);
+        res.status(201).json({ call: shapeCall(row, req) });
+    } catch (err) { callError(res, err, 'Could not place the call'); }
+});
+
+/** One call's state — the caller polls this for WhatsApp's answer and for the call ending. */
+router.get('/calls/:id', async (req, res) => {
+    try {
+        const row = await loadCall(req, req.params.id);
+        if (!row) return res.status(404).json({ error: 'Call not found' });
+        res.json({ call: shapeCall(row, req) });
+    } catch (err) {
+        console.error('whatsapp call error:', err);
+        res.status(500).json({ error: 'Could not load that call' });
+    }
+});
+
+/** Pick up a ringing customer call (step 1: claim it and hand WhatsApp our answer). */
+router.post('/calls/:id/pre-accept', async (req, res) => {
+    try {
+        const row = await loadCall(req, req.params.id);
+        if (!row) return res.status(404).json({ error: 'Call not found' });
+        const sdp = String(req.body?.sdp || '');
+        if (!/^v=0/.test(sdp)) return res.status(400).json({ error: 'No call answer was sent' });
+        const claimed = await calls.preAccept({ callId: row.id, username: req.user?.username || null, sdp });
+        if (!claimed) {
+            const now = await loadCall(req, row.id);
+            return res.status(409).json({ error: now?.answered_by ? `${String(now.answered_by).split('@')[0]} already took this call` : 'This call has ended' });
+        }
+        res.json({ call: shapeCall(claimed, req) });
+    } catch (err) { callError(res, err, 'Could not answer the call'); }
+});
+
+/** Step 2: our side is connected; WhatsApp joins the customer in. */
+router.post('/calls/:id/accept', async (req, res) => {
+    try {
+        const row = await loadCall(req, req.params.id);
+        if (!row) return res.status(404).json({ error: 'Call not found' });
+        if (String(row.answered_by || '').toLowerCase() !== String(req.user?.username || '').toLowerCase()) {
+            return res.status(409).json({ error: 'Somebody else took this call' });
+        }
+        if (row.ended_at) return res.status(409).json({ error: 'This call has ended' });
+        res.json({ call: shapeCall(await calls.accept({ callRow: row }), req) });
+    } catch (err) { callError(res, err, 'Could not connect the call'); }
+});
+
+router.post('/calls/:id/reject', async (req, res) => {
+    try {
+        const row = await loadCall(req, req.params.id);
+        if (!row) return res.status(404).json({ error: 'Call not found' });
+        if (row.direction !== 'in' || row.ended_at) return res.json({ ok: true });
+        await calls.reject({ callRow: row, username: req.user?.username || null });
+        res.json({ ok: true });
+    } catch (err) { callError(res, err, 'Could not decline the call'); }
+});
+
+router.post('/calls/:id/hangup', async (req, res) => {
+    try {
+        const row = await loadCall(req, req.params.id);
+        if (!row) return res.status(404).json({ error: 'Call not found' });
+        if (!row.ended_at) await calls.hangUp({ callRow: row });
+        res.json({ call: shapeCall((await loadCall(req, row.id)) || row, req) });
+    } catch (err) { callError(res, err, 'Could not hang up'); }
 });
 
 /** Who a conversation can be handed to. */
