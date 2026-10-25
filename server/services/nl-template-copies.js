@@ -88,6 +88,18 @@ function suggestions(templates) {
 
 const baseName = (name) => String(name).replace(/\d{13}$/, '').replace(/_+$/, '');
 
+const chatCode = (digits) => `chat${digits}`;
+/** The fixed short links a copy's static buttons point at (a WhatsApp chat with the team). */
+async function ensureStaticLinks(components) {
+    for (const c of components) for (const b of c.buttons || []) {
+        const chat = (b.url || '').match(WA_BUTTON);
+        if (chat) {
+            await db.query(`INSERT INTO nl_links (code, url, kind) VALUES ($1,$2,'chat') ON CONFLICT (code) DO NOTHING`,
+                [chatCode(chat[1]), `https://wa.me/${chat[1]}`]);
+        }
+    }
+}
+
 /** The new template's parts: everything as it was, links swapped for ours. */
 function copyComponents(components, imageHandle) {
     return components.map(c => {
@@ -105,7 +117,8 @@ function copyComponents(components, imageHandle) {
                         return { type: 'URL', text: b.text, url: `${BUTTON_BASE()}{{1}}`, example: [`${BUTTON_BASE()}${EXAMPLE_CODE}`] };
                     }
                     const chat = (b.url || '').match(WA_BUTTON);
-                    if (b.type === 'URL' && chat) return { type: 'URL', text: b.text, url: `https://wa.me/${chat[1]}` };
+                    // Meta refuses wa.me links on buttons, so the chat link goes through /go too.
+                    if (b.type === 'URL' && chat) return { type: 'URL', text: b.text, url: `${BUTTON_BASE()}${chatCode(chat[1])}` };
                     if (b.type === 'URL') return { type: 'URL', text: b.text, url: b.url, ...(b.example ? { example: b.example } : {}) };
                     if (b.type === 'PHONE_NUMBER') return { type: 'PHONE_NUMBER', text: b.text, phone_number: b.phone_number };
                     if (b.type === 'COPY_CODE') return { type: 'COPY_CODE', example: Array.isArray(b.example) ? b.example[0] : b.example };
@@ -166,6 +179,7 @@ async function submit(lineId) {
     for (const t of todo) {
         const components = copyComponents(t.components, handle);
         try {
+            await ensureStaticLinks(t.components);
             const created = await lines.run('normless', () => wa.graph(`/${wa.wabaId()}/message_templates`, {
                 method: 'POST', body: { name: t.name, language: t.language, category: t.category, components },
             }));
@@ -187,4 +201,4 @@ async function submit(lineId) {
     return results;
 }
 
-module.exports = { suggest, suggestions, plan, submit, copyComponents, baseName };
+module.exports = { suggest, suggestions, plan, submit, copyComponents, ensureStaticLinks, baseName };
