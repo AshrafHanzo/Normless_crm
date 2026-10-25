@@ -119,8 +119,20 @@ function RangeBar({ brand, data, setRange }) {
 }
 
 /** The page frame: the same top bar as the inbox and settings, with Dashboard selected. */
-function Frame({ brand, canManage, me, children }) {
+/** What this person may open beside the inbox: each is its own permission (admins have all). */
+function useWaGrants(brand) {
+  const { user } = useAuth()
+  const all = user?.role === 'owner' || user?.role === 'admin'
+  const cf = brand.key === 'crewfit'
+  return {
+    dashboard: all || !!user?.[cf ? 'can_view_wa_dashboard' : 'can_view_wa_nl_dashboard'],
+    settings: all || !!user?.[cf ? 'can_manage_wa_settings' : 'can_manage_wa_nl_settings'],
+  }
+}
+
+function Frame({ brand, me, children }) {
   const { openMenu } = useMainMenu()
+  const can = useWaGrants(brand)
   return (
     <WaBrandContext.Provider value={brand}>
       <div className="page wdb-page">
@@ -131,9 +143,9 @@ function Frame({ brand, canManage, me, children }) {
           <h1>{brand.key === 'crewfit' ? 'WhatsApp' : `${brand.name} WhatsApp`}</h1>
           <nav className="wa-seg" aria-label="WhatsApp">
             <NavLink to={brand.path} end className="wa-seg-item">Inbox</NavLink>
-            {(canManage || brand.key === 'normless') && <NavLink to={`${brand.path}/dashboard`} className="wa-seg-item">Dashboard</NavLink>}
+            {can.dashboard && <NavLink to={`${brand.path}/dashboard`} className="wa-seg-item">Dashboard</NavLink>}
             {brand.key === 'crewfit' && <NavLink to={`${brand.path}/me`} className="wa-seg-item">{me ? 'My performance' : 'Performance'}</NavLink>}
-            {canManage && <NavLink to={`${brand.path}/settings`} className="wa-seg-item">Settings</NavLink>}
+            {can.settings && <NavLink to={`${brand.path}/settings`} className="wa-seg-item">Settings</NavLink>}
           </nav>
         </header>
         <div className="wdb-body">{children}</div>
@@ -394,12 +406,9 @@ function CrewfitDash({ d, brand }) {
 
 export default function WhatsAppDashboard({ brand: brandKey = 'crewfit' }) {
   const brand = WA_BRANDS[brandKey] || WA_BRANDS.crewfit
-  const { user } = useAuth()
   const { data, error, loading, setRange } = useDash(`${brand.api}/dashboard`)
-  const isAdmin = user?.role === 'owner' || user?.role === 'admin'
-  const canManage = isAdmin || !!user?.[brand.key === 'crewfit' ? 'can_manage_whatsapp' : 'can_manage_wa_normless']
   return (
-    <Frame brand={brand} canManage={canManage}>
+    <Frame brand={brand}>
       <div className="wdb-head">
         <div>
           <h2>Dashboard</h2>
@@ -419,13 +428,11 @@ export function WhatsAppMyPerformance() {
   const brand = WA_BRANDS.crewfit
   const { user } = useAuth()
   const { data: d, error, loading, setRange } = useDash(`${brand.api}/dashboard/me`)
-  const isAdmin = user?.role === 'owner' || user?.role === 'admin'
-  const canManage = isAdmin || !!user?.can_manage_whatsapp
   const mine = d && d.user.username.toLowerCase() === String(user?.username || '').toLowerCase()
   const weeks = (d?.weekly || []).map(w => ({ key: w.week, label: fmtDay(w.week), total: w.units, top: w.orders || '', title: `Week of ${fmtDay(w.week)}: ${w.orders} orders, ${w.units} units`, parts: [{ value: w.units, cls: 'c-bot' }] }))
   const month = d ? new Date(`${d.range.from}T00:00:00`).toLocaleDateString('en-IN', { month: 'long' }) : ''
   return (
-    <Frame brand={brand} canManage={canManage} me>
+    <Frame brand={brand} me>
       {error ? <div className="was-card"><p>{error}</p></div> : !d ? <div className="loader"><div className="spinner" /></div> : (
         <div className={`wdb-content${loading ? ' wdb-loading' : ''}`}>
           <div className="wdb-head">

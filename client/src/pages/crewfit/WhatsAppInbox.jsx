@@ -1029,17 +1029,17 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
           <span className="wa-count"><b>{tally.unread}</b> unread</span>
         </div>}
         <div className="wa-topbar-end">
-          {config?.canManage && menuFlow && (
+          {config?.canSettings && menuFlow && (
             <label className="wa-menu-switch" title="Whether a new chat is answered by the menu first. Outside working hours it always is, if that is set in Settings › Working hours.">
               <button type="button" role="switch" aria-checked={!!menuFlow.is_active} className={`toggle${menuFlow.is_active ? ' on' : ''}`}
                 onClick={() => toggleMenu(!menuFlow.is_active)}><span /></button>
               <span>{menuFlow.is_active ? 'Menu answers new chats' : 'Menu off — new chats come to you'}</span>
             </label>
           )}
-          {config?.canManage
+          {config?.canDashboard
             ? <Link to={`${brand.path}/dashboard`} className="btn btn-secondary btn-sm"><Icon name="trending" size={14} /> Dashboard</Link>
             : cf && <Link to={`${brand.path}/me`} className="btn btn-secondary btn-sm"><Icon name="trending" size={14} /> My performance</Link>}
-          {config?.canManage && (
+          {config?.canSettings && (
             <Link to={`${brand.path}/settings`} className="btn btn-secondary btn-sm">
               <Icon name="settings" size={14} /> Settings
             </Link>
@@ -1384,7 +1384,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                       <div className="wa-pop">
                         {!templates.length && (
                           <p className="wa-snippet-none">
-                            No approved templates yet.{config?.canManage && (cf
+                            No approved templates yet.{config?.canSettings && (cf
                               ? <> Sync them in <Link to={`${brand.path}/settings/templates`}>Settings</Link>.</>
                               : <> <button type="button" className="mini-btn" onClick={syncTemplates}>Sync from Meta</button></>)}
                           </p>

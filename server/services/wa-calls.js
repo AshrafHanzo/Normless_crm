@@ -49,7 +49,8 @@ const CALL_ERRORS = {
     138014: 'WhatsApp has paused calling on this number because of low call quality.',
     138015: 'WhatsApp will not switch calling on for this number. It needs a messaging limit of 2,000 a day or more, and cannot be a number shared with the WhatsApp Business app (Coexistence).',
     138017: 'The customer has already allowed calls permanently — you can just call.',
-    138018: 'This number does not meet WhatsApp’s calling requirements yet.',
+    // Meta: calling can't be switched on until an app on the WhatsApp account subscribes to the `calls` webhook field.
+    138018: 'WhatsApp won’t switch calling on yet: in the Meta app, subscribe the webhook to the “calls” field (WhatsApp › Configuration › Webhook fields), then try again.',
     131030: 'This number is not in the test number’s allowed list.',
 };
 

@@ -575,8 +575,8 @@ async function threadFor(phone, profileName, referral) {
  * is. Each brand has its own pair of grants.
  */
 const GRANTS = {
-    crewfit: { view: 'can_view_whatsapp', manage: 'can_manage_whatsapp' },
-    normless: { view: 'can_view_wa_normless', manage: 'can_manage_wa_normless' },
+    crewfit: { view: 'can_view_whatsapp', manage: 'can_manage_whatsapp', dashboard: 'can_view_wa_dashboard', settings: 'can_manage_wa_settings' },
+    normless: { view: 'can_view_wa_normless', manage: 'can_manage_wa_normless', dashboard: 'can_view_wa_nl_dashboard', settings: 'can_manage_wa_nl_settings' },
 };
 router.use(async (req, res, next) => {
     try {
@@ -584,6 +584,9 @@ router.use(async (req, res, next) => {
         if (!grants) return res.status(404).json({ error: 'No such WhatsApp inbox' });
         if (!await hasPermission(req, grants.view)) return res.status(403).json({ error: 'Access denied' });
         req.waManager = await hasPermission(req, grants.manage);
+        // Seeing the line's numbers and changing its settings are grants of their own.
+        req.waDashboard = await hasPermission(req, grants.dashboard);
+        req.waSettings = await hasPermission(req, grants.settings);
         lines.resume(req, next);
     } catch (err) { next(err); }
 });
@@ -680,7 +683,7 @@ router.post('/connect/disconnect', adminOnly, async (req, res) => {
 
 // Settings: the menu, templates, catalogue, team, assignment and statuses. Managers only.
 router.use('/admin', (req, res, next) =>
-    (req.waManager ? next() : res.status(403).json({ error: 'Only a WhatsApp manager can change the settings' })),
+    (req.waSettings ? next() : res.status(403).json({ error: 'You don’t have access to WhatsApp settings' })),
     require('./whatsapp-settings'));
 
 /** Whether Meta still accepts our token — the inbox shows a banner when it does not. */
@@ -694,7 +697,7 @@ router.get('/config', (req, res) => {
     res.json({
         configured: wa.configured(),
         brand: req.waLine?.brand,
-        canManage: !!req.waManager,
+        canManage: !!req.waManager, canSettings: !!req.waSettings, canDashboard: !!req.waDashboard,
         canConnect: ['admin', 'owner'].includes(req.user?.role),
         windowHours: wa.WINDOW_HOURS,
         maxUploadMb: wa.MAX_MEDIA_MB,
@@ -760,11 +763,10 @@ router.get('/badge', async (req, res) => {
    The whole line's numbers are for managers and admins; on Crewfit, everyone has their own page. */
 
 const dashboard = require('../services/wa-dashboard');
-const isAdminRole = (req) => ['owner', 'admin'].includes(req.user?.role);
 
 router.get('/dashboard', async (req, res) => {
     try {
-        if (!req.waManager && !isAdminRole(req)) return res.status(403).json({ error: 'The dashboard is for WhatsApp managers' });
+        if (!req.waDashboard) return res.status(403).json({ error: 'You don’t have access to the WhatsApp dashboard' });
         const lineId = req.waLine.id;
         res.json(req.waLine.brand === 'normless' ? await dashboard.normless(lineId, req.query) : await dashboard.crewfit(lineId, req.query));
     } catch (err) {
@@ -777,8 +779,8 @@ router.get('/dashboard/me', async (req, res) => {
     try {
         if (req.waLine.brand !== 'crewfit') return res.status(404).json({ error: 'Not part of this inbox' });
         // Someone else's page: only for managers and admins (from the team table).
-        const whose = req.query.user && (req.waManager || isAdminRole(req)) ? String(req.query.user) : req.user?.username;
-        res.json({ ...(await dashboard.myPerformance(req.waLine.id, whose, req.query)), canSeeTeam: !!(req.waManager || isAdminRole(req)) });
+        const whose = req.query.user && req.waDashboard ? String(req.query.user) : req.user?.username;
+        res.json({ ...(await dashboard.myPerformance(req.waLine.id, whose, req.query)), canSeeTeam: !!req.waDashboard });
     } catch (err) {
         console.error('whatsapp my performance error:', err);
         res.status(500).json({ error: 'Could not work out the numbers' });
@@ -1184,7 +1186,7 @@ router.get('/calls/settings', async (req, res) => {
 });
 
 router.put('/calls/settings', async (req, res) => {
-    if (!req.waManager) return res.status(403).json({ error: 'Only a WhatsApp manager can switch calling on or off' });
+    if (!req.waSettings) return res.status(403).json({ error: 'Only someone with WhatsApp settings access can switch calling on or off' });
     try {
         const s = await calls.setEnabled(!!req.body?.enabled);
         res.json({ enabled: s.status === 'ENABLED', status: s.status, callback_permission: s.callback_permission_status || null, canManage: true });
@@ -2037,6 +2039,11 @@ router.get('/quick-replies', async (req, res) => {
     }
 });
 
+/** Changing the line's setup — the menu, its settings, templates — is the Settings grant. */
+function settingsOnly(req, res, next) {
+    return req.waSettings ? next() : res.status(403).json({ error: 'You don’t have access to WhatsApp settings' });
+}
+
 const manager = (req, res, next) =>
     (req.waManager ? next() : res.status(403).json({ error: 'Only a manager can change the saved replies' }));
 
@@ -2153,7 +2160,7 @@ router.get('/flows', async (req, res) => {
     }
 });
 
-router.put('/flows/:key', manager, async (req, res) => {
+router.put('/flows/:key', settingsOnly, async (req, res) => {
     try {
         const sets = [];
         const params = [req.params.key];
@@ -2325,7 +2332,7 @@ router.get('/settings', async (req, res) => {
     }
 });
 
-router.put('/settings', manager, async (req, res) => {
+router.put('/settings', settingsOnly, async (req, res) => {
     try {
         if ('ai_enabled' in (req.body || {})) {
             const on = !!req.body.ai_enabled;
@@ -2364,7 +2371,7 @@ router.get('/templates', async (req, res) => {
     }
 });
 
-router.post('/templates/sync', manager, async (req, res) => {
+router.post('/templates/sync', settingsOnly, async (req, res) => {
     try {
         if (!wa.configured()) return res.status(503).json({ error: 'WhatsApp is not configured on this server' });
         const templates = await wa.fetchTemplates();

@@ -22,8 +22,8 @@ const router = express.Router();
 
 const { DEFAULTS, readSettings } = require('../services/nl-settings');
 
-const manager = (req, res, next) => (req.waManager ? next()
-    : res.status(403).json({ error: 'Only a WhatsApp manager can change these settings' }));
+const manager = (req, res, next) => (req.waSettings ? next()
+    : res.status(403).json({ error: 'You don’t have access to WhatsApp settings' }));
 const safeJson = (v) => { try { return JSON.parse(v || 'null'); } catch { return null; } };
 
 /** Each section is cleaned to the shape it should have; anything else is dropped. */
@@ -60,7 +60,7 @@ const CLEAN = {
 router.get('/settings', async (req, res) => {
     try {
         res.json({
-            settings: await readSettings(req.waLine.id), canEdit: !!req.waManager,
+            settings: await readSettings(req.waLine.id), canEdit: !!req.waSettings,
             // Whether the bot can actually answer: it needs Anthropic's key on the server.
             botReady: !!process.env.ANTHROPIC_API_KEY, botModel: nlBot.MODEL,
         });
@@ -255,7 +255,7 @@ function buildComponents(b, { imageHandle = null } = {}) {
 router.get('/templates', async (req, res) => {
     try {
         const r = await db.query(`SELECT ${TEMPLATE_FIELDS} FROM wa_templates WHERE line_id = $1 ORDER BY LOWER(name), language`, [req.waLine.id]);
-        res.json({ templates: r.rows.map(shapeTemplate), canEdit: !!req.waManager, connected: wa.configured() && !!wa.wabaId() });
+        res.json({ templates: r.rows.map(shapeTemplate), canEdit: !!req.waSettings, connected: wa.configured() && !!wa.wabaId() });
     } catch (err) {
         console.error('normless templates error:', err);
         res.status(500).json({ error: 'Could not load the templates' });
@@ -363,10 +363,10 @@ router.get('/automations', async (req, res) => {
             recommended: copies.recommended((await db.query(`SELECT name, language, status FROM wa_templates WHERE line_id = $1`, [req.waLine.id])).rows),
             buttonBase: links.BUTTON_BASE(),
             // The webhook address carries its secret, so only a manager sees it.
-            webhook: req.waManager ? `${links.PUBLIC_BASE()}/api/hooks/carts/abandoned?api_key=${cfg.webhook_secret}` : null,
+            webhook: req.waSettings ? `${links.PUBLIC_BASE()}/api/hooks/carts/abandoned?api_key=${cfg.webhook_secret}` : null,
             carts: await auto.cartStats(req.waLine.id),
             recent: await auto.recent(req.waLine.id, { limit: 60 }),
-            canEdit: !!req.waManager,
+            canEdit: !!req.waSettings,
         });
     } catch (err) {
         console.error('normless automations error:', err);

@@ -1803,6 +1803,17 @@ async function ensureWaLinesSchema() {
             ALTER TABLE wa_templates ADD COLUMN IF NOT EXISTS rejected_reason TEXT;
             ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_wa_normless BOOLEAN DEFAULT false;
             ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_manage_wa_normless BOOLEAN DEFAULT false;
+            -- Each inbox's Dashboard and Settings are their own grants. They start as whoever
+            -- could open them before (the inbox's managers), so nobody's access changes; after
+            -- that they are set in Admin like any other permission.
+            ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_wa_dashboard BOOLEAN;
+            ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_manage_wa_settings BOOLEAN;
+            ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_wa_nl_dashboard BOOLEAN;
+            ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_manage_wa_nl_settings BOOLEAN;
+            UPDATE admin_users SET can_view_wa_dashboard = COALESCE(can_manage_whatsapp, false) WHERE can_view_wa_dashboard IS NULL;
+            UPDATE admin_users SET can_manage_wa_settings = COALESCE(can_manage_whatsapp, false) WHERE can_manage_wa_settings IS NULL;
+            UPDATE admin_users SET can_view_wa_nl_dashboard = COALESCE(can_manage_wa_normless, false) WHERE can_view_wa_nl_dashboard IS NULL;
+            UPDATE admin_users SET can_manage_wa_nl_settings = COALESCE(can_manage_wa_normless, false) WHERE can_manage_wa_nl_settings IS NULL;
 
             -- Our own short links for template buttons (ops.normless.store/go/abc123), so a
             -- checkout or tracking link never passes through a third party's redirector.

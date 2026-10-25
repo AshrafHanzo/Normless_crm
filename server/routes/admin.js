@@ -28,6 +28,8 @@ const PERM_MAP = {
   banking: 'can_view_banking', banking_edit: 'can_edit_banking',
   whatsapp: 'can_view_whatsapp', whatsapp_manage: 'can_manage_whatsapp',
   wa_normless: 'can_view_wa_normless', wa_normless_manage: 'can_manage_wa_normless',
+  whatsapp_dashboard: 'can_view_wa_dashboard', whatsapp_settings: 'can_manage_wa_settings',
+  wa_normless_dashboard: 'can_view_wa_nl_dashboard', wa_normless_settings: 'can_manage_wa_nl_settings',
   backups: 'can_view_backups',
 };
 const PERM_KEYS = Object.keys(PERM_MAP);
