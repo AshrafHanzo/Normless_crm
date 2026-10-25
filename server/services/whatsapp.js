@@ -428,15 +428,19 @@ async function markRead(wamid) {
  * anyone who finds the URL can post invented customer messages into.
  */
 function verifySignature(rawBody, header) {
-    const secret = process.env.WA_APP_SECRET;
-    if (!secret) return { ok: false, reason: 'WA_APP_SECRET is not set' };
+    // Each brand's number can sit under its own Meta app — Normless's does, so it can be used
+    // without Crewfit's app needing Meta's review — and each app signs with its own secret.
+    // One webhook serves both, so a body signed by either app is genuine.
+    const secrets = [process.env.WA_APP_SECRET, process.env.WA_NORMLESS_APP_SECRET].filter(Boolean);
+    if (!secrets.length) return { ok: false, reason: 'WA_APP_SECRET is not set' };
     if (!rawBody || !header) return { ok: false, reason: 'unsigned request' };
-    const expected = 'sha256=' + crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
-    const a = Buffer.from(expected);
     const b = Buffer.from(String(header));
-    // Same length first: timingSafeEqual throws on a mismatch, and the throw itself would leak
-    // that much about the signature.
-    const ok = a.length === b.length && crypto.timingSafeEqual(a, b);
+    const ok = secrets.some((secret) => {
+        const a = Buffer.from('sha256=' + crypto.createHmac('sha256', secret).update(rawBody).digest('hex'));
+        // Same length first: timingSafeEqual throws on a mismatch, and the throw itself would
+        // leak that much about the signature.
+        return a.length === b.length && crypto.timingSafeEqual(a, b);
+    });
     return { ok, reason: ok ? null : 'signature did not match' };
 }
 
