@@ -17,7 +17,7 @@ const NAV = {
     { to: '/orders', icon: 'box', label: 'Orders', perm: 'can_view_orders' },
     { to: '/scan', icon: 'scan', label: 'Scan Order', perm: 'can_scan_orders' },
     { to: '/marketing', icon: 'spark', label: 'Marketing', perm: 'can_view_marketing', badge: 'marketing' },
-    { to: '/whatsapp', icon: 'whatsapp', label: 'WhatsApp', perm: 'can_view_wa_normless' },
+    { to: '/whatsapp', icon: 'whatsapp', label: 'WhatsApp', perm: 'can_view_wa_normless', badge: 'whatsapp' },
     { to: '/support', icon: 'bell', label: 'Support', perm: 'can_view_support', badge: 'support' },
     { to: '/invoices', icon: 'invoice', label: 'Invoices', perm: 'can_view_invoices' },
     { to: '/inventory', icon: 'box', label: 'Inventory', perm: 'can_view_inventory', badge: 'rto' },
@@ -30,7 +30,7 @@ const NAV = {
   crewfit: [
     { to: '/crewfit/dashboard', icon: 'dashboard', label: 'Dashboard', perm: 'can_view_crewfit_analytics' },
     { to: '/crewfit', end: true, icon: 'bell', label: 'Follow-ups', perm: 'can_view_crewfit_followups' },
-    { to: '/crewfit/whatsapp', icon: 'whatsapp', label: 'WhatsApp', perm: 'can_view_whatsapp' },
+    { to: '/crewfit/whatsapp', icon: 'whatsapp', label: 'WhatsApp', perm: 'can_view_whatsapp', badge: 'whatsapp' },
     { to: '/crewfit/orders', icon: 'box', label: 'Bulk Orders', perm: 'can_view_crewfit_orders' },
     { to: '/crewfit/customers', icon: 'users', label: 'Customers', perm: 'can_view_crewfit_customers' },
     { to: '/crewfit/catalog', icon: 'shirt', label: 'Catalog', perm: 'can_view_crewfit_catalog' },
@@ -113,6 +113,25 @@ export default function Sidebar({ collapsed = false, onToggleCollapse, open: ope
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canSeeSupport])
 
+  // WhatsApp: on Normless the chats waiting for a person (the bot answers the rest), on Crewfit
+  // every unread message. Polled often — a customer waiting is the most time-sensitive thing here.
+  const waPerm = brand === 'crewfit' ? 'can_view_whatsapp' : 'can_view_wa_normless'
+  const canSeeWa = user?.role === 'owner' || user?.role === 'admin' || !!user?.[waPerm]
+  const [waCount, setWaCount] = useState(0)
+  useEffect(() => {
+    setWaCount(0)
+    if (!canSeeWa) return
+    let live = true
+    const check = async () => {
+      const r = await apiFetch(brand === 'crewfit' ? '/api/whatsapp/badge' : '/api/nl-whatsapp/badge')
+      if (live && r && !r.error) setWaCount(r.count || 0)
+    }
+    check()
+    const t = setInterval(check, 30000)
+    return () => { live = false; clearInterval(t) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canSeeWa, brand])
+
   const b = BRANDS[brand] || BRANDS.normless
   const isAdminRole = user?.role === 'owner' || user?.role === 'admin'
   // adminOnly wins over perm: a page that names who did what is not team-wide, and no permission
@@ -163,13 +182,16 @@ export default function Sidebar({ collapsed = false, onToggleCollapse, open: ope
             {mainItems.map(item => {
               const count = item.badge === 'rto' ? rtoAlerts
                 : item.badge === 'marketing' ? marketingPending
-                  : item.badge === 'support' ? supportOpen : 0
+                  : item.badge === 'support' ? supportOpen
+                    : item.badge === 'whatsapp' ? waCount : 0
               return (
                 <NavLink key={item.to} to={item.to} end={item.end} onClick={close}
                   title={!count ? item.label : item.badge === 'rto'
                     ? `${item.label} — ${count} order${count > 1 ? 's' : ''} can be served from the RTO shelf`
                     : item.badge === 'support'
                       ? `${item.label} — ${count} ticket${count > 1 ? 's' : ''} still open`
+                      : item.badge === 'whatsapp'
+                        ? (brand === 'crewfit' ? `${item.label} — ${count} unread message${count > 1 ? 's' : ''}` : `${item.label} — ${count} chat${count > 1 ? 's' : ''} waiting for a person`)
                       : `${item.label} — ${count} thing${count > 1 ? 's' : ''} still waiting`}
                   className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>
                   <span className="link-icon">

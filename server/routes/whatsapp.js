@@ -732,6 +732,30 @@ const shapeConversation = (row) => ({
 });
 
 /** The thread list down the left of the page. */
+/**
+ * The number beside WhatsApp in the menu. Normless: chats waiting for a person (the bot handles the
+ * rest, so that is what needs someone). Crewfit: unread messages. A chat this person muted counts
+ * for neither — muting it is how they said so.
+ */
+router.get('/badge', async (req, res) => {
+    try {
+        const params = [];
+        const vis = visibility(req, params);
+        params.push(String(req.user?.username || '').toLowerCase());
+        const me = `$${params.length}`;
+        const notMuted = `NOT EXISTS (SELECT 1 FROM wa_conversation_mutes mu WHERE mu.conversation_id = c.id AND mu.username = ${me})`;
+        const normless = req.waLine?.brand === 'normless';
+        const r = await db.query(normless
+            ? `SELECT COUNT(*)::int AS n ${LIST_FROM} WHERE ${vis} AND ${notMuted}
+                  AND c.status = 'open' AND c.mode = 'human' AND ${LAST_DIRECTION} = 'in'`
+            : `SELECT COALESCE(SUM(c.unread_count), 0)::int AS n ${LIST_FROM} WHERE ${vis} AND ${notMuted}`, params);
+        res.json({ count: r.rows[0].n, kind: normless ? 'waiting' : 'unread' });
+    } catch (err) {
+        console.error('whatsapp badge error:', err.message);
+        res.status(500).json({ error: 'Could not count' });
+    }
+});
+
 router.get('/conversations', async (req, res) => {
     try {
         const params = [];
