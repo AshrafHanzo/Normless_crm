@@ -340,6 +340,7 @@ router.delete('/templates/:id', manager, async (req, res) => {
 const auto = require('../services/nl-automations');
 const tplSet = require('../services/nl-template-set');
 const links = require('../services/nl-links');
+const copies = require('../services/nl-template-copies');
 
 router.get('/automations', async (req, res) => {
     try {
@@ -349,9 +350,13 @@ router.get('/automations', async (req, res) => {
             sources: tplSet.SOURCES, links: tplSet.LINKS, cartHours: auto.CART_HOURS,
             set: tplSet.SET.map(t => ({ event: t.event, name: t.name, category: t.category, vars: t.vars, link: t.link?.source || null,
                 components: tplSet.components(t, null) })),
+            // What fills each gap of the other templates (Updatrr's wording), and the copies of
+            // Updatrr's linked templates still to be submitted with our links.
+            suggest: copies.suggestions((await db.query(`SELECT name, body_text, components FROM wa_templates WHERE line_id = $1`, [req.waLine.id])).rows),
+            copies: (await copies.plan(req.waLine.id)).map(t => ({ name: t.name, from: t.from, exists: t.exists })),
             buttonBase: links.BUTTON_BASE(),
             // The webhook address carries its secret, so only a manager sees it.
-            webhook: req.waManager ? `${links.PUBLIC_BASE()}/api/hooks/razorpay/abandoned/${cfg.webhook_secret}` : null,
+            webhook: req.waManager ? `${links.PUBLIC_BASE()}/api/hooks/razorpay/abandoned?api_key=${cfg.webhook_secret}` : null,
             carts: await auto.cartStats(req.waLine.id),
             recent: await auto.recent(req.waLine.id, { limit: 60 }),
             canEdit: !!req.waManager,
@@ -369,6 +374,17 @@ router.put('/automations', manager, async (req, res) => {
     } catch (err) {
         console.error('normless automations save error:', err);
         res.status(500).json({ error: 'Could not save that' });
+    }
+});
+
+/** Submit copies of Updatrr's linked templates, with our /go/ links, to Meta. */
+router.post('/automations/copy-updatrr', manager, async (req, res) => {
+    try {
+        if (!wa.configured() || !wa.wabaId()) return res.status(503).json({ error: 'Connect Normless’s WhatsApp number first' });
+        res.json({ results: await copies.submit(req.waLine.id) });
+    } catch (err) {
+        console.error('normless template copy error:', err.message);
+        res.status(err instanceof wa.WhatsAppError ? 502 : 500).json({ error: err.message });
     }
 });
 

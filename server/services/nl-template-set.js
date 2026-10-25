@@ -23,6 +23,14 @@ const SOURCES = {
     courier: { label: 'Courier', example: 'Delhivery' },
     tracking_number: { label: 'Tracking number', example: '14901234563321' },
     refund_amount: { label: 'Refund amount (₹)', example: '699' },
+    order_total_inr: { label: 'Order total, with ₹', example: '₹1,398' },
+    cod_amount_inr: { label: 'Amount due on delivery, with ₹', example: '₹1,199' },
+    cart_total_inr: { label: 'Cart total, with ₹', example: '₹1,398' },
+    refund_amount_inr: { label: 'Refund amount, with ₹', example: '₹699' },
+    refund_note: { label: 'Refund note', example: 'Refund' },
+    address: { label: 'Delivery address', example: '12 MG Road, Bengaluru, Karnataka, 560001' },
+    store_name: { label: 'Store name (Normless)', example: 'Normless' },
+    currency: { label: 'Currency (INR)', example: 'INR' },
 };
 
 /** Where a link button can go. Each becomes an /go/ code when the message is sent. */

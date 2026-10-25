@@ -369,7 +369,9 @@ async function sendTemplate(phone, { name, language = 'en_US', variables = [], h
     for (const b of buttons) {
         components.push(b.payload != null
             ? { type: 'button', sub_type: 'quick_reply', index: String(b.index), parameters: [{ type: 'payload', payload: String(b.payload) }] }
-            : { type: 'button', sub_type: 'url', index: String(b.index), parameters: [{ type: 'text', text: String(b.text) }] });
+            : b.coupon != null
+                ? { type: 'button', sub_type: 'copy_code', index: String(b.index), parameters: [{ type: 'coupon_code', coupon_code: String(b.coupon).slice(0, 15) }] }
+                : { type: 'button', sub_type: 'url', index: String(b.index), parameters: [{ type: 'text', text: String(b.text) }] });
     }
     const data = await graph(`/${PHONE_ID()}/messages`, {
         method: 'POST',

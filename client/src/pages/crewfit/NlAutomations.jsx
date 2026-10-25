@@ -82,7 +82,7 @@ function WebhookCard({ data }) {
       {data.webhook ? (
         <>
           <div className="was-inline nl-auto-hook">
-            <input readOnly aria-label="Webhook address" value={shown ? data.webhook : data.webhook.replace(/[^/]+$/, '••••••••••••')} onFocus={e => e.target.select()} />
+            <input readOnly aria-label="Webhook address" value={shown ? data.webhook : data.webhook.replace(/(api_key=).*$/, '$1••••••••••••')} onFocus={e => e.target.select()} />
             <button type="button" className="btn btn-secondary btn-sm" onClick={() => setShown(v => !v)}><Icon name="eye" size={13} /> {shown ? 'Hide' : 'Show'}</button>
             <button type="button" className="btn btn-secondary btn-sm" onClick={copy}><Icon name="copy" size={13} /> Copy</button>
           </div>
@@ -118,11 +118,16 @@ function EventCard({ ev, cfg, data, templates, onChange, onCreated, canEdit }) {
     const src = cfg.vars[i]
     return src === 'coupon' ? (cfg.coupon || data.sources.coupon.example) : data.sources[src]?.example || `{{${i + 1}}}`
   })
+  // What fills the gaps comes with the template: ours by design, Updatrr's read from its wording.
+  const hint = (name) => data.set.find(s => s.name === name) || data.suggest?.[name] || null
+  const suits = (t) => ours?.name === t.name || (data.suggest?.[t.name]?.events || []).includes(ev.key)
   const pick = (key) => {
     const t = templates.find(x => keyOf(x) === key)
-    const set = t && data.set.find(s => s.name === t.name)
-    onChange({ template: key || null, vars: set ? [...set.vars] : Array.from({ length: t?.variables || 0 }, (_, i) => cfg.vars[i] || null), ...(set?.link ? { link: set.link } : {}) })
+    const h = t && hint(t.name)
+    const link = h?.link && ev.links.includes(h.link) ? h.link : null
+    onChange({ template: key || null, vars: h ? [...h.vars] : Array.from({ length: t?.variables || 0 }, (_, i) => cfg.vars[i] || null), ...(link ? { link } : {}) })
   }
+  const ourCopy = picked && templates.find(t => t.name === `nl_${picked.name.replace(/\d{13}$/, '')}`)
   const create = async () => {
     setCreating(true)
     const r = await apiFetch(`${brand.api}/nl/automations/${ev.key}/template`, { method: 'POST' })
@@ -149,7 +154,9 @@ function EventCard({ ev, cfg, data, templates, onChange, onCreated, canEdit }) {
             <label htmlFor={`tpl-${ev.key}`}>Template</label>
             <select id={`tpl-${ev.key}`} value={cfg.template || ''} disabled={!canEdit} onChange={e => pick(e.target.value)}>
               <option value="">Choose an approved template…</option>
-              {approved.map(t => <option key={keyOf(t)} value={keyOf(t)}>{t.name}{ours?.name === t.name ? ' — Normless (recommended)' : ''} · {t.language}</option>)}
+              {[...approved].sort((x, y) => suits(y) - suits(x)).map(t => (
+                <option key={keyOf(t)} value={keyOf(t)}>{t.name}{ours?.name === t.name ? ' — Normless (recommended)' : suits(t) ? ' — suits this' : ''} · {t.language}</option>
+              ))}
               {picked && picked.status !== 'APPROVED' && <option value={cfg.template}>{picked.name} ({String(picked.status).toLowerCase()})</option>}
             </select>
             {ours && !oursTpl && canEdit && (
@@ -163,7 +170,8 @@ function EventCard({ ev, cfg, data, templates, onChange, onCreated, canEdit }) {
                 <span>{ours.name} {oursTpl.status === 'REJECTED' ? `was rejected${oursTpl.rejected_reason && oursTpl.rejected_reason !== 'NONE' ? `: ${oursTpl.rejected_reason}` : ''}` : 'is with Meta — sync templates to check'}</span></div>
             )}
             {picked && foreign && (
-              <p className="was-bad">This template’s button goes through {new URL(urlButton.url.replace('{{1}}', 'x')).host}. Use the Normless template so links go through ops.normless.store.</p>
+              <p className="was-bad">This template’s button goes through {new URL(urlButton.url.replace('{{1}}', 'x')).host}.{' '}
+                {ourCopy ? `Use ${ourCopy.name} — the same message with our link${ourCopy.status === 'APPROVED' ? '' : ' (still in review at Meta)'}.` : 'Submit the copies with our links (top of this page) and use one of those.'}</p>
             )}
           </div>
 
@@ -219,8 +227,54 @@ function EventCard({ ev, cfg, data, templates, onChange, onCreated, canEdit }) {
   )
 }
 
+/** Updatrr's linked templates, submitted again with our links. */
+function CopiesCard({ data, onDone }) {
+  const apiFetch = useApi()
+  const toast = useToast()
+  const brand = useWaBrand()
+  const [busy, setBusy] = useState(false)
+  const [results, setResults] = useState(null)
+  const todo = (data.copies || []).filter(c => !c.exists)
+  const originals = (data.copies || []).reduce((n, c) => n + c.from.length, 0)
+  if (!data.copies?.length) return null
+  const submit = async () => {
+    if (!await toast.confirm({ title: `Submit ${todo.length} templates to Meta?`, message: 'Each is one of Updatrr’s templates with the same wording and photo, its link changed to ops.normless.store. Updatrr’s own templates are not touched. Meta usually reviews them within minutes to hours.', confirmLabel: 'Submit' })) return
+    setBusy(true)
+    const r = await apiFetch(`${brand.api}/nl/automations/copy-updatrr`, { method: 'POST' })
+    setBusy(false)
+    if (!r || r.error) return toast.error(r?.error || 'Meta refused that', { duration: 0 })
+    setResults(r.results)
+    const failed = r.results.filter(x => x.status === 'FAILED').length
+    if (failed) toast.error(`${failed} of ${r.results.length} were refused — see the list`, { duration: 0 })
+    else toast.success(`${r.results.length} templates sent to Meta for review`)
+    onDone()
+  }
+  return (
+    <section className="was-card">
+      <div className="was-card-head">
+        <h3>Updatrr’s templates, with our links</h3>
+        {todo.length
+          ? data.canEdit && <button type="button" className="btn btn-primary btn-sm" disabled={busy} onClick={submit}>{busy ? 'Submitting…' : `Submit ${todo.length} to Meta`}</button>
+          : <span className="status-badge success">All {data.copies.length} submitted</span>}
+      </div>
+      <p className="was-hint">
+        {originals} of Updatrr’s templates send their button through Updatrr’s redirector. Each is copied as nl_… with the same words and photo, the button going through ops.normless.store instead
+        {originals > data.copies.length ? ` — ${data.copies.length} templates, as some were exact duplicates` : ''}. Templates without links can be used as they are.
+      </p>
+      {results && (
+        <ul className="nl-auto-results">
+          {results.map(x => (
+            <li key={x.name}><b>{x.name}</b> <span className={`status-badge ${x.status === 'FAILED' ? 'error' : 'pending'}`}>{x.status === 'FAILED' ? 'Refused' : 'In review'}</span>
+              {x.error && <span className="was-hint"> {x.error}</span>}</li>
+          ))}
+        </ul>
+      )}
+    </section>
+  )
+}
+
 const OUTCOME = {
-  sent: ['success', 'Sent'], failed: ['error', 'Failed'], sending: ['pending', 'Sending'],
+  sent: ['success', 'Sent'], failed: ['error', 'Failed'], sending: ['pending', 'Sending'], skipped: ['', 'Opted out'],
 }
 
 function RecentSends({ rows, events }) {
@@ -288,6 +342,7 @@ export function NlTemplatesTab() {
             <p className="was-hint">{g.intro}{!a.data.started_at && ' Nothing has been sent yet: only orders and carts from the moment you switch one on are ever messaged.'}</p>
             {a.data.canEdit && <SaveButton dirty={a.dirtyKeys(keys).length > 0} saving={a.saving} onClick={() => a.save(keys)} />}
           </div>
+          <CopiesCard data={a.data} onDone={async () => { await a.load(); setLibKey(k => k + 1) }} />
           {group === 'cart' && <WebhookCard data={a.data} />}
           {events.map(ev => (
             <EventCard key={ev.key} ev={ev} cfg={a.draft[ev.key]} data={a.data} templates={a.templates} canEdit={a.data.canEdit}

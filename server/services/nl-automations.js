@@ -47,6 +47,8 @@ const EVENT = Object.fromEntries(EVENTS.map(e => [e.key, e]));
 /** Carts are only reminded in the daytime (India): a 2 am marketing message loses customers. */
 const CART_HOURS = { start: 9, end: 21 };
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
 /* ── Settings ─────────────────────────────────────────────────────────────────────────────── */
 
 const blankEvent = (e) => {
@@ -58,10 +60,12 @@ const blankEvent = (e) => {
 async function config(lineId) {
     const row = (await db.query('SELECT settings FROM wa_lines WHERE id = $1', [lineId])).rows[0];
     const saved = safeJson(row?.settings, {})?.automations || {};
+    // A UUID, sent as ?api_key=: Razorpay's dashboard refused the earlier base64 secret in the
+    // path as an invalid URL, and accepts addresses of this shape.
     const secret = saved.webhook_secret;
-    if (!secret) {
-        const fresh = crypto.randomBytes(18).toString('base64url');
-        await saveRaw(lineId, (a) => ({ ...a, webhook_secret: a.webhook_secret || fresh }));
+    if (!UUID.test(secret || '')) {
+        const fresh = crypto.randomUUID();
+        await saveRaw(lineId, (a) => ({ ...a, webhook_secret: UUID.test(a.webhook_secret || '') ? a.webhook_secret : fresh }));
         return config(lineId);
     }
     const events = Object.fromEntries(EVENTS.map(e => [e.key, { ...blankEvent(e), ...(saved.events?.[e.key] || {}) }]));
@@ -118,6 +122,9 @@ const itemLine = (items) => {
     const text = items.map(i => `${i.title}${i.variant ? ` (${i.variant})` : ''} × ${i.quantity}`).join(', ');
     return text.length > 300 ? `${text.slice(0, 297)}…` : text;
 };
+const rupees = (v) => { const m = money(v); return m ? `₹${m}` : ''; };
+const addressLine = (a) => [a.address1, a.address2, a.city, a.province, a.zip].map(x => String(x || '').trim()).filter(Boolean).join(', ');
+const STORE_NAME = 'Normless';
 const productName = (items) => (items[0] ? `${items[0].title}${items.length > 1 ? ` and ${items.length - 1} more` : ''}` : 'your items');
 
 /** A photo for the header: the product's own, else any product's, so a photo template still sends. */
@@ -146,8 +153,9 @@ function orderFacts(o) {
         phone: wa.normalisePhone(o.phone || a.phone || o.billing_address?.phone || o.customer?.phone),
         name: [o.customer?.first_name, o.customer?.last_name].filter(Boolean).join(' ') || a.name || null,
         first_name: firstNameOf(o.customer?.first_name, a.first_name, o.billing_address?.first_name),
-        order_number: o.name, order_total: money(o.total_price),
-        cod_amount: money(o.total_outstanding ?? o.total_price),
+        order_number: o.name, order_total: money(o.total_price), order_total_inr: rupees(o.total_price),
+        cod_amount: money(o.total_outstanding ?? o.total_price), cod_amount_inr: rupees(o.total_outstanding ?? o.total_price),
+        address: addressLine(a), store_name: STORE_NAME, currency: o.currency || 'INR', refund_note: 'Refund',
         items: itemLine(items), product_name: productName(items), itemList: items,
         urls: { order: o.order_status_url || STORE, store: STORE },
     };
@@ -177,8 +185,11 @@ async function cartItems(payload) {
 
 function cartFacts(cart) {
     const items = safeJson(cart.items, []);
+    const ship = lower(lower(safeJson(cart.payload, {}).customer).shipping_address);
     return {
         phone: cart.phone, name: cart.name, first_name: firstNameOf(cart.name),
+        store_name: STORE_NAME, currency: cart.currency || 'INR', address: addressLine(ship),
+        cart_total_inr: rupees(cart.total), order_total_inr: rupees(cart.total),
         product_name: productName(items), items: itemLine(items), itemList: items,
         cart_total: money(cart.total), order_total: money(cart.total),
         urls: { checkout: cart.checkout_url || STORE, store: STORE },
@@ -190,7 +201,7 @@ async function templateFor(lineId, key) {
     if (!key) return null;
     const [name, language] = key.split('|');
     const t = (await db.query(
-        `SELECT name, language, status, body_text, variables, components FROM wa_templates WHERE line_id = $1 AND name = $2 AND language = $3`,
+        `SELECT name, language, category, status, body_text, variables, components FROM wa_templates WHERE line_id = $1 AND name = $2 AND language = $3`,
         [lineId, name, language])).rows[0];
     if (!t) return null;
     const comps = safeJson(t.components, []);
@@ -222,6 +233,14 @@ async function fire(lineId, eventKey, ref, facts, { label = null } = {}) {
         const t = await templateFor(lineId, cfg.template);
         if (!t) return await fail(`The template ${cfg.template.split('|')[0]} isn’t on this account — sync templates`);
         if (t.status !== 'APPROVED') return await fail(`The template ${t.name} is ${String(t.status).toLowerCase()} at Meta`);
+        // Someone who replied STOP gets order updates, never offers or reminders.
+        if (t.category === 'MARKETING') {
+            const out = (await db.query(`SELECT opted_out_at FROM wa_contacts WHERE line_id = $1 AND phone = $2`, [lineId, facts.phone])).rows[0];
+            if (out?.opted_out_at) {
+                await db.query(`UPDATE nl_auto_sends SET status = 'skipped', error = 'The customer replied STOP' WHERE id = $1`, [claim.id]);
+                return { id: claim.id, status: 'skipped' };
+            }
+        }
 
         const value = (source) => (source === 'coupon' ? cfg.coupon : facts[source]) ?? '';
         const variables = Array.from({ length: t.variables || 0 }, (_, i) => value(cfg.vars[i]));
@@ -243,6 +262,9 @@ async function fire(lineId, eventKey, ref, facts, { label = null } = {}) {
             if (b.type === 'URL' && /\{\{1\}\}/.test(b.url || '')) {
                 const ours = String(b.url).startsWith(links.BUTTON_BASE());
                 buttons.push({ index, text: ours ? await links.shorten(dest, { kind: eventKey, ref }) : dest });
+            } else if (b.type === 'COPY_CODE') {
+                if (!cfg.coupon) return await fail('The template has a “Copy offer code” button — set a coupon code');
+                buttons.push({ index, coupon: cfg.coupon });
             } else if (b.type === 'QUICK_REPLY') {
                 buttons.push({ index, payload: `nlauto:${claim.id}:${index}` });
             }
@@ -431,7 +453,7 @@ function orderEvents(o, startedAt) {
     for (const r of o.refunds || []) {
         if (!after(r.created_at)) continue;
         const amount = (r.transactions || []).filter(t => t.kind === 'refund' && t.status === 'success').reduce((n, t) => n + Number(t.amount || 0), 0);
-        if (amount > 0) out.push(['refund', r.id, { refund_amount: money(amount) }]);
+        if (amount > 0) out.push(['refund', r.id, { refund_amount: money(amount), refund_amount_inr: rupees(amount), refund_note: r.note || 'Refund' }]);
     }
     return out.map(([event, ref, extra]) => ({ event, ref, facts: { ...facts, ...(extra || {}) } }));
 }
@@ -503,6 +525,28 @@ async function onReply(conversationId, payload) {
     }
     await tell(conv, `Okay — we’ve asked our team to cancel order ${order}. They’ll confirm here shortly.`);
     await handOver(conv, { reason: `COD order ${order}: the customer tapped Cancel. Cancel it in Shopify, then let them know here.` });
+    return true;
+}
+
+/**
+ * STOP / START. Every marketing template's footer says "To opt-out, type STOP", so it has to
+ * work: the customer stops getting cart reminders and offers (order updates still go).
+ */
+async function onText(conversationId, text) {
+    const word = String(text || '').trim().toUpperCase();
+    if (!['STOP', 'UNSUBSCRIBE', 'START'].includes(word)) return false;
+    const stop = word !== 'START';
+    const conv = (await db.query(
+        `SELECT c.*, k.phone, k.profile_name FROM wa_conversations c JOIN wa_contacts k ON k.id = c.contact_id WHERE c.id = $1`,
+        [conversationId])).rows[0];
+    if (!conv) return false;
+    await db.query(`UPDATE wa_contacts SET opted_out_at = ${stop ? 'CURRENT_TIMESTAMP' : 'NULL'} WHERE id = $1`, [conv.contact_id]);
+    await db.query(`INSERT INTO wa_activity (conversation_id, kind, body) VALUES ($1,'automation',$2)`,
+        [conv.id, stop ? 'Customer opted out of offers and reminders (STOP)' : 'Customer opted back in (START)']);
+    const { tell } = require('./nl-handover');
+    await tell(conv, stop
+        ? 'You won’t get offers or cart reminders from Normless any more. You’ll still get updates about your orders. Reply START to opt back in.'
+        : 'Welcome back! You’ll get offers and reminders from Normless again. Reply STOP any time to opt out.');
     return true;
 }
 
@@ -579,6 +623,6 @@ function start() {
 }
 
 module.exports = {
-    EVENTS, config, saveEvents, fire, onAbandoned, cartTick, orderTick, orderEvents, onReply, recent, cartStats,
+    EVENTS, config, saveEvents, fire, onAbandoned, onText, cartTick, orderTick, orderEvents, onReply, recent, cartStats,
     createSetTemplate, recoverCarts, start, CART_HOURS,
 };

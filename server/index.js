@@ -1853,6 +1853,8 @@ async function ensureWaLinesSchema() {
                 UNIQUE (line_id, event, ref)
             );
             CREATE INDEX IF NOT EXISTS nl_auto_sends_recent_idx ON nl_auto_sends (line_id, created_at DESC);
+            -- Replied STOP: no marketing templates (cart reminders, offers); order updates still go.
+            ALTER TABLE wa_contacts ADD COLUMN IF NOT EXISTS opted_out_at TIMESTAMPTZ;
             CREATE TABLE IF NOT EXISTS nl_auto_state (
                 line_id INTEGER NOT NULL REFERENCES wa_lines(id),
                 key TEXT NOT NULL,
