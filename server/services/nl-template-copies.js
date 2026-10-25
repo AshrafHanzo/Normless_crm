@@ -201,4 +201,30 @@ async function submit(lineId) {
     return results;
 }
 
-module.exports = { suggest, suggestions, plan, submit, copyComponents, ensureStaticLinks, baseName };
+/**
+ * The template each event should send, best first: the copies of what Updatrr sent for it (with
+ * our links), then Updatrr's link-free originals, then the CRM's own. The first approved one wins.
+ */
+const PREFERRED = {
+    cart_1: ['nl_abandonedcart', 'nlcrm_cart_reminder_1'],
+    cart_2: ['nl_reminder2', 'nl_abc2razorpay', 'nlcrm_cart_reminder_2'],
+    cart_3: ['nl_reminder3', 'nl_reminder3withcoupon', 'nlcrm_cart_reminder_3'],
+    order_prepaid: ['nl_newprepaidorderwithimage', 'nl_newprepaidorder', 'nlcrm_order_prepaid'],
+    order_partial_cod: ['nl_newpartialcod', 'nlcrm_order_partial_cod'],
+    order_cod: ['nl_neworder', 'nl_newcodwithoutpaymentmethod', 'nlcrm_order_cod'],
+    cod_confirm: ['newcodorderwithcancel', 'nlcrm_cod_confirm', 'codconfirmation1'],
+    order_cancelled: ['ordercancelled', 'nlcrm_order_cancelled'],
+    fulfilled: ['nl_orderdispatchedwithimage', 'nl_orderdispatched', 'nl_orderfulfilledwithimage', 'nl_orderfulfilled', 'nlcrm_order_shipped'],
+    refund: ['refundconfirmation', 'nlcrm_refund_issued'],
+};
+function recommended(templates) {
+    const out = {};
+    for (const [event, names] of Object.entries(PREFERRED)) {
+        const found = names.map(n => templates.filter(t => baseName(t.name) === n)).flat();
+        const pick = found.find(t => t.status === 'APPROVED') || found[0];
+        if (pick) out[event] = `${pick.name}|${pick.language}`;
+    }
+    return out;
+}
+
+module.exports = { recommended, PREFERRED, sampleHandle, suggest, suggestions, plan, submit, copyComponents, ensureStaticLinks, baseName };

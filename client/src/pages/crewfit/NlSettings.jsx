@@ -640,7 +640,7 @@ export function TemplatePreview({ header, headerExample, body, examples, footer,
 }
 
 
-function TemplateEditor({ template, onClose, onSaved }) {
+export function TemplateEditor({ template, onClose, onSaved }) {
   const apiFetch = useApi()
   const toast = useToast()
   const brand = useWaBrand()
@@ -692,9 +692,13 @@ function TemplateEditor({ template, onClose, onSaved }) {
               </div>
             </div>
             <div className="input-group">
-              <label htmlFor="tpl-head">Header <span className="label-hint">optional, 60 characters, one gap at most</span></label>
-              <input id="tpl-head" value={f.header} maxLength={60} placeholder="Your order {{1}} is on its way" onChange={e => set({ header: e.target.value })} />
-              {/\{\{1\}\}/.test(f.header) && <input aria-label="Header example" value={f.header_example} placeholder="Example for {{1}}" onChange={e => set({ header_example: e.target.value })} />}
+              <label htmlFor="tpl-head-kind">Header</label>
+              <select id="tpl-head-kind" value={f.header_format} onChange={e => set({ header_format: e.target.value })}>
+                <option value="">None</option><option value="TEXT">Text</option><option value="IMAGE">Product photo</option>
+              </select>
+              {f.header_format === 'IMAGE' && <span className="was-hint">Each message shows the photo of the product it’s about. A photo from the shop is sent to Meta as the sample.</span>}
+              {f.header_format === 'TEXT' && <input id="tpl-head" aria-label="Header text" value={f.header} maxLength={60} placeholder="Your order {{1}} is on its way (60 characters, one gap at most)" onChange={e => set({ header: e.target.value })} />}
+              {f.header_format === 'TEXT' && /\{\{1\}\}/.test(f.header) && <input aria-label="Header example" value={f.header_example} placeholder="Example for {{1}}" onChange={e => set({ header_example: e.target.value })} />}
             </div>
             <div className="input-group">
               <label htmlFor="tpl-body">Message <span className="label-hint">use {'{{1}}'}, {'{{2}}'} … for what changes each time</span></label>
@@ -717,9 +721,11 @@ function TemplateEditor({ template, onClose, onSaved }) {
             {f.buttons.map((b, i) => (
               <div key={i} className="nl-tpl-btn-row">
                 <select aria-label="Button type" value={b.type} onChange={e => setButton(i, { type: e.target.value })}>
-                  <option value="QUICK_REPLY">Quick reply</option><option value="URL">Link</option><option value="PHONE_NUMBER">Call</option>
+                  <option value="QUICK_REPLY">Quick reply</option><option value="URL">Link</option><option value="PHONE_NUMBER">Call</option><option value="COPY_CODE">Copy coupon code</option>
                 </select>
-                <input aria-label="Button text" maxLength={25} placeholder="Button text" value={b.text} onChange={e => setButton(i, { text: e.target.value })} />
+                {b.type === 'COPY_CODE'
+                  ? <input aria-label="Example code" maxLength={15} placeholder="Example code, e.g. NORMLESS10" value={b.example} onChange={e => setButton(i, { example: e.target.value.toUpperCase() })} />
+                  : <input aria-label="Button text" maxLength={25} placeholder="Button text" value={b.text} onChange={e => setButton(i, { text: e.target.value })} />}
                 {b.type === 'URL' && <input aria-label="Link" placeholder="https://normless.store/… (end with {{1}} to vary it)" value={b.url} onChange={e => setButton(i, { url: e.target.value })} />}
                 {b.type === 'URL' && /\{\{1\}\}$/.test(b.url) && <input aria-label="Example link" placeholder="Full example link" value={b.example} onChange={e => setButton(i, { example: e.target.value })} />}
                 {b.type === 'PHONE_NUMBER' && <input aria-label="Phone number" placeholder="+91 86674 58532" value={b.phone_number} onChange={e => setButton(i, { phone_number: e.target.value })} />}
@@ -730,7 +736,8 @@ function TemplateEditor({ template, onClose, onSaved }) {
           </div>
           <div className="nl-tpl-preview-col">
             <div className="was-hint">Preview, with your examples filled in</div>
-            <TemplatePreview header={f.header} headerExample={f.header_example} body={f.body} examples={f.examples} footer={f.footer} buttons={f.buttons} />
+            <TemplatePreview header={f.header_format === 'TEXT' ? f.header : ''} headerExample={f.header_example} body={f.body} examples={f.examples} footer={f.footer}
+              buttons={f.buttons.map(b => (b.type === 'COPY_CODE' ? { ...b, text: 'Copy offer code' } : b))} image={f.header_format === 'IMAGE' || null} />
           </div>
         </div>
         <div className="drawer-footer">

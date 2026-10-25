@@ -3465,3 +3465,20 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .nl-auto-hook { flex-wrap: wrap; }
 .nl-auto-hook input { flex: 1 1 260px; }
 .nl-auto-results { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; max-height: 240px; overflow-y: auto; }
+.nl-auto-switch { display: inline-flex; align-items: center; gap: 10px; font-size: 12.5px; text-align: right; }
+.nl-on { color: var(--success); font-weight: 700; }
+.nl-auto-sends { display: flex; flex-direction: column; gap: 6px; }
+.nl-auto-label { font-size: 12px; font-weight: 700; color: var(--text-secondary); text-transform: uppercase; letter-spacing: .04em; }
+.nl-auto-chosen { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.nl-auto-chosen b { font-size: 14px; overflow-wrap: anywhere; }
+.nl-picker { display: flex; flex-direction: column; gap: 6px; padding: 10px; border: 1px dashed var(--border); border-radius: 10px; }
+.nl-pick { width: 100%; text-align: left; display: flex; flex-direction: column; gap: 3px; padding: 9px 11px; border-radius: 9px; border: 1px solid var(--border); background: var(--bg-tertiary); color: var(--text-primary); font: inherit; cursor: pointer; }
+.nl-pick:hover { border-color: var(--border-hover); }
+.nl-pick.on { border-color: var(--primary); box-shadow: 0 0 0 1px var(--primary); }
+.nl-pick-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.nl-pick-head b { font-size: 13px; overflow-wrap: anywhere; }
+.nl-pick-body { font-size: 12.5px; color: var(--text-secondary); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.nl-picker-more summary, .nl-auto-gaps summary { cursor: pointer; font-size: 12.5px; color: var(--text-secondary); font-weight: 600; padding: 4px 0; }
+.nl-picker-more { display: flex; flex-direction: column; gap: 6px; }
+.nl-picker-more[open] > .nl-pick { margin-top: 6px; }
+.nl-auto-gaps[open] > .nl-auto-gap { margin-top: 6px; }

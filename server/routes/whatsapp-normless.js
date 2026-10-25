@@ -16,6 +16,7 @@ const shopify = require('../services/shopify');
 const wa = require('../services/whatsapp');
 const nlBot = require('../services/nl-bot');
 const { displayName } = require('../services/nl-handover');
+const copies = require('../services/nl-template-copies');
 
 const router = express.Router();
 
@@ -196,10 +197,14 @@ const gaps = (text) => [...new Set((String(text).match(/\{\{\s*(\d+)\s*\}\}/g) |
  * Meta's template parts from the editor's form, checked against Meta's own limits so a mistake
  * is shown here rather than coming back as a rejection.
  */
-function buildComponents(b) {
+function buildComponents(b, { imageHandle = null } = {}) {
     const components = [];
     const header = str(b.header, 60);
-    if (header) {
+    // A photo header: the photo is chosen per message (the product's), Meta only needs a sample.
+    if (b.header_format === 'IMAGE') {
+        if (!imageHandle) throw new Error('Could not upload a sample photo for the header');
+        components.push({ type: 'HEADER', format: 'IMAGE', example: { header_handle: [imageHandle] } });
+    } else if (header && b.header_format !== '') {
         const hv = gaps(header);
         if (hv.length > 1 || (hv.length && hv[0] !== 1)) throw new Error('The header can have one gap at most, written {{1}}');
         const example = str(b.header_example, 200);
@@ -219,9 +224,9 @@ function buildComponents(b) {
         components.push({ type: 'FOOTER', text: footer });
     }
     const buttons = (Array.isArray(b.buttons) ? b.buttons : []).map(x => ({
-        type: ['QUICK_REPLY', 'URL', 'PHONE_NUMBER'].includes(x?.type) ? x.type : 'QUICK_REPLY',
+        type: ['QUICK_REPLY', 'URL', 'PHONE_NUMBER', 'COPY_CODE'].includes(x?.type) ? x.type : 'QUICK_REPLY',
         text: str(x?.text, 25), url: str(x?.url, 2000), phone_number: str(x?.phone_number, 20), example: str(x?.example, 2000),
-    })).filter(x => x.text);
+    })).filter(x => x.text || x.type === 'COPY_CODE');
     if (buttons.length > 10) throw new Error('Ten buttons at most');
     if (buttons.filter(x => x.type === 'URL').length > 2) throw new Error('Two link buttons at most');
     if (buttons.filter(x => x.type === 'PHONE_NUMBER').length > 1) throw new Error('One call button at most');
@@ -235,6 +240,7 @@ function buildComponents(b) {
                     if (dynamic && !x.example) throw new Error(`Give a full example link for “${x.text}”`);
                     return { type: 'URL', text: x.text, url: x.url, ...(dynamic ? { example: [x.example] } : {}) };
                 }
+                if (x.type === 'COPY_CODE') return { type: 'COPY_CODE', example: x.example || 'NORMLESS10' };
                 if (x.type === 'PHONE_NUMBER') {
                     if (!/^\+?\d{8,15}$/.test(x.phone_number.replace(/\s/g, ''))) throw new Error(`Give a phone number with the country code for “${x.text}”`);
                     return { type: 'PHONE_NUMBER', text: x.text, phone_number: x.phone_number.replace(/\s/g, '') };
@@ -265,7 +271,8 @@ router.post('/templates', manager, async (req, res) => {
         const category = ['UTILITY', 'MARKETING'].includes(b.category) ? b.category : 'UTILITY';
         const language = str(b.language, 10) || 'en';
         let built;
-        try { built = buildComponents(b); } catch (err) { return res.status(400).json({ error: err.message }); }
+        try { built = buildComponents(b, { imageHandle: b.header_format === 'IMAGE' ? await copies.sampleHandle() : null }); }
+        catch (err) { return res.status(err instanceof wa.WhatsAppError ? 502 : 400).json({ error: err.message }); }
         let created;
         try {
             created = await wa.graph(`/${wa.wabaId()}/message_templates`, { method: 'POST', body: { name, language, category, components: built.components } });
@@ -281,7 +288,7 @@ router.post('/templates', manager, async (req, res) => {
                  meta_id = EXCLUDED.meta_id, components = EXCLUDED.components, synced_at = CURRENT_TIMESTAMP
              RETURNING ${TEMPLATE_FIELDS}`,
             [name, language, category, created?.status || 'PENDING', built.body, built.variables,
-                built.components.find(c => c.type === 'HEADER') ? 'TEXT' : null, req.waLine.id, created?.id || null, JSON.stringify(built.components)]);
+                built.components.find(c => c.type === 'HEADER')?.format || null, req.waLine.id, created?.id || null, JSON.stringify(built.components)]);
         res.status(201).json({ template: shapeTemplate(r.rows[0]) });
     } catch (err) {
         console.error('normless template create error:', err);
@@ -296,7 +303,8 @@ router.put('/templates/:id', manager, async (req, res) => {
         if (!t) return res.status(404).json({ error: 'That template is gone — sync again' });
         if (!t.meta_id) return res.status(400).json({ error: 'Sync templates from Meta first, then edit' });
         let built;
-        try { built = buildComponents(req.body || {}); } catch (err) { return res.status(400).json({ error: err.message }); }
+        try { built = buildComponents(req.body || {}, { imageHandle: req.body?.header_format === 'IMAGE' ? await copies.sampleHandle() : null }); }
+        catch (err) { return res.status(err instanceof wa.WhatsAppError ? 502 : 400).json({ error: err.message }); }
         try {
             await wa.graph(`/${t.meta_id}`, { method: 'POST', body: { components: built.components } });
         } catch (err) {
@@ -307,7 +315,7 @@ router.put('/templates/:id', manager, async (req, res) => {
             `UPDATE wa_templates SET body_text = $2, variables = $3, components = $4, status = 'PENDING',
                     header_kind = $5, rejected_reason = NULL, synced_at = CURRENT_TIMESTAMP
               WHERE id = $1 RETURNING ${TEMPLATE_FIELDS}`,
-            [t.id, built.body, built.variables, JSON.stringify(built.components), built.components.find(c => c.type === 'HEADER') ? 'TEXT' : null]);
+            [t.id, built.body, built.variables, JSON.stringify(built.components), built.components.find(c => c.type === 'HEADER')?.format || null]);
         res.json({ template: shapeTemplate(r.rows[0]) });
     } catch (err) {
         console.error('normless template edit error:', err);
@@ -340,8 +348,6 @@ router.delete('/templates/:id', manager, async (req, res) => {
 const auto = require('../services/nl-automations');
 const tplSet = require('../services/nl-template-set');
 const links = require('../services/nl-links');
-const copies = require('../services/nl-template-copies');
-
 router.get('/automations', async (req, res) => {
     try {
         const cfg = await auto.config(req.waLine.id);
@@ -354,6 +360,7 @@ router.get('/automations', async (req, res) => {
             // Updatrr's linked templates still to be submitted with our links.
             suggest: copies.suggestions((await db.query(`SELECT name, body_text, components FROM wa_templates WHERE line_id = $1`, [req.waLine.id])).rows),
             copies: (await copies.plan(req.waLine.id)).map(t => ({ name: t.name, from: t.from, exists: t.exists })),
+            recommended: copies.recommended((await db.query(`SELECT name, language, status FROM wa_templates WHERE line_id = $1`, [req.waLine.id])).rows),
             buttonBase: links.BUTTON_BASE(),
             // The webhook address carries its secret, so only a manager sees it.
             webhook: req.waManager ? `${links.PUBLIC_BASE()}/api/hooks/carts/abandoned?api_key=${cfg.webhook_secret}` : null,

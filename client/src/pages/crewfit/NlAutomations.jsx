@@ -4,7 +4,7 @@ import { useToast } from '../../components/Toast'
 import Icon from '../../components/Icon'
 import { SaveButton, Head, Toggle, Loading } from './waSettingsUi'
 import { useWaBrand } from './waBrand'
-import { NlTemplateLibrary, TemplatePreview } from './NlSettings'
+import { NlTemplateLibrary, TemplatePreview, TemplateEditor } from './NlSettings'
 import { STATUS_LOOK, formFrom } from './nlTemplates'
 
 /**
@@ -98,47 +98,66 @@ function WebhookCard({ data }) {
   )
 }
 
-/** One event: its switch, template, gaps, button, timing and preview. */
-function EventCard({ ev, cfg, data, templates, onChange, onCreated, canEdit }) {
-  const apiFetch = useApi()
-  const toast = useToast()
-  const brand = useWaBrand()
-  const [creating, setCreating] = useState(false)
-  const ours = data.set.find(s => s.event === ev.key)
-  const oursTpl = ours && templates.find(t => t.name === ours.name)
+/** The message in a line or two, with sample values in its gaps, so templates can be told apart. */
+const gist = (t, samples = []) => String(t.body_text || '')
+  .replace(/\{\{\s*(\d+)\s*\}\}/g, (m, n) => samples[Number(n) - 1] || '…')
+  .replace(/[*_~]/g, '').replace(/\s+/g, ' ').trim()
+const HOPPER = /prizmacommunicator/i
+/** A template whose link button still goes through Updatrr's redirector: never offered. */
+const viaUpdatrr = (t) => (t.components || []).some(c => (c.buttons || []).some(b => b.type === 'URL' && HOPPER.test(b.url || '')))
+
+function TemplateOption({ t, on, tag, onPick, disabled, samples }) {
+  return (
+    <button type="button" className={`nl-pick${on ? ' on' : ''}`} disabled={disabled} onClick={onPick} aria-pressed={on}>
+      <span className="nl-pick-head">
+        <b>{t.name}</b>
+        {tag && <span className="status-badge success">{tag}</span>}
+        <span className={`status-badge ${STATUS_LOOK[t.status] || ''}`}>{t.status === 'APPROVED' ? 'Approved' : t.status === 'REJECTED' ? 'Rejected' : 'In review'}</span>
+        {(t.components || []).some(c => c.type === 'HEADER' && c.format === 'IMAGE') && <span className="was-hint">· photo</span>}
+      </span>
+      <span className="nl-pick-body">{gist(t, samples)}</span>
+    </button>
+  )
+}
+
+/** One event: what it sends, whether it's on, what fills the gaps, and editing the template. */
+function EventCard({ ev, cfg, data, templates, onChange, onEdit, canEdit }) {
+  const [choosing, setChoosing] = useState(false)
   const picked = cfg.template && templates.find(t => keyOf(t) === cfg.template)
-  const approved = templates.filter(t => t.status === 'APPROVED')
-  const f = picked ? formFrom(picked) : ours ? formFrom({ components: ours.components }) : null
-  const comps = picked?.components || ours?.components || []
+  const recKey = data.recommended?.[ev.key]
+  const rec = recKey && templates.find(t => keyOf(t) === recKey)
+  const hint = (name) => data.set.find(x => x.name === name) || data.suggest?.[name] || null
+  const usable = templates.filter(t => !viaUpdatrr(t))
+  const suits = (t) => keyOf(t) === recKey || (data.suggest?.[t.name]?.events || []).includes(ev.key) || data.set.some(x => x.name === t.name && x.event === ev.key)
+  const fitting = usable.filter(suits).sort((x, y) => (keyOf(y) === recKey) - (keyOf(x) === recKey) || (y.status === 'APPROVED') - (x.status === 'APPROVED'))
+  const others = usable.filter(t => !suits(t))
+
+  const f = picked ? formFrom(picked) : null
+  const comps = picked?.components || []
   const hasImage = comps.some(c => c.type === 'HEADER' && c.format === 'IMAGE')
-  const urlButton = (comps.find(c => c.type === 'BUTTONS')?.buttons || []).find(b => b.type === 'URL' && /\{\{1\}\}/.test(b.url || ''))
-  const foreign = urlButton && !String(urlButton.url).startsWith(data.buttonBase)
-  const gapCount = picked ? (picked.variables || 0) : ours?.vars.length || 0
+  const btns = comps.find(c => c.type === 'BUTTONS')?.buttons || []
+  const urlButton = btns.find(b => b.type === 'URL' && /\{\{1\}\}/.test(b.url || ''))
+  const needsCoupon = cfg.vars.includes('coupon') || btns.some(b => b.type === 'COPY_CODE')
+  const gapCount = picked?.variables || 0
+  const missing = Array.from({ length: gapCount }, (_, i) => i).filter(i => !cfg.vars[i])
   const examples = Array.from({ length: gapCount }, (_, i) => {
     const src = cfg.vars[i]
     return src === 'coupon' ? (cfg.coupon || data.sources.coupon.example) : data.sources[src]?.example || `{{${i + 1}}}`
   })
-  // What fills the gaps comes with the template: ours by design, Updatrr's read from its wording.
-  const hint = (name) => data.set.find(s => s.name === name) || data.suggest?.[name] || null
-  const suits = (t) => ours?.name === t.name || (data.suggest?.[t.name]?.events || []).includes(ev.key)
-  const pick = (key) => {
-    const t = templates.find(x => keyOf(x) === key)
-    const h = t && hint(t.name)
+  const pick = (t) => {
+    const h = hint(t.name)
     const link = h?.link && ev.links.includes(h.link) ? h.link : null
-    onChange({ template: key || null, vars: h ? [...h.vars] : Array.from({ length: t?.variables || 0 }, (_, i) => cfg.vars[i] || null), ...(link ? { link } : {}) })
+    onChange({ template: keyOf(t), vars: h ? [...h.vars] : Array.from({ length: t.variables || 0 }, () => null), ...(link ? { link } : {}) })
+    setChoosing(false)
   }
-  const ourCopy = picked && templates.find(t => t.name === `nl_${picked.name.replace(/\d{13}$/, '')}`)
-  const create = async () => {
-    setCreating(true)
-    const r = await apiFetch(`${brand.api}/nl/automations/${ev.key}/template`, { method: 'POST' })
-    setCreating(false)
-    if (!r || r.error) return toast.error(r?.error || 'Meta refused that', { duration: 0 })
-    toast.success(`${r.name} sent to Meta for review — sync templates to see when it is approved`)
-    onCreated(`${r.name}|en`)
-  }
-  const ready = picked && picked.status === 'APPROVED'
+  const ready = picked?.status === 'APPROVED' && !missing.length && (!needsCoupon || cfg.coupon)
+  const why = !picked ? 'Choose a template first' : picked.status !== 'APPROVED' ? 'Waiting for Meta to approve it'
+    : missing.length ? 'Say what fills every gap' : needsCoupon && !cfg.coupon ? 'Set the coupon code' : null
   const d = splitDelay(cfg.delay || ev.delay || 30)
   const setDelay = (n, unit) => onChange({ delay: Math.max(1, Number(n) || 1) * UNITS.find(u => u[0] === unit)[2] })
+  const showPicker = canEdit && choosing
+  const samplesFor = (t) => (hint(t.name)?.vars || []).map(v => data.sources[v]?.example)
+
   return (
     <section className={`was-card nl-auto-card${cfg.enabled ? ' on' : ''}`}>
       <div className="nl-auto-head">
@@ -146,60 +165,50 @@ function EventCard({ ev, cfg, data, templates, onChange, onCreated, canEdit }) {
           <h3>{ev.label}</h3>
           <p className="was-hint">{ev.hint}</p>
         </div>
-        <Toggle on={cfg.enabled} label={`Send ${ev.label}`} disabled={!canEdit || (!cfg.enabled && !ready)} onChange={v => onChange({ enabled: v })} />
+        <span className="nl-auto-switch">
+          <span className={cfg.enabled ? 'nl-on' : 'was-hint'}>{cfg.enabled ? 'On' : why && !cfg.enabled ? why : 'Off'}</span>
+          <Toggle on={cfg.enabled} label={`Send ${ev.label}`} disabled={!canEdit || (!cfg.enabled && !ready)} onChange={v => onChange({ enabled: v })} />
+        </span>
       </div>
       <div className="nl-auto-body">
         <div className="nl-auto-form">
-          <div className="input-group">
-            <label htmlFor={`tpl-${ev.key}`}>Template</label>
-            <select id={`tpl-${ev.key}`} value={cfg.template || ''} disabled={!canEdit} onChange={e => pick(e.target.value)}>
-              <option value="">Choose an approved template…</option>
-              {[...approved].sort((x, y) => suits(y) - suits(x)).map(t => (
-                <option key={keyOf(t)} value={keyOf(t)}>{t.name}{ours?.name === t.name ? ' — Normless (recommended)' : suits(t) ? ' — suits this' : ''} · {t.language}</option>
-              ))}
-              {picked && picked.status !== 'APPROVED' && <option value={cfg.template}>{picked.name} ({String(picked.status).toLowerCase()})</option>}
-            </select>
-            {ours && !oursTpl && canEdit && (
-              <div className="nl-auto-note">
-                <span>Normless has its own template for this, with our links{hasImage ? ' and a product photo' : ''}.</span>
-                <button type="button" className="mini-btn" disabled={creating} onClick={create}>{creating ? 'Sending to Meta…' : 'Submit it to Meta'}</button>
+          <div className="nl-auto-sends">
+            <span className="nl-auto-label">Sends</span>
+            {picked ? (
+              <div className="nl-auto-chosen">
+                <b>{picked.name}</b>
+                <span className={`status-badge ${STATUS_LOOK[picked.status] || ''}`}>{picked.status === 'APPROVED' ? 'Approved' : String(picked.status).toLowerCase()}</span>
+                {canEdit && <button type="button" className="mini-btn" onClick={() => setChoosing(v => !v)}>{choosing ? 'Keep this one' : 'Change'}</button>}
+                {canEdit && <button type="button" className="mini-btn" onClick={() => onEdit(picked)}><Icon name="edit" size={11} /> Edit</button>}
               </div>
-            )}
-            {oursTpl && oursTpl.status !== 'APPROVED' && (
-              <div className="nl-auto-note"><span className={`status-badge ${STATUS_LOOK[oursTpl.status] || ''}`}>{oursTpl.status === 'REJECTED' ? 'Rejected' : 'In review'}</span>
-                <span>{ours.name} {oursTpl.status === 'REJECTED' ? `was rejected${oursTpl.rejected_reason && oursTpl.rejected_reason !== 'NONE' ? `: ${oursTpl.rejected_reason}` : ''}` : 'is with Meta — sync templates to check'}</span></div>
-            )}
-            {picked && foreign && (
-              <p className="was-bad">This template’s button goes through {new URL(urlButton.url.replace('{{1}}', 'x')).host}.{' '}
-                {ourCopy ? `Use ${ourCopy.name} — the same message with our link${ourCopy.status === 'APPROVED' ? '' : ' (still in review at Meta)'}.` : 'Submit the copies with our links (top of this page) and use one of those.'}</p>
-            )}
+            ) : rec && canEdit ? (
+              <div className="nl-auto-chosen">
+                <span className="was-hint">Nothing chosen. Recommended:</span> <b>{rec.name}</b>
+                <button type="button" className="mini-btn mini-btn-active" onClick={() => pick(rec)}>Use it</button>
+                <button type="button" className="mini-btn" onClick={() => setChoosing(v => !v)}>{choosing ? 'Close the list' : 'Choose another'}</button>
+              </div>
+            ) : canEdit ? (
+              <div className="nl-auto-chosen"><span className="was-hint">Nothing chosen yet.</span>
+                <button type="button" className="mini-btn mini-btn-active" onClick={() => setChoosing(true)}>Choose a template</button></div>
+            ) : <span className="was-hint">Nothing chosen yet.</span>}
           </div>
 
-          {gapCount > 0 && (
-            <div className="nl-auto-gaps">
-              <span className="was-hint">What fills each gap</span>
-              {Array.from({ length: gapCount }, (_, i) => (
-                <label key={i} className="nl-auto-gap">
-                  <code>{`{{${i + 1}}}`}</code>
-                  <select value={cfg.vars[i] || ''} disabled={!canEdit} onChange={e => { const v = [...cfg.vars]; v[i] = e.target.value || null; onChange({ vars: v }) }}>
-                    <option value="">Choose…</option>
-                    {Object.entries(data.sources).map(([k, s]) => <option key={k} value={k}>{s.label}</option>)}
-                  </select>
-                </label>
-              ))}
+          {showPicker && (
+            <div className="nl-picker">
+              <span className="was-hint">Templates for “{ev.label}”</span>
+              {fitting.length ? fitting.map(t => (
+                <TemplateOption key={keyOf(t)} t={t} samples={samplesFor(t)} on={keyOf(t) === cfg.template} tag={keyOf(t) === recKey ? 'Recommended' : null} onPick={() => pick(t)} />
+              )) : <p className="was-hint">None written for this yet — pick from the rest below.</p>}
+              {!!others.length && (
+                <details className="nl-picker-more">
+                  <summary>All other templates ({others.length})</summary>
+                  {others.map(t => <TemplateOption key={keyOf(t)} t={t} samples={samplesFor(t)} on={keyOf(t) === cfg.template} onPick={() => pick(t)} />)}
+                </details>
+              )}
             </div>
           )}
 
-          {urlButton && (
-            <div className="input-group">
-              <label htmlFor={`link-${ev.key}`}>“{urlButton.text}” opens</label>
-              <select id={`link-${ev.key}`} value={cfg.link} disabled={!canEdit} onChange={e => onChange({ link: e.target.value })}>
-                {ev.links.map(k => <option key={k} value={k}>{data.links[k]}</option>)}
-              </select>
-            </div>
-          )}
-
-          {ev.group === 'cart' && (
+          {picked && ev.group === 'cart' && (
             <div className="form-row">
               <div className="input-group">
                 <label htmlFor={`after-${ev.key}`}>Send after</label>
@@ -210,17 +219,51 @@ function EventCard({ ev, cfg, data, templates, onChange, onCreated, canEdit }) {
                   </select>
                 </div>
               </div>
-              <div className="input-group">
-                <label htmlFor={`coupon-${ev.key}`}>Coupon code <span className="label-hint">{cfg.vars.includes('coupon') ? 'goes in the message' : 'optional'}</span></label>
-                <input id={`coupon-${ev.key}`} value={cfg.coupon} maxLength={40} placeholder="COMEBACK10" disabled={!canEdit}
-                  onChange={e => onChange({ coupon: e.target.value.toUpperCase().replace(/\s/g, '') })} />
-              </div>
+              {needsCoupon && (
+                <div className="input-group">
+                  <label htmlFor={`coupon-${ev.key}`}>Coupon code <span className="label-hint">goes in the message</span></label>
+                  <input id={`coupon-${ev.key}`} value={cfg.coupon} maxLength={15} placeholder="COMEBACK10" disabled={!canEdit}
+                    onChange={e => onChange({ coupon: e.target.value.toUpperCase().replace(/\s/g, '') })} />
+                </div>
+              )}
             </div>
+          )}
+          {picked && ev.group !== 'cart' && needsCoupon && (
+            <div className="input-group">
+              <label htmlFor={`coupon-${ev.key}`}>Coupon code</label>
+              <input id={`coupon-${ev.key}`} value={cfg.coupon} maxLength={15} placeholder="COMEBACK10" disabled={!canEdit}
+                onChange={e => onChange({ coupon: e.target.value.toUpperCase().replace(/\s/g, '') })} />
+            </div>
+          )}
+
+          {urlButton && (
+            <div className="input-group">
+              <label htmlFor={`link-${ev.key}`}>“{urlButton.text}” button opens</label>
+              <select id={`link-${ev.key}`} value={cfg.link} disabled={!canEdit} onChange={e => onChange({ link: e.target.value })}>
+                {ev.links.map(k => <option key={k} value={k}>{data.links[k]}</option>)}
+              </select>
+            </div>
+          )}
+
+          {gapCount > 0 && (
+            <details className="nl-auto-gaps" open={missing.length > 0}>
+              <summary>What fills the message{missing.length ? <span className="was-bad"> — {missing.length} not set</span> : <span className="was-hint"> — all set</span>}</summary>
+              {Array.from({ length: gapCount }, (_, i) => (
+                <label key={i} className="nl-auto-gap">
+                  <code>{`{{${i + 1}}}`}</code>
+                  <select value={cfg.vars[i] || ''} disabled={!canEdit} onChange={e => { const v = [...cfg.vars]; v[i] = e.target.value || null; onChange({ vars: v }) }}>
+                    <option value="">Choose…</option>
+                    {Object.entries(data.sources).map(([k, x]) => <option key={k} value={k}>{x.label}</option>)}
+                  </select>
+                </label>
+              ))}
+            </details>
           )}
         </div>
         <div className="nl-auto-preview">
           {f ? <TemplatePreview header={f.header} headerExample={data.sources.first_name.example} body={f.body} examples={examples} footer={f.footer} buttons={f.buttons} image={hasImage || null} />
-            : <p className="was-hint">Pick a template to preview it.</p>}
+            : rec ? <><div className="was-hint">Recommended, as the customer would see it</div><TemplatePreview {...(() => { const r = formFrom(rec); return { header: r.header, body: r.body, footer: r.footer, buttons: r.buttons, examples: (hint(rec.name)?.vars || []).map(v => data.sources[v]?.example) } })()} image={(rec.components || []).some(c => c.type === 'HEADER' && c.format === 'IMAGE') || null} /></>
+              : <p className="was-hint">Pick a template to preview it.</p>}
         </div>
       </div>
     </section>
@@ -236,7 +279,8 @@ function CopiesCard({ data, onDone }) {
   const [results, setResults] = useState(null)
   const todo = (data.copies || []).filter(c => !c.exists)
   const originals = (data.copies || []).reduce((n, c) => n + c.from.length, 0)
-  if (!data.copies?.length) return null
+  // Once everything is with Meta there is nothing to do here, so the card goes.
+  if (!data.copies?.length || (!todo.length && !results)) return null
   const submit = async () => {
     if (!await toast.confirm({ title: `Submit ${todo.length} templates to Meta?`, message: 'Each is one of Updatrr’s templates with the same wording and photo, its link changed to ops.normless.store. Updatrr’s own templates are not touched. Meta usually reviews them within minutes to hours.', confirmLabel: 'Submit' })) return
     setBusy(true)
@@ -311,6 +355,7 @@ export function NlTemplatesTab() {
   const [group, setGroup] = useState('cart')
   const [syncing, setSyncing] = useState(false)
   const [libKey, setLibKey] = useState(0)
+  const [editing, setEditing] = useState(null)
   const sync = async () => {
     setSyncing(true)
     const r = await apiFetch(`${brand.api}/templates/sync`, { method: 'POST' })
@@ -346,9 +391,12 @@ export function NlTemplatesTab() {
           {group === 'cart' && <WebhookCard data={a.data} />}
           {events.map(ev => (
             <EventCard key={ev.key} ev={ev} cfg={a.draft[ev.key]} data={a.data} templates={a.templates} canEdit={a.data.canEdit}
-              onChange={(patch) => a.setEvent(ev.key, patch)}
-              onCreated={async () => { await a.load(); setLibKey(k => k + 1) }} />
+              onChange={(patch) => a.setEvent(ev.key, patch)} onEdit={setEditing} />
           ))}
+          {editing && (
+            <TemplateEditor template={editing} onClose={() => setEditing(null)}
+              onSaved={async () => { setEditing(null); await a.load(); setLibKey(k => k + 1) }} />
+          )}
           <section className="was-card">
             <div className="was-card-head"><h3>Recently sent</h3></div>
             <RecentSends rows={a.data.recent.filter(r => keys.includes(r.event))} events={a.data.events} />
