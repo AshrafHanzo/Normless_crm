@@ -10,6 +10,7 @@ import { WA_BRANDS } from './waBrand'
 import TicketDrawer from '../support/TicketDrawer'
 import { refOf } from '../support/ticket'
 import { useWaCalls, WaCallDock } from './WaCalls'
+import WaNewChat from './WaNewChat'
 
 const FILTERS = [
   { key: 'mine', label: 'Mine' },
@@ -229,6 +230,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
   const [term, setTerm] = useState('')
   const [conversations, setConversations] = useState([])
   const [tally, setTally] = useState({ open: 0, unassigned: 0, unread: 0, waiting: 0, bot: 0, mine: 0, ticket: 0, closed: 0 })
+  const [newChat, setNewChat] = useState(false)
   const [openId, setOpenId] = useState(params.get('c') ? Number(params.get('c')) : null)
   const [thread, setThread] = useState(null)
   const [messages, setMessages] = useState([])
@@ -1115,14 +1117,24 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
         </div>
       )}
 
+      {newChat && (
+        <WaNewChat API={API} brandName={brand.name} onClose={() => setNewChat(false)}
+          onOpened={(id) => { setNewChat(false); loadConversations(); openConversation(id) }} />
+      )}
+
       <div className={`wa-layout${thread ? '' : ' wa-layout-empty'}`}>
         {/* The threads */}
         <aside className="wa-list" aria-label="Conversations">
+          <div className="wa-list-top">
           <div className="search-bar wa-search">
             <span className="search-icon" />
             <input aria-label="Search conversations" placeholder="Name, company or number…" value={search}
               onChange={e => setSearch(e.target.value)} />
             {!!search && <button type="button" className="search-clear" aria-label="Clear search" onClick={() => setSearch('')}>×</button>}
+          </div>
+          <button type="button" className="btn btn-primary btn-sm wa-new-chat" onClick={() => setNewChat(true)} title="Message a customer first">
+            <Icon name="plus" size={14} /> New chat
+          </button>
           </div>
           <div className="wa-filters" role="group" aria-label={cf ? 'Whose' : 'Queue'}>
             {(cf ? FILTERS : NL_FILTERS).map(f => (
@@ -1334,7 +1346,10 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                             </button>
                           </div>
                         )}
-                        {(m.media_url || m.media_name) && !/^image\//.test(m.media_mime || '') && (
+                        {m.type === 'call' && m.media_url && (
+                          <audio className="wa-call-rec" controls preload="none" src={fileUrl(m.media_url)} aria-label="Call recording" />
+                        )}
+                        {m.type !== 'call' && (m.media_url || m.media_name) && !/^image\//.test(m.media_mime || '') && (
                           <DocCard name={m.media_name} mime={m.media_mime} url={m.media_url ? fileUrl(m.media_url) : null}
                             onOpen={() => m.media_url && setPreview({ url: fileUrl(m.media_url), name: m.media_name, mime: m.media_mime })} />
                         )}

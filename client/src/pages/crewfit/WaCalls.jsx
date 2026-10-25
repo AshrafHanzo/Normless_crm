@@ -84,6 +84,71 @@ export function useWaCalls({ API, apiFetch, toast }) {
 
   useEffect(() => { activeRef.current = active }, [active])
 
+  /* ── Recording ───────────────────────────────────────────────────────────────────────────
+     Both voices, mixed in this browser, from the moment the customer's audio arrives. Kept only
+     if the call was answered, and uploaded to the call's line in the chat when it ends. */
+  const settingsRef = useRef(null)
+  useEffect(() => { settingsRef.current = settings }, [settings])
+  const rec = useRef(null)
+  const [recording, setRecording] = useState(false)
+
+  const uploadRecording = async (callId, blob) => {
+    if (!callId || !blob || blob.size < 2000) return
+    const form = new FormData()
+    form.append('audio', blob, `call-${callId}.${/ogg/.test(blob.type) ? 'ogg' : /mp4/.test(blob.type) ? 'm4a' : 'webm'}`)
+    const r = await apiFetch(`${API}/calls/${callId}/recording`, { method: 'POST', body: form })
+    if (!r || r.error) toast.error(r?.error || 'Could not keep the call recording')
+    else setVersion(v => v + 1)
+  }
+
+  const startRecording = (remote) => {
+    if (rec.current || !settingsRef.current?.recording?.record || typeof MediaRecorder === 'undefined') return
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext
+      const ctx = new Ctx()
+      const mix = ctx.createMediaStreamDestination()
+      if (stream.current) ctx.createMediaStreamSource(stream.current).connect(mix)
+      ctx.createMediaStreamSource(remote).connect(mix)
+      const type = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4'].find(t => MediaRecorder.isTypeSupported?.(t)) || ''
+      const recorder = new MediaRecorder(mix.stream, type ? { mimeType: type } : undefined)
+      const chunks = []
+      const entry = { recorder, ctx, callId: null, answered: false, noticed: false }
+      recorder.ondataavailable = (e) => { if (e.data?.size) chunks.push(e.data) }
+      recorder.onstop = () => {
+        ctx.close().catch(() => {})
+        if (entry.answered) uploadRecording(entry.callId, new Blob(chunks, { type: recorder.mimeType || type || 'audio/webm' }))
+      }
+      recorder.start(1000)
+      rec.current = entry
+      setRecording(true)
+    } catch { /* this browser can't record: the call goes on unrecorded */ }
+  }
+
+  const stopRecording = () => {
+    const entry = rec.current
+    rec.current = null
+    setRecording(false)
+    if (!entry) return
+    const a = activeRef.current
+    entry.callId = entry.callId || a?.id || null
+    if (a && (a.answered_at || a.status === 'accepted')) entry.answered = true
+    try { if (entry.recorder.state !== 'inactive') entry.recorder.stop() } catch { /* already stopped */ }
+  }
+
+  // Once the customer picks up: the recording counts, and they are told it is being recorded.
+  useEffect(() => {
+    const entry = rec.current
+    if (!entry || !active?.id) return
+    entry.callId = active.id
+    if (!(active.answered_at || active.status === 'accepted')) return
+    entry.answered = true
+    if (entry.noticed) return
+    entry.noticed = true
+    apiFetch(`${API}/calls/${active.id}/notice`, { method: 'POST', body: '{}' }).then(r => {
+      if (r && !r.sent && r.reason === 'window') toast.info('Recording — WhatsApp won’t let us message them right now, so tell the customer the call is being recorded', { duration: 8000 })
+    })
+  }, [active?.id, active?.status, active?.answered_at, recording]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const loadSettings = async (fresh = false) => {
     const r = await apiFetch(`${API}/calls/settings${fresh ? '?fresh=1' : ''}`)
     if (r && !r.error) setSettings(r)
@@ -94,6 +159,7 @@ export function useWaCalls({ API, apiFetch, toast }) {
   /* ── The connection ──────────────────────────────────────────────────────────────────── */
 
   const teardown = () => {
+    stopRecording()
     try { pc.current?.close() } catch { /* already closed */ }
     pc.current = null
     stream.current?.getTracks().forEach(t => t.stop())
@@ -112,7 +178,10 @@ export function useWaCalls({ API, apiFetch, toast }) {
     stream.current = media
     const conn = new RTCPeerConnection({ iceServers: STUN })
     media.getTracks().forEach(t => conn.addTrack(t, media))
-    conn.ontrack = (e) => { if (audio.current) { audio.current.srcObject = e.streams[0]; audio.current.play?.().catch(() => {}) } }
+    conn.ontrack = (e) => {
+      if (audio.current) { audio.current.srcObject = e.streams[0]; audio.current.play?.().catch(() => {}) }
+      if (e.streams[0]) startRecording(e.streams[0])
+    }
     pc.current = conn
     return conn
   }
@@ -302,7 +371,7 @@ export function useWaCalls({ API, apiFetch, toast }) {
     : null
   void tick
 
-  return { settings, incoming, active, micOff, busy, elapsed, audio, version, call, answer, decline, silence, hangUp, toggleMic, loadSettings }
+  return { settings, incoming, active, micOff, busy, elapsed, audio, version, recording, call, answer, decline, silence, hangUp, toggleMic, loadSettings }
 }
 
 const STATUS_WORDS = {
@@ -311,7 +380,7 @@ const STATUS_WORDS = {
 
 /** The banner for a ringing customer call, and the bar for the call this tab is on. */
 export function WaCallDock({ calls, onOpen }) {
-  const { incoming, active, micOff, busy, elapsed, audio, answer, decline, silence, hangUp, toggleMic } = calls
+  const { incoming, active, micOff, busy, elapsed, audio, recording, answer, decline, silence, hangUp, toggleMic } = calls
   return (
     <>
       {/* Remote audio. Kept mounted so the stream can be attached before the call connects. */}
@@ -324,6 +393,7 @@ export function WaCallDock({ calls, onOpen }) {
               <button type="button" className="wa-call-who" onClick={() => onOpen?.(active.conversation_id)} title="Open the chat">
                 <b>{active.display_name || 'Customer'}</b>
                 <span>{elapsed != null ? mmss(elapsed) : (STATUS_WORDS[active.status] || active.status)}{micOff ? ' · muted' : ''}</span>
+                {recording && <span className="wa-call-recording" title="This call is being recorded"><i aria-hidden="true" />Recording</span>}
               </button>
               <button type="button" className={`wa-call-btn${micOff ? ' wa-call-btn-on' : ''}`} onClick={toggleMic}
                 aria-pressed={micOff} title={micOff ? 'Unmute your microphone' : 'Mute your microphone'}>

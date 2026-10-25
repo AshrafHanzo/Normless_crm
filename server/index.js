@@ -1897,6 +1897,13 @@ async function ensureWaLinesSchema() {
                 updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
             );
             CREATE INDEX IF NOT EXISTS wa_calls_live_idx ON wa_calls (line_id, created_at) WHERE ended_at IS NULL;
+            -- The call's recording, made in the browser that took the call, and when the customer
+            -- was told in the chat that it was being recorded.
+            ALTER TABLE wa_calls ADD COLUMN IF NOT EXISTS recording_url TEXT;
+            ALTER TABLE wa_calls ADD COLUMN IF NOT EXISTS recording_mime TEXT;
+            ALTER TABLE wa_calls ADD COLUMN IF NOT EXISTS recording_bytes INTEGER;
+            ALTER TABLE wa_calls ADD COLUMN IF NOT EXISTS recorded_by TEXT;
+            ALTER TABLE wa_calls ADD COLUMN IF NOT EXISTS notice_sent_at TIMESTAMPTZ;
             CREATE INDEX IF NOT EXISTS wa_calls_thread_idx ON wa_calls (conversation_id, id);
             -- A chat somebody has muted: no sound, no badge for them. Per person, not per chat.
             CREATE TABLE IF NOT EXISTS wa_conversation_mutes (

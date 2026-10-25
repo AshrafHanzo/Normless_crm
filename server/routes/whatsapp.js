@@ -36,6 +36,7 @@ const connectSvc = require('../services/wa-connect');
 const lines = require('../services/wa-line');
 const nlShop = require('../services/nl-shop');
 const nlBot = require('../services/nl-bot');
+const openers = require('../services/wa-openers');
 const nlHandover = require('../services/nl-handover');
 const calls = require('../services/wa-calls');
 
@@ -886,6 +887,62 @@ async function mutedFor(req, ids) {
     return new Set(r.rows.map(x => x.conversation_id));
 }
 
+/* ── Starting a chat ──────────────────────────────────────────────────────────────────────────
+   For the times the team writes first: a new number from a phone call, or a customer whose order
+   has a problem. The thread is made (or found) here; if the customer hasn't written in the last
+   24 hours, the first message has to be an approved template, which the inbox sends next. */
+
+router.post('/conversations/start', async (req, res) => {
+    try {
+        const phone = wa.normalisePhone(req.body?.phone);
+        if (!phone || phone.length < 11 || phone.length > 15) return res.status(400).json({ error: 'Give the number with its country code, or a 10-digit Indian number' });
+        if (phone === DEMO_PHONE) return res.status(400).json({ error: 'That is the demo chat' });
+        const name = trim(req.body?.name);
+        const me = req.user?.username || null;
+        const existing = (await db.query(
+            `SELECT c.id, c.assigned_to, c.status FROM wa_conversations c JOIN wa_contacts k ON k.id = c.contact_id
+              WHERE k.line_id = $1 AND k.phone = $2`, [req.waLine.id, phone])).rows[0];
+        // Someone else's open chat stays theirs; a rep who can't see it is told whose it is.
+        if (existing?.assigned_to && existing.status === 'open' && !req.waManager
+            && String(existing.assigned_to).toLowerCase() !== String(me).toLowerCase()) {
+            return res.status(409).json({ error: `This customer is already talking to ${String(existing.assigned_to).split('@')[0]} — ask them, or a manager, to hand the chat over` });
+        }
+        const thread = existing || await quietThread(phone, name);
+        if (name) {
+            await db.query(`UPDATE wa_contacts SET profile_name = COALESCE(profile_name, $2)
+                             WHERE id = (SELECT contact_id FROM wa_conversations WHERE id = $1)`, [thread.id, name]);
+        }
+        // Theirs now, with a person answering: the bot and the menu stay out of a chat a person began.
+        await db.query(
+            `UPDATE wa_conversations SET assigned_to = COALESCE(assigned_to, $2), mode = 'human', status = 'open',
+                    last_message_at = COALESCE(last_message_at, CURRENT_TIMESTAMP), updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
+            [thread.id, me]);
+        if (!existing) {
+            await orders.logActivity({ conversationId: thread.id, kind: 'assign', actor: me, body: `${String(me || '').split('@')[0]} started this chat` });
+        }
+        const conversation = await loadConversation(req, thread.id);
+        res.status(existing ? 200 : 201).json({ conversation, existed: !!existing, openers: await openers.list(req.waLine) });
+    } catch (err) {
+        console.error('whatsapp start chat error:', err);
+        res.status(500).json({ error: 'Could not start that chat' });
+    }
+});
+
+/** The opener templates for this line, and submitting them to Meta. */
+router.get('/openers', async (req, res) => {
+    try { res.json({ openers: await openers.list(req.waLine), canSubmit: !!req.waSettings }); }
+    catch (err) { console.error('whatsapp openers error:', err); res.status(500).json({ error: 'Could not read the templates' }); }
+});
+router.post('/openers', settingsOnly, async (req, res) => {
+    try {
+        if (!wa.configured() || !wa.wabaId()) return res.status(503).json({ error: 'Connect this WhatsApp number first' });
+        res.json({ results: await openers.submit(req.waLine), openers: await openers.list(req.waLine) });
+    } catch (err) {
+        console.error('whatsapp openers submit error:', err);
+        res.status(500).json({ error: 'Could not send those to Meta' });
+    }
+});
+
 /** One thread's header: who it is, what we know about them, who it belongs to. */
 async function loadConversation(req, id) {
     const params = [id];
@@ -1157,6 +1214,7 @@ const shapeCall = (row, req, conversation = null) => {
         id: row.id, conversation_id: row.conversation_id, direction: row.direction, status: row.status,
         started_by: row.started_by, answered_by: row.answered_by, answered_at: row.answered_at,
         ended_at: row.ended_at, duration_sec: row.duration_sec, error: row.error, created_at: row.created_at,
+        recording_url: row.recording_url || null,
         mine,
         ...(mine ? { answer_sdp: row.direction === 'out' ? row.answer_sdp : undefined } : {}),
         ...(row.direction === 'in' && row.status === 'ringing' ? { offer_sdp: row.offer_sdp } : {}),
@@ -1175,13 +1233,118 @@ async function loadCall(req, id) {
 
 /** Is calling switched on for this number? Asked by the inbox once, cached on the server. */
 router.get('/calls/settings', async (req, res) => {
+    const recording = await recordingSettings(req.waLine.id).catch(() => RECORDING_DEFAULTS);
     try {
-        if (!wa.configured()) return res.json({ enabled: false, status: 'NOT_CONFIGURED', canManage: !!req.waManager });
+        if (!wa.configured()) return res.json({ enabled: false, status: 'NOT_CONFIGURED', canManage: !!req.waManager, canSettings: !!req.waSettings, recording });
         const s = await calls.getSettings({ fresh: req.query.fresh === '1' });
         res.json({ enabled: s.status === 'ENABLED', status: s.status || 'NOT_SET',
-            callback_permission: s.callback_permission_status || null, canManage: !!req.waManager });
+            callback_permission: s.callback_permission_status || null, canManage: !!req.waManager, canSettings: !!req.waSettings, recording });
     } catch (err) {
-        res.json({ enabled: false, status: 'ERROR', error: err.message, canManage: !!req.waManager });
+        res.json({ enabled: false, status: 'ERROR', error: err.message, canManage: !!req.waManager, canSettings: !!req.waSettings, recording });
+    }
+});
+
+/* ── Call recordings ──────────────────────────────────────────────────────────────────────────
+   Recorded in the browser that is on the call (both voices, mixed), uploaded when it ends and
+   attached to the call's line in the chat. Calls taken on a phone or a SIM are never recorded:
+   their sound never passes through the CRM. The customer is told in the chat when a recorded
+   call connects, if WhatsApp lets us write to them then. */
+
+const RECORDING_DEFAULTS = {
+    record: true, notice_in_chat: true,
+    notice: 'This call is being recorded for quality and training.',
+};
+async function recordingSettings(lineIdValue) {
+    const row = (await db.query('SELECT settings FROM wa_lines WHERE id = $1', [lineIdValue])).rows[0];
+    let saved = {};
+    try { saved = JSON.parse(row?.settings || '{}')?.calls || {}; } catch { /* defaults */ }
+    return { ...RECORDING_DEFAULTS, ...saved };
+}
+
+router.put('/calls/recording', settingsOnly, async (req, res) => {
+    try {
+        const b = req.body || {};
+        const value = {
+            record: !!b.record, notice_in_chat: !!b.notice_in_chat,
+            notice: String(b.notice || RECORDING_DEFAULTS.notice).trim().slice(0, 300) || RECORDING_DEFAULTS.notice,
+        };
+        await db.transaction(async (c) => {
+            const row = (await c.query('SELECT settings FROM wa_lines WHERE id = $1 FOR UPDATE', [req.waLine.id])).rows[0];
+            let all = {};
+            try { all = JSON.parse(row?.settings || '{}') || {}; } catch { all = {}; }
+            all.calls = value;
+            await c.query('UPDATE wa_lines SET settings = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1', [req.waLine.id, JSON.stringify(all)]);
+        });
+        res.json({ recording: value });
+    } catch (err) {
+        console.error('whatsapp recording settings error:', err);
+        res.status(500).json({ error: 'Could not save that' });
+    }
+});
+
+const CALL_ROOT = path.join(__dirname, '..', 'uploads', 'whatsapp', 'calls');
+const callUpload = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => { fs.mkdirSync(CALL_ROOT, { recursive: true }); cb(null, CALL_ROOT); },
+        filename: (req, file, cb) => cb(null, `call-${Date.now()}-${crypto.randomBytes(8).toString('hex')}${/ogg/.test(file.mimetype) ? '.ogg' : /mp4|aac|m4a/.test(file.mimetype) ? '.m4a' : '.webm'}`),
+    }),
+    limits: { fileSize: 80 * 1024 * 1024, files: 1 },
+    fileFilter: (req, file, cb) => cb(null, /^audio\/|^video\/webm/.test(file.mimetype)),
+});
+
+/** The browser that was on the call sends its recording when the call ends. */
+router.post('/calls/:id/recording', (req, res, next) => callUpload.single('audio')(req, res, (err) => {
+    if (!err) return lines.resume(req, next);
+    res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? 'That recording is too long to keep' : 'Could not read the recording' });
+}), async (req, res) => {
+    try {
+        const row = await loadCall(req, req.params.id);
+        const drop = () => { if (req.file) fs.promises.unlink(req.file.path).catch(() => {}); };
+        if (!row) { drop(); return res.status(404).json({ error: 'Call not found' }); }
+        if (!req.file) return res.status(400).json({ error: 'No recording came with that' });
+        const me = String(req.user?.username || '').toLowerCase();
+        if (![row.started_by, row.answered_by].some(u => String(u || '').toLowerCase() === me)) { drop(); return res.status(403).json({ error: 'Only the person on the call can add its recording' }); }
+        if (row.recording_url) { drop(); return res.json({ recording_url: row.recording_url }); }
+        const url = `/uploads/whatsapp/calls/${path.basename(req.file.path)}`;
+        const mime = String(req.file.mimetype || 'audio/webm').split(';')[0];
+        await db.query(
+            `UPDATE wa_calls SET recording_url = $2, recording_mime = $3, recording_bytes = $4, recorded_by = $5, updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
+            [row.id, url, mime, req.file.size, req.user?.username || null]);
+        // On the call's own line in the chat, so it plays where the call is.
+        if (row.message_id) {
+            await db.query(`UPDATE wa_messages SET media_url = $2, media_mime = $3, media_name = 'Call recording' WHERE id = $1`, [row.message_id, url, mime]);
+        }
+        res.status(201).json({ recording_url: url });
+    } catch (err) {
+        console.error('whatsapp call recording error:', err);
+        res.status(500).json({ error: 'Could not keep the recording' });
+    }
+});
+
+/** Tell the customer, in the chat, that the call is being recorded. Once per call. */
+router.post('/calls/:id/notice', async (req, res) => {
+    try {
+        const row = await loadCall(req, req.params.id);
+        if (!row) return res.status(404).json({ error: 'Call not found' });
+        const settings = await recordingSettings(req.waLine.id);
+        if (!settings.record || !settings.notice_in_chat) return res.json({ sent: false, reason: 'off' });
+        const claimed = (await db.query(
+            `UPDATE wa_calls SET notice_sent_at = CURRENT_TIMESTAMP WHERE id = $1 AND notice_sent_at IS NULL RETURNING id`, [row.id])).rows[0];
+        if (!claimed) return res.json({ sent: false, reason: 'already' });
+        const conv = (await db.query(
+            `SELECT c.id, c.last_inbound_at, k.phone FROM wa_conversations c JOIN wa_contacts k ON k.id = c.contact_id WHERE c.id = $1`,
+            [row.conversation_id])).rows[0];
+        // Outside the 24-hour window WhatsApp would refuse a plain message; the person on the call
+        // is reminded to say it out loud instead.
+        if (!conv || isDemo(conv) || !wa.windowOpen(conv.last_inbound_at)) return res.json({ sent: false, reason: 'window' });
+        const wamid = await wa.sendText(conv.phone, settings.notice);
+        await db.query(
+            `INSERT INTO wa_messages (conversation_id, wamid, direction, sender_type, sender_user, type, body, status)
+             VALUES ($1,$2,'out','auto',NULL,'text',$3,'sent')`, [conv.id, wamid, settings.notice]);
+        res.json({ sent: true });
+    } catch (err) {
+        console.error('whatsapp recording notice error:', err.message);
+        res.json({ sent: false, reason: 'error' });
     }
 });
 

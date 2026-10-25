@@ -3633,3 +3633,24 @@ p.wdb-sub { margin: 0; }
 }
 .wdb-person b, .wdb-person .status-badge { white-space: nowrap; }
 .wdb-person { flex-wrap: wrap; }
+
+/* ---- New chat, call recordings, Calls & new chats settings ------------------------------------ */
+.wa-list-top { display: flex; gap: 8px; align-items: center; flex: none; }
+.wa-list-top .wa-search { flex: 1; min-width: 0; }
+.wa-new-chat { flex: none; white-space: nowrap; }
+.wnc-body { display: flex; flex-direction: column; gap: 14px; }
+.wnc-rule { display: flex; gap: 10px; align-items: flex-start; padding: 12px; border-radius: 10px; background: var(--surface); border: 1px solid var(--border); color: var(--text-secondary); font-size: 12.5px; line-height: 1.5; }
+.wnc-rule p { margin: 0; }
+.wnc-footer { margin: 4px -24px -24px; }
+.wnc-who { display: flex; flex-direction: column; gap: 2px; }
+.wnc-who b { font-size: 15px; }
+.wnc-section { display: flex; flex-direction: column; gap: 8px; }
+.wnc-label { font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--text-secondary); }
+.wnc-note { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 12.5px; color: var(--text-secondary); }
+.wnc-section .nl-auto-gap input { width: 100%; padding: 7px 10px; border-radius: 8px; background: var(--surface); border: 1px solid var(--border); color: var(--text-primary); font: inherit; }
+.wnc-preview { max-width: none; }
+.wnc-section .nl-pick-body { -webkit-line-clamp: 3; }
+.wa-call-rec { display: block; width: 260px; max-width: 100%; height: 36px; margin-top: 6px; }
+.wa-call-recording { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 700; color: var(--danger); }
+.wa-call-recording i { width: 8px; height: 8px; border-radius: 50%; background: var(--danger); animation: payPulse 1.6s infinite; }
+.wcs-opener { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border-radius: 10px; background: var(--surface); border: 1px solid var(--border); }
