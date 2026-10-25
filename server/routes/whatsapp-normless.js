@@ -39,9 +39,15 @@ const CLEAN = {
         big_order_amount: Math.max(0, Math.round(Number(v?.big_order_amount) || 0)),
     }),
     menu: (v) => {
-        const options = (Array.isArray(v?.options) ? v.options : []).map(o => str(o, 24)).filter(Boolean).slice(0, 10);
-        if (!options.length) throw new Error('The menu needs at least one option');
-        return { greeting: str(v?.greeting, 1000) || DEFAULTS.menu.greeting, options, exchange_url: str(v?.exchange_url, 500) || DEFAULTS.menu.exchange_url };
+        const given = new Map((Array.isArray(v?.items) ? v.items : []).map(i => [i?.key, i]));
+        const items = DEFAULTS.menu.items.map(d => ({
+            key: d.key, label: str(given.get(d.key)?.label, 24) || d.label, enabled: given.has(d.key) ? !!given.get(d.key).enabled : d.enabled,
+        }));
+        if (!items.some(i => i.enabled)) throw new Error('Keep at least one menu option switched on');
+        return {
+            enabled: v?.enabled !== false, greeting: str(v?.greeting, 1000) || DEFAULTS.menu.greeting,
+            items, exchange_url: str(v?.exchange_url, 500) || DEFAULTS.menu.exchange_url,
+        };
     },
     hours: (v) => {
         const time = (t, d) => (/^([01]\d|2[0-3]):[0-5]\d$/.test(String(t)) ? String(t) : d);

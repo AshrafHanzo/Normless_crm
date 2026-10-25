@@ -90,7 +90,7 @@ function BotCard({ s }) {
         <Toggle on={bot.enabled} label="Bot answers new chats" disabled={!s.canEdit} onChange={v => set({ enabled: v })} />
         <div>
           <b>Bot answers new chats</b>
-          <span className="was-hint">On: the bot answers every chat and hands sensitive ones to a person. Off: every chat goes straight to the team.</span>
+          <span className="was-hint">On: the AI bot answers every chat and hands sensitive ones to a person. Without an API key, or switched off, the Welcome menu answers instead.</span>
         </div>
       </div>
       <div className="form-row">
@@ -313,7 +313,7 @@ export function NlBotTab() {
       {!s.botReady && (
         <section className="was-card was-warn-card">
           <h3>The bot can’t answer yet</h3>
-          <p className="was-hint" style={{ margin: 0 }}>It needs an Anthropic API key in the server’s settings (ANTHROPIC_API_KEY). Until then every chat waits for a person.</p>
+          <p className="was-hint" style={{ margin: 0 }}>It needs an Anthropic API key in the server’s settings (ANTHROPIC_API_KEY). Until then the Welcome menu answers customers, and passes what it can’t answer to the team.</p>
         </section>
       )}
       <div className="nl-grid">
@@ -412,38 +412,54 @@ export function NlHandoffTab() {
   )
 }
 
+const MENU_HELP = {
+  track: 'Their orders by phone (or by order number + email/pincode), status, waybill and tracking link',
+  size: 'Type a product name → its size chart from Shopify; no chart → a person',
+  products: 'Categories → products with photo, price, sizes in stock and link',
+  exchange: 'The exchange rules (₹198, unworn, tags on) and a button to the Exchange Center',
+  refund: 'The refund policy; damaged or wrong item → collects photos and video → a person',
+  person: 'Straight to the team, introduced by name',
+}
+
 export function NlMenuTab() {
   const s = useNlSettings()
   if (!s.draft) return <Loading />
   const m = s.draft.menu
   const set = (patch) => s.set('menu', x => ({ ...x, ...patch }))
-  const setOption = (i, v) => set({ options: m.options.map((o, j) => (j === i ? v : o)) })
+  const setItem = (key, patch) => set({ items: m.items.map(i => (i.key === key ? { ...i, ...patch } : i)) })
+  const shown = m.items.filter(i => i.enabled)
   return (
     <>
       <Head title="Welcome menu" actions={s.canEdit && <SaveButton dirty={s.dirty('menu')} saving={s.saving} onClick={() => s.save('menu')} />}>
-        The first thing a new chat sees: a greeting and up to ten choices, tapped on WhatsApp.
+        The menu customers tap through. It answers from Shopify and the CRM — tracking, sizes, products, exchanges and refunds — and passes anything
+        else to the team. It runs whenever the AI bot isn’t answering{s.botReady ? '' : ' (there’s no AI key yet, so right now it answers every new chat)'}.
       </Head>
       <div className="nl-grid">
         <div className="nl-col">
           <section className="was-card">
+            <div className="nl-switch-row">
+              <Toggle on={m.enabled !== false} label="Menu answers new chats" disabled={!s.canEdit} onChange={v => set({ enabled: v })} />
+              <div><b>Menu answers new chats</b><span className="was-hint">Off: chats wait for a person unless the AI bot is on.</span></div>
+            </div>
             <div className="input-group">
               <label htmlFor="nl-greet">Greeting <span className="label-hint">{'{name}'} is the customer’s first name</span></label>
               <textarea id="nl-greet" rows={2} value={m.greeting} disabled={!s.canEdit} onChange={e => set({ greeting: e.target.value })} />
             </div>
-            <div className="nl-row-head"><b>Choices</b><span className="was-hint">24 characters each — WhatsApp’s limit</span></div>
-            {m.options.map((o, i) => (
-              <div key={i} className="nl-option">
-                <input aria-label={`Choice ${i + 1}`} maxLength={24} value={o} disabled={!s.canEdit} onChange={e => setOption(i, e.target.value)} />
-                {s.canEdit && m.options.length > 1 && (
-                  <button type="button" className="btn-icon" aria-label={`Remove ${o}`} onClick={() => set({ options: m.options.filter((_, j) => j !== i) })}><Icon name="trash" size={13} /></button>
-                )}
-              </div>
-            ))}
-            {s.canEdit && m.options.length < 10 && (
-              <button type="button" className="mini-btn" onClick={() => set({ options: [...m.options, ''] })}>+ Add a choice</button>
-            )}
+            <div className="nl-row-head"><b>Options</b><span className="was-hint">Rename or hide them — 24 characters each, WhatsApp’s limit</span></div>
+            <ul className="nl-rules">
+              {m.items.map(it => (
+                <li key={it.key}>
+                  <Toggle on={it.enabled} label={`Show ${it.label}`} disabled={!s.canEdit} onChange={v => setItem(it.key, { enabled: v })} />
+                  <span style={{ flex: 1 }}>
+                    <input className="nl-name" maxLength={24} aria-label={`Label for ${it.key}`} value={it.label} disabled={!s.canEdit}
+                      onChange={e => setItem(it.key, { label: e.target.value })} />
+                    <span className="was-hint" style={{ display: 'block', marginTop: 4 }}>{MENU_HELP[it.key]}</span>
+                  </span>
+                </li>
+              ))}
+            </ul>
             <div className="input-group">
-              <label htmlFor="nl-exch">Returns & Exchange Center</label>
+              <label htmlFor="nl-exch">Returns & Exchange Center link</label>
               <input id="nl-exch" value={m.exchange_url} disabled={!s.canEdit} onChange={e => set({ exchange_url: e.target.value })} />
             </div>
           </section>
@@ -454,7 +470,10 @@ export function NlMenuTab() {
             <div className="nl-phone-out">hi</div>
             <div className="nl-phone-in">
               <div>{m.greeting.replace('{name}', 'Meera')}</div>
-              {m.options.filter(Boolean).map((o, i) => <span key={i}>{o}</span>)}
+              <span>See options</span>
+            </div>
+            <div className="nl-phone-list">
+              {shown.map(i => <div key={i.key}>{i.label}</div>)}
             </div>
           </div>
         </aside>

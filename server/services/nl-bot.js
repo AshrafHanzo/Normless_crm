@@ -379,23 +379,53 @@ function schedule(conversationId) {
 }
 
 /**
- * A customer message arrived on Normless's line. The bot takes the chat unless a person has it:
- * a chat nobody is assigned to is the bot's, except for a day after it handed one over and no
- * one has picked it up yet — then it stays with the team rather than the bot answering again.
+ * Who answers Normless chats right now: the AI bot when it is switched on and has a key, else the
+ * menu (nl-flow) when that is on, else nobody — every chat waits for a person.
+ */
+async function engine(lineId) {
+    const settings = await readSettings(lineId);
+    if (process.env.ANTHROPIC_API_KEY && settings.bot.enabled) return 'ai';
+    if (settings.menu.enabled !== false) return 'flow';
+    return null;
+}
+
+// One menu step at a time per chat: two quick taps must not be answered side by side.
+const flowChains = new Map();
+function inTurnFor(conversationId, job) {
+    const run = (flowChains.get(conversationId) || Promise.resolve()).then(job);
+    const tail = run.catch(err => console.error('normless menu error:', err.message));
+    flowChains.set(conversationId, tail);
+    tail.then(() => { if (flowChains.get(conversationId) === tail) flowChains.delete(conversationId); });
+    return run;
+}
+
+/**
+ * A customer message arrived on Normless's line. The bot or the menu takes the chat unless a
+ * person has it: a chat nobody is assigned to is theirs, except for a day after one was handed
+ * over and nobody has picked it up yet — then it stays with the team rather than being answered
+ * again by a machine.
  */
 async function onInbound(conversation) {
     if (conversation.phone === handover.DEMO_PHONE) return;
     const line = lines.current();
-    if (!await enabled(line.id)) return;
+    const who = await engine(line.id);
+    if (!who) return;
     const c = (await db.query(
         `SELECT mode, assigned_to, status, nl_handoff_at FROM wa_conversations WHERE id = $1`, [conversation.id])).rows[0];
     if (!c || c.status !== 'open') return;
     if (c.mode === 'human') {
         const recentHandoff = c.nl_handoff_at && Date.now() - new Date(c.nl_handoff_at).getTime() < 24 * 3600 * 1000;
         if (c.assigned_to || recentHandoff) return;
-        await db.query(`UPDATE wa_conversations SET mode = 'ai', updated_at = CURRENT_TIMESTAMP WHERE id = $1`, [conversation.id]);
-    } else if (c.mode !== 'ai') return;
-    schedule(conversation.id);
+    }
+    // The chat moves to whichever machine is answering now — the menu until there's a key.
+    if (c.mode !== who) {
+        await db.query(
+            `UPDATE wa_conversations SET mode = $2, flow_step = CASE WHEN $2 = 'flow' THEN NULL ELSE flow_step END,
+                    flow_data = CASE WHEN $2 = 'flow' THEN '{}' ELSE flow_data END, updated_at = CURRENT_TIMESTAMP
+              WHERE id = $1`, [conversation.id, who]);
+    }
+    if (who === 'ai') return schedule(conversation.id);
+    return inTurnFor(conversation.id, () => lines.run(line, () => require('./nl-flow').handle(conversation.id)));
 }
 
 /** Settings › Try it: a pretend conversation, answered without sending anything. */
@@ -414,4 +444,4 @@ async function tryIt(lineId, turns) {
     };
 }
 
-module.exports = { onInbound, tryIt, enabled, inventedFigure, asMessages, MODEL };
+module.exports = { onInbound, tryIt, enabled, engine, inventedFigure, asMessages, MODEL };

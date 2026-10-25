@@ -19,9 +19,19 @@ const DEFAULTS = {
         refund: true, damaged: true, asks_person: true, unsure: true, no_order: true, upset: true,
         big_order: false, big_order_amount: 5000,
     },
+    // The menu customers tap through when the AI bot isn't answering. Each item is one of the
+    // flows in nl-flow; the shop can rename or hide them, not add new kinds.
     menu: {
+        enabled: true,
         greeting: 'Hi {name}, welcome to Normless. What can we help with?',
-        options: ['Track my order', 'Size help', 'Exchange or return', 'Something else'],
+        items: [
+            { key: 'track', label: 'Track my order', enabled: true },
+            { key: 'size', label: 'Size help', enabled: true },
+            { key: 'products', label: 'Browse products', enabled: true },
+            { key: 'exchange', label: 'Size exchange', enabled: true },
+            { key: 'refund', label: 'Return or refund', enabled: true },
+            { key: 'person', label: 'Talk to our team', enabled: true },
+        ],
         exchange_url: EXCHANGE_CENTER,
     },
     hours: {

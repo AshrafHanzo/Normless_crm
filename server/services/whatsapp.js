@@ -172,6 +172,18 @@ async function sendText(phone, text, { preview = true } = {}) {
     return data?.messages?.[0]?.id || null;
 }
 
+/** A message with one button that opens a web page — the Returns & Exchange Center, say. */
+async function sendCtaUrl(phone, text, { label, url }) {
+    const data = await graph(`/${PHONE_ID()}/messages`, {
+        method: 'POST',
+        body: {
+            messaging_product: 'whatsapp', recipient_type: 'individual', to: phone, type: 'interactive',
+            interactive: { type: 'cta_url', body: { text: cut(text, CAP.body) }, action: { name: 'cta_url', parameters: { display_text: cut(label, CAP.buttonTitle), url: String(url) } } },
+        },
+    });
+    return data?.messages?.[0]?.id || null;
+}
+
 /**
  * A photo that is already online — a Shopify product shot or size chart — sent by its address.
  * WhatsApp fetches it itself, so nothing is downloaded or uploaded here.
@@ -462,7 +474,7 @@ function verifySignature(rawBody, header) {
 
 module.exports = {
     configured, checkToken, phoneNumberId: PHONE_ID, wabaId: WABA_ID, graph, GRAPH, normalisePhone, prettyPhone, windowOpen, windowLeftMs,
-    sendText, sendMedia, sendImageLink, sendButtons, sendList, createTemplate, downloadMedia, markRead, verifySignature, CAP,
+    sendText, sendMedia, sendImageLink, sendCtaUrl, sendButtons, sendList, createTemplate, downloadMedia, markRead, verifySignature, CAP,
     fetchTemplates, sendTemplate, renderTemplate, whatsappImage,
     WhatsAppError, MEDIA_ROOT, MAX_MEDIA_MB, WINDOW_HOURS,
 };

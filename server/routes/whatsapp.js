@@ -1936,14 +1936,19 @@ router.post('/conversations/:id/mode', async (req, res) => {
                 if (conversation.is_demo) await db.query(`UPDATE wa_conversations SET mode = 'human', assigned_to = $2 WHERE id = $1`, [conversation.id, req.user?.username]);
                 else await nlHandover.assign(conversation, req.user?.username, { actor: req.user?.username });
             } else if (next === 'ai') {
-                if (!await nlBot.enabled(req.waLine.id)) {
-                    return res.status(400).json({ error: process.env.ANTHROPIC_API_KEY ? 'The bot is switched off — turn it on in WhatsApp › Settings › Bot' : 'The bot has no Anthropic API key on the server yet' });
-                }
+                // Back to whichever machine is answering: the AI bot, or the menu without a key.
+                const who = await nlBot.engine(req.waLine.id);
+                if (!who) return res.status(400).json({ error: 'Neither the bot nor the menu is switched on — turn one on in WhatsApp › Settings' });
                 await db.query(
-                    `UPDATE wa_conversations SET mode = 'ai', assigned_to = NULL, nl_handoff_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
-                    [conversation.id]);
+                    `UPDATE wa_conversations SET mode = $2, assigned_to = NULL, nl_handoff_at = NULL, flow_step = NULL, flow_data = '{}', updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
+                    [conversation.id, who]);
                 await orders.logActivity({ conversationId: conversation.id, kind: 'status', actor: req.user?.username,
-                    body: `${String(req.user?.username || '').split('@')[0]} handed the chat back to the bot` });
+                    body: `${String(req.user?.username || '').split('@')[0]} handed the chat back to the ${who === 'ai' ? 'bot' : 'menu'}` });
+                // The menu speaks first, so the customer sees the options again.
+                if (who === 'flow' && !conversation.is_demo && wa.windowOpen(conversation.last_inbound_at)) {
+                    const { readSettings } = require('../services/nl-settings');
+                    await require('../services/nl-flow').start(conversation, await readSettings(req.waLine.id)).catch(err => console.error('normless menu start failed:', err.message));
+                }
             } else {
                 return res.status(400).json({ error: 'Normless has no menu flow' });
             }

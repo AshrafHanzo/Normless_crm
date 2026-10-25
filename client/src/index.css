@@ -3431,3 +3431,6 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .nl-tpl-preview-col { min-width: 0; }
 .nl-tpl-phone { box-sizing: border-box; width: 100%; }
 @media (max-width: 900px) { .nl-tpl-preview-col { position: static; } }
+.nl-phone-list { align-self: flex-start; width: 85%; background: #202c33; border-radius: 10px; overflow: hidden; }
+.nl-phone-list div { padding: 9px 12px; color: #e9edef; font-size: 13px; border-top: 1px solid rgba(255,255,255,.06); }
+.nl-phone-list div:first-child { border-top: 0; }
