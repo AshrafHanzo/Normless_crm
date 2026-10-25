@@ -321,6 +321,10 @@ app.use('/api/support', authMiddleware, require('./routes/support'));
 // itself with a signature over the raw body instead, which is why it is mounted here, after the
 // JSON parser that stashes those bytes but ahead of the sign-in the inbox routes sit behind.
 app.use('/api/whatsapp/webhook', require('./routes/whatsapp').webhook);
+// Public, no login: Razorpay's abandoned carts (the address carries its own secret), and our
+// short links for template buttons, which are what a customer taps.
+app.use('/api/hooks/razorpay', require('./routes/nl-razorpay'));
+app.use('/go', require('./services/nl-links').router());
 // One inbox router, mounted once per brand: Crewfit's number and Normless's, each scoped to its
 // own line so neither can read or answer the other's customers. One webhook serves both — Meta
 // says in every call which number it is for.
@@ -1797,6 +1801,64 @@ async function ensureWaLinesSchema() {
             ALTER TABLE wa_templates ADD COLUMN IF NOT EXISTS rejected_reason TEXT;
             ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_wa_normless BOOLEAN DEFAULT false;
             ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_manage_wa_normless BOOLEAN DEFAULT false;
+
+            -- Our own short links for template buttons (ops.normless.store/go/abc123), so a
+            -- checkout or tracking link never passes through a third party's redirector.
+            CREATE TABLE IF NOT EXISTS nl_links (
+                code TEXT PRIMARY KEY,
+                url TEXT NOT NULL,
+                kind TEXT,
+                ref TEXT,
+                clicks INTEGER NOT NULL DEFAULT 0,
+                last_click_at TIMESTAMPTZ,
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            );
+            -- Checkouts Razorpay reports as abandoned, kept until they order or the reminders run out.
+            CREATE TABLE IF NOT EXISTS nl_carts (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                line_id INTEGER NOT NULL REFERENCES wa_lines(id),
+                token TEXT NOT NULL,
+                phone TEXT,
+                email TEXT,
+                name TEXT,
+                checkout_url TEXT,
+                items TEXT,
+                total NUMERIC(12,2),
+                currency TEXT,
+                payload TEXT,
+                recovered_at TIMESTAMPTZ,
+                order_name TEXT,
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (line_id, token)
+            );
+            CREATE INDEX IF NOT EXISTS nl_carts_open_idx ON nl_carts (line_id, created_at) WHERE recovered_at IS NULL;
+            -- Every automatic template: one row per event per order/cart/shipment, which is also
+            -- what stops the same message going twice.
+            CREATE TABLE IF NOT EXISTS nl_auto_sends (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                line_id INTEGER NOT NULL REFERENCES wa_lines(id),
+                event TEXT NOT NULL,
+                ref TEXT NOT NULL,
+                label TEXT,
+                phone TEXT,
+                conversation_id INTEGER,
+                template TEXT,
+                status TEXT NOT NULL DEFAULT 'sending',
+                wamid TEXT,
+                error TEXT,
+                reply TEXT,
+                replied_at TIMESTAMPTZ,
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (line_id, event, ref)
+            );
+            CREATE INDEX IF NOT EXISTS nl_auto_sends_recent_idx ON nl_auto_sends (line_id, created_at DESC);
+            CREATE TABLE IF NOT EXISTS nl_auto_state (
+                line_id INTEGER NOT NULL REFERENCES wa_lines(id),
+                key TEXT NOT NULL,
+                value TEXT,
+                PRIMARY KEY (line_id, key)
+            );
         `);
     } catch (err) {
         console.error('ensureWaLinesSchema error:', err.message);
@@ -2100,6 +2162,9 @@ app.listen(PORT, async () => {
     // minute after start-up (the server has better things to do while it boots), then every half
     // hour for whatever was uploaded since. One photo at a time, behind anything somebody is
     // actually looking at.
+    // Normless's automatic WhatsApp messages: abandoned-cart reminders and order updates.
+    require('./services/nl-automations').start();
+
     const thumbs = require('./routes/thumbs');
     setTimeout(() => thumbs.warm().catch(e => console.error('thumb warm:', e.message)), 60 * 1000).unref();
     setInterval(() => thumbs.warm().catch(e => console.error('thumb warm:', e.message)), 30 * 60 * 1000).unref();

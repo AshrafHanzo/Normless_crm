@@ -6,7 +6,8 @@ import Icon from '../../components/Icon'
 import useDirtyGuard from '../../hooks/useDirtyGuard'
 import { WA_BRANDS, WaBrandContext, useWaBrand } from './waBrand'
 import { SaveButton, Head, Toggle, Loading } from './waSettingsUi'
-import { NlBotTab, NlKnowledgeTab, NlProductsTab, NlHandoffTab, NlMenuTab, NlRepliesTab, NlTeamTab, NlHoursTab, NlTemplatesTab } from './NlSettings'
+import { NlBotTab, NlKnowledgeTab, NlProductsTab, NlHandoffTab, NlMenuTab, NlRepliesTab, NlTeamTab, NlHoursTab } from './NlSettings'
+import { NlTemplatesTab } from './NlAutomations'
 
 /**
  * WhatsApp settings.

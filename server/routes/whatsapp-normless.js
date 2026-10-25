@@ -334,6 +334,55 @@ router.delete('/templates/:id', manager, async (req, res) => {
     }
 });
 
+/* ── Automatic messages ──────────────────────────────────────────────────────────────────────
+   Which template goes out on which event, and what fills it. */
+
+const auto = require('../services/nl-automations');
+const tplSet = require('../services/nl-template-set');
+const links = require('../services/nl-links');
+
+router.get('/automations', async (req, res) => {
+    try {
+        const cfg = await auto.config(req.waLine.id);
+        res.json({
+            events: auto.EVENTS, config: cfg.events, started_at: cfg.started_at,
+            sources: tplSet.SOURCES, links: tplSet.LINKS, cartHours: auto.CART_HOURS,
+            set: tplSet.SET.map(t => ({ event: t.event, name: t.name, category: t.category, vars: t.vars, link: t.link?.source || null,
+                components: tplSet.components(t, null) })),
+            buttonBase: links.BUTTON_BASE(),
+            // The webhook address carries its secret, so only a manager sees it.
+            webhook: req.waManager ? `${links.PUBLIC_BASE()}/api/hooks/razorpay/abandoned/${cfg.webhook_secret}` : null,
+            carts: await auto.cartStats(req.waLine.id),
+            recent: await auto.recent(req.waLine.id, { limit: 60 }),
+            canEdit: !!req.waManager,
+        });
+    } catch (err) {
+        console.error('normless automations error:', err);
+        res.status(500).json({ error: 'Could not read the automatic messages' });
+    }
+});
+
+router.put('/automations', manager, async (req, res) => {
+    try {
+        const cfg = await auto.saveEvents(req.waLine.id, req.body?.events || {});
+        res.json({ config: cfg.events, started_at: cfg.started_at });
+    } catch (err) {
+        console.error('normless automations save error:', err);
+        res.status(500).json({ error: 'Could not save that' });
+    }
+});
+
+/** Submit the CRM's own template for an event to Meta. */
+router.post('/automations/:event/template', manager, async (req, res) => {
+    try {
+        if (!wa.configured() || !wa.wabaId()) return res.status(503).json({ error: 'Connect Normless’s WhatsApp number first' });
+        res.status(201).json(await auto.createSetTemplate(req.waLine.id, req.params.event));
+    } catch (err) {
+        console.error('normless set template error:', err.message);
+        res.status(err instanceof wa.WhatsAppError ? 502 : 400).json({ error: err.message });
+    }
+});
+
 module.exports = router;
 module.exports.DEFAULTS = DEFAULTS;
 module.exports.buildComponents = buildComponents;

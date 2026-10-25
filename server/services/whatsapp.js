@@ -359,10 +359,18 @@ async function fetchTemplates() {
  * Values go in positionally, which is how Meta reads them: the first value fills {{1}}. A missing
  * value is refused by Meta rather than sent with a gap in it, so they are checked before sending.
  */
-async function sendTemplate(phone, { name, language = 'en_US', variables = [] }) {
-    const components = variables.length
-        ? [{ type: 'body', parameters: variables.map(v => ({ type: 'text', text: String(v ?? '').slice(0, 1024) })) }]
-        : [];
+async function sendTemplate(phone, { name, language = 'en_US', variables = [], headerImage = null, headerText = null, buttons = [] }) {
+    const components = [];
+    // An image header is filled with a photo by its address; a text header with its one gap.
+    if (headerImage) components.push({ type: 'header', parameters: [{ type: 'image', image: { link: String(headerImage) } }] });
+    else if (headerText) components.push({ type: 'header', parameters: [{ type: 'text', text: String(headerText).slice(0, 60) }] });
+    if (variables.length) components.push({ type: 'body', parameters: variables.map(v => ({ type: 'text', text: String(v ?? '').slice(0, 1024) })) });
+    // Buttons by their place on the template: a link's {{1}}, or what a quick reply sends back.
+    for (const b of buttons) {
+        components.push(b.payload != null
+            ? { type: 'button', sub_type: 'quick_reply', index: String(b.index), parameters: [{ type: 'payload', payload: String(b.payload) }] }
+            : { type: 'button', sub_type: 'url', index: String(b.index), parameters: [{ type: 'text', text: String(b.text) }] });
+    }
     const data = await graph(`/${PHONE_ID()}/messages`, {
         method: 'POST',
         body: {
@@ -393,6 +401,26 @@ async function createTemplate({ name, language, category, body, examples = [], b
         method: 'POST', body: { name, language, category, components },
     });
     return { id: data?.id || null, status: data?.status || 'PENDING' };
+}
+
+/**
+ * A sample image for a template with a photo header. Meta reviews the template with an example
+ * photo, uploaded through the app's resumable upload, and wants back only the handle it gives.
+ */
+async function uploadSample(buffer, mime) {
+    const app = await graph(`/debug_token?input_token=${encodeURIComponent(TOKEN())}`);
+    const appId = app?.data?.app_id;
+    if (!appId) throw new WhatsAppError('Could not tell which Meta app this number’s token belongs to');
+    const session = await graph(`/${appId}/uploads?file_length=${buffer.length}&file_type=${encodeURIComponent(mime)}`, { method: 'POST' });
+    const res = await fetch(`${GRAPH}/${session.id}`, {
+        method: 'POST',
+        headers: { Authorization: `OAuth ${TOKEN()}`, file_offset: '0', 'Content-Type': mime },
+        body: buffer,
+        signal: AbortSignal.timeout(60000),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.h) throw new WhatsAppError(data?.error?.message || `Meta refused the sample image (${res.status})`);
+    return data.h;
 }
 
 /** The approved text with the values filled in, for the record of what was actually said. */
@@ -475,6 +503,6 @@ function verifySignature(rawBody, header) {
 module.exports = {
     configured, checkToken, phoneNumberId: PHONE_ID, wabaId: WABA_ID, graph, GRAPH, normalisePhone, prettyPhone, windowOpen, windowLeftMs,
     sendText, sendMedia, sendImageLink, sendCtaUrl, sendButtons, sendList, createTemplate, downloadMedia, markRead, verifySignature, CAP,
-    fetchTemplates, sendTemplate, renderTemplate, whatsappImage,
+    fetchTemplates, sendTemplate, renderTemplate, whatsappImage, uploadSample,
     WhatsAppError, MEDIA_ROOT, MAX_MEDIA_MB, WINDOW_HOURS,
 };

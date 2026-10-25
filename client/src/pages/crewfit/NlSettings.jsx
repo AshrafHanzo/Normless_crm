@@ -4,6 +4,7 @@ import { useToast } from '../../components/Toast'
 import Icon from '../../components/Icon'
 import { SaveButton, Head, Toggle, Loading } from './waSettingsUi'
 import { useWaBrand } from './waBrand'
+import { STATUS_LOOK, formFrom } from './nlTemplates'
 
 /**
  * Normless's WhatsApp settings, laid out as the design has them.
@@ -614,14 +615,16 @@ export function NlHoursTab() {
   )
 }
 
-const STATUS_LOOK = { APPROVED: 'success', PENDING: 'pending', IN_APPEAL: 'pending', REJECTED: 'error', PAUSED: 'error', DISABLED: 'error' }
 const fill = (text, values) => String(text || '').replace(/\{\{\s*(\d+)\s*\}\}/g, (m, n) => values?.[Number(n) - 1] || m)
 
 /** A template as the customer will see it on WhatsApp. */
-function TemplatePreview({ header, headerExample, body, examples, footer, buttons }) {
+export function TemplatePreview({ header, headerExample, body, examples, footer, buttons, image = null }) {
   return (
     <div className="nl-tpl-phone" aria-label="Preview">
       <div className="nl-tpl-bubble">
+        {image && (typeof image === 'string'
+          ? <img className="nl-tpl-image" src={image} alt="" />
+          : <div className="nl-tpl-image nl-tpl-image-blank" aria-label="Product photo"><Icon name="shirt" size={28} /><span>Product photo</span></div>)}
         {header && <b className="nl-tpl-header">{fill(header, [headerExample])}</b>}
         <div className="nl-tpl-body">{fill(body, examples) || <span className="was-hint">The message appears here</span>}</div>
         {footer && <small className="nl-tpl-footer">{footer}</small>}
@@ -636,21 +639,6 @@ function TemplatePreview({ header, headerExample, body, examples, footer, button
   )
 }
 
-/** The editor's form from a template's Meta parts. */
-function formFrom(t) {
-  const c = t?.components || []
-  const header = c.find(x => x.type === 'HEADER' && x.format === 'TEXT')
-  const body = c.find(x => x.type === 'BODY')
-  const footer = c.find(x => x.type === 'FOOTER')
-  const buttons = c.find(x => x.type === 'BUTTONS')?.buttons || []
-  return {
-    name: t?.name || '', category: t?.category || 'UTILITY', language: t?.language || 'en',
-    header: header?.text || '', header_example: header?.example?.header_text?.[0] || '',
-    body: body?.text || t?.body_text || '', examples: body?.example?.body_text?.[0] || [],
-    footer: footer?.text || '',
-    buttons: buttons.map(b => ({ type: b.type, text: b.text || '', url: b.url || '', phone_number: b.phone_number || '', example: b.example?.[0] || '' })),
-  }
-}
 
 function TemplateEditor({ template, onClose, onSaved }) {
   const apiFetch = useApi()
@@ -756,7 +744,8 @@ function TemplateEditor({ template, onClose, onSaved }) {
   )
 }
 
-export function NlTemplatesTab() {
+/** Every template on the account: search, preview, write, edit and delete. */
+export function NlTemplateLibrary({ embedded = false, reloadKey = 0 }) {
   const apiFetch = useApi()
   const toast = useToast()
   const brand = useWaBrand()
@@ -767,7 +756,7 @@ export function NlTemplatesTab() {
   const [picked, setPicked] = useState(null)
   const [editing, setEditing] = useState(null)        // a template, or {} for a new one
   const load = () => apiFetch(`${brand.api}/nl/templates`).then(r => setData(r && !r.error ? r : { templates: [], error: r?.error }))
-  useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { load() }, [reloadKey]) // eslint-disable-line react-hooks/exhaustive-deps
   const sync = async () => {
     setSyncing(true)
     const r = await apiFetch(`${brand.api}/templates/sync`, { method: 'POST' })
@@ -788,15 +777,18 @@ export function NlTemplatesTab() {
   const pf = current && formFrom(current)
   return (
     <>
-      <Head title="Templates" actions={<>
+      {!embedded && <Head title="Templates" actions={<>
         <button type="button" className="btn btn-secondary btn-sm" disabled={syncing} onClick={sync}><Icon name="refresh" size={13} /> {syncing ? 'Syncing…' : 'Sync from Meta'}</button>
         {data?.canEdit && <button type="button" className="btn btn-primary btn-sm" disabled={!data?.connected} onClick={() => setEditing({})}><Icon name="plus" size={13} /> New template</button>}
       </>}>
         Messages Meta approved for Normless — the only kind WhatsApp lets you send once a customer has been quiet for 24 hours.
-      </Head>
+      </Head>}
       {!data ? <Loading /> : (
         <div className="nl-tpl-layout">
           <section className="was-card nl-tpl-list">
+            {embedded && data?.canEdit && (
+              <button type="button" className="btn btn-primary btn-sm" disabled={!data?.connected} onClick={() => setEditing({})}><Icon name="plus" size={13} /> New template</button>
+            )}
             <input className="input" aria-label="Search templates" placeholder="Search by name or words" value={query} onChange={e => setQuery(e.target.value)} />
             <div className="nl-days" role="group" aria-label="Status">
               {[['ALL', 'All'], ['APPROVED', 'Approved'], ['PENDING', 'In review'], ['REJECTED', 'Rejected']].map(([k, label]) => (
@@ -837,7 +829,8 @@ export function NlTemplatesTab() {
                   <div><span>Gaps</span><b>{current.variables || 0}</b></div>
                 </div>
                 {current.rejected_reason && current.rejected_reason !== 'NONE' && <p className="was-bad">Meta rejected it: {current.rejected_reason}</p>}
-                <TemplatePreview header={pf.header} headerExample={pf.header_example} body={pf.body} examples={pf.examples} footer={pf.footer} buttons={pf.buttons} />
+                <TemplatePreview header={pf.header} headerExample={pf.header_example} body={pf.body} examples={pf.examples} footer={pf.footer} buttons={pf.buttons}
+                  image={current.components?.some(c => c.type === 'HEADER' && c.format === 'IMAGE') || null} />
               </>
             )}
           </section>

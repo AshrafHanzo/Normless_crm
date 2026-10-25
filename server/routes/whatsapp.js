@@ -243,6 +243,9 @@ async function receiveMessage(message, profileName) {
     // Normless has its own bot (nl-bot); Crewfit's menu, assistant and away message must never
     // answer a Normless customer.
     if (!onCrewfit()) {
+        // A Confirm/Cancel tap on the COD confirmation is answered here, not by the bot.
+        try { if (await require('../services/nl-automations').onReply(conversation.id, interactivePayload(message))) return; }
+        catch (err) { console.error('normless automation reply error:', err.message); }
         try { await nlBot.onInbound({ id: conversation.id, phone }); }
         catch (err) { console.error('normless bot error:', err.message); }
         return;

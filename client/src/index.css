@@ -3434,3 +3434,33 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .nl-phone-list { align-self: flex-start; width: 85%; background: #202c33; border-radius: 10px; overflow: hidden; }
 .nl-phone-list div { padding: 9px 12px; color: #e9edef; font-size: 13px; border-top: 1px solid rgba(255,255,255,.06); }
 .nl-phone-list div:first-child { border-top: 0; }
+
+/* ---- Normless templates, grouped by what sends them ------------------------------------------ */
+.nl-auto-tabs { max-width: 100%; overflow-x: auto; flex-wrap: nowrap; margin: 4px 0 2px; scrollbar-width: none; }
+.nl-auto-tabs::-webkit-scrollbar { display: none; }
+.nl-auto-tabs button { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; padding: 8px 14px; }
+.nl-auto-bar { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; justify-content: space-between; }
+.nl-auto-bar p { margin: 0; flex: 1 1 360px; max-width: 720px; line-height: 1.5; }
+.nl-auto-card { border-left: 3px solid var(--border); }
+.nl-auto-card.on { border-left-color: var(--success); }
+.nl-auto-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.nl-auto-head p { margin: 2px 0 0; }
+.nl-auto-body { display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start; }
+.nl-auto-form { flex: 999 1 340px; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+.nl-auto-form .form-row { margin: 0; }
+.nl-auto-form .was-inline input { width: 90px; flex: 0 0 90px; }
+.nl-auto-preview { flex: 1 1 260px; min-width: 0; max-width: 360px; }
+.nl-auto-note { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 6px; font-size: 12.5px; color: var(--text-secondary); }
+.nl-auto-gaps { display: flex; flex-direction: column; gap: 6px; }
+.nl-auto-gap { display: grid; grid-template-columns: 44px minmax(0, 1fr); align-items: center; gap: 8px; }
+.nl-auto-gap code { font-size: 12px; color: var(--text-secondary); }
+.nl-auto-gap select { width: 100%; }
+.nl-auto-log td { vertical-align: top; }
+.nl-auto-log .status-badge + .status-badge { margin-left: 6px; }
+.nl-tpl-image { display: block; width: 100%; aspect-ratio: 1.6; object-fit: cover; border-radius: 6px; background: #2a3942; }
+.nl-tpl-image-blank { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; color: #8696a0; font-size: 11.5px; }
+@media (max-width: 640px) {
+  .nl-auto-preview { max-width: none; }
+}
+.nl-auto-hook { flex-wrap: wrap; }
+.nl-auto-hook input { flex: 1 1 260px; }
