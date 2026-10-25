@@ -153,6 +153,9 @@ function orderFacts(o) {
     };
 }
 
+/** An object's keys in lower case, one level deep. */
+const lower = (o) => Object.fromEntries(Object.entries(o && typeof o === 'object' ? o : {}).map(([k, v]) => [k.toLowerCase(), v]));
+
 /** Razorpay's prices: rupees, or paise when they are a hundred times Shopify's. */
 async function cartItems(payload) {
     let products = [];
@@ -162,10 +165,13 @@ async function cartItems(payload) {
         quantity: Number(li.quantity) || 1, price: Number(li.price ?? li.variant_price) || 0,
         product_id: li.product_id, variant_id: li.variant_id, image: li.image_url || null,
     }));
-    const paise = raw.some(i => {
-        const v = products.flatMap(p => p.variants).find(x => String(x.id) === String(i.variant_id));
-        return v?.price && i.price && Math.abs(i.price / 100 - Number(v.price)) < 1;
-    });
+    // Shopify's own price settles it when the variant is found; otherwise whole-number prices
+    // are taken as paise, which is how Razorpay writes amounts.
+    const variants = products.flatMap(p => p.variants);
+    const known = raw.map(i => ({ i, v: variants.find(x => String(x.id) === String(i.variant_id)) })).filter(x => x.v?.price && x.i.price);
+    const paise = known.length
+        ? known.some(({ i, v }) => Math.abs(i.price / 100 - Number(v.price)) < 1)
+        : (payload.line_items || []).every(li => Number.isInteger(li.price ?? li.variant_price) && (li.price ?? li.variant_price) >= 100);
     return { items: raw.map(i => ({ ...i, price: paise ? i.price / 100 : i.price })), paise };
 }
 
@@ -285,10 +291,15 @@ async function threadFor(lineId, facts) {
 async function onAbandoned(lineId, payload) {
     const token = String(payload?.cart_token || payload?.token || payload?.id || '').slice(0, 200);
     if (!token) return { ok: false, reason: 'no cart token' };
-    const c = payload.customer || {};
-    const ship = c.shipping_address || c.Shipping_address || {};
-    const phone = wa.normalisePhone(payload.phone || c.phone || ship.phone);
-    const name = [c.first_name, c.last_name].filter(Boolean).join(' ') || ship.name || null;
+    // Razorpay capitalises the address's keys (Shipping_address.Phone, First_name), so every
+    // field is read without regard to case.
+    const c = lower(payload.customer);
+    const ship = lower(c.shipping_address);
+    const real = (v) => (v && !/^<.*>$/.test(String(v)) ? String(v).trim() : null);   // the docs' "<email>"
+    const phone = wa.normalisePhone(real(payload.phone) || real(c.phone) || real(ship.phone));
+    const name = [real(c.first_name), real(c.last_name)].filter(Boolean).join(' ')
+        || [real(ship.first_name), real(ship.last_name)].filter(Boolean).join(' ') || real(ship.name) || null;
+    const email = (real(payload.email) || real(c.email) || '').toLowerCase() || null;
     const { items } = await cartItems(payload);
     const total = items.reduce((n, i) => n + i.price * i.quantity, 0);
     const url = /^https:\/\//.test(payload.abandoned_checkout_url || '') ? payload.abandoned_checkout_url : null;
@@ -300,7 +311,7 @@ async function onAbandoned(lineId, payload) {
              checkout_url = COALESCE(EXCLUDED.checkout_url, nl_carts.checkout_url), items = EXCLUDED.items,
              total = EXCLUDED.total, payload = EXCLUDED.payload, updated_at = CURRENT_TIMESTAMP
          RETURNING id, (xmax = 0) AS fresh`,
-        [lineId, token, phone, (payload.email || c.email || '').toLowerCase() || null, name, url,
+        [lineId, token, phone, email, name, url,
             JSON.stringify(items), total || null, payload.currency || 'INR', JSON.stringify(payload).slice(0, 20000)]);
     return { ok: true, id: r.rows[0].id, fresh: r.rows[0].fresh };
 }
