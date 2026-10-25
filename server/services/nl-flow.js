@@ -62,15 +62,22 @@ async function setStep(c, step, data = undefined) {
     if (data !== undefined) c.flow_data = data;
 }
 
-/** Back to the menu or to a person — the end of every answer. */
-const afterAnswer = (c, text = 'Anything else?', extra = []) => buttons(c, text, [...extra, MENU, PERSON].slice(0, 3));
+/**
+ * The end of every answer: back to the menu, plus whatever naturally comes next. "Talk to our
+ * team" is not offered here — only where the menu has run out of answers (see stuck()).
+ */
+const afterAnswer = (c, text = 'Anything else?', extra = []) => buttons(c, text, [...extra, MENU].slice(0, 3));
+
+/** The menu couldn't settle it: offer the team, or the menu again. */
+const stuck = (c, text) => buttons(c, text, [PERSON, MENU]);
 
 /* ── The menu ──────────────────────────────────────────────────────────────────────────────── */
 
 const firstName = (c) => String(c.customer_name || c.profile_name || '').replace(/^~/, '').trim().split(/\s+/)[0] || '';
 
 async function showMenu(c, settings, lead = null) {
-    const items = settings.menu.items.filter(i => i.enabled);
+    // "Talk to our team" is offered when the menu gets stuck, not up front.
+    const items = settings.menu.items.filter(i => i.enabled && i.key !== 'person');
     const greeting = lead || settings.menu.greeting.replace('{name}', firstName(c)).replace(/\s+,/, ',').replace('Hi ,', 'Hi,');
     await setStep(c, 'menu', { misses: c.flow_data?.misses || 0 });
     await menuList(c, greeting, 'See options', items.map(i => ({ id: i.key, title: i.label })), 'Normless');
@@ -264,7 +271,7 @@ async function askDamageProof(c, orderNumber) {
     const since = (await db.query(`SELECT COALESCE(MAX(id), 0) AS id FROM wa_messages WHERE conversation_id = $1`, [c.id])).rows[0].id;
     await setStep(c, 'damaged_media', { order_number: orderNumber, since });
     return buttons(c, `Please send clear photos of the problem and your unboxing video for ${orderNumber} here. Tap Done when you’ve sent them.`, [
-        { id: 'r:done', title: 'Done' }, PERSON,
+        { id: 'r:done', title: 'Done' },
     ]);
 }
 
@@ -366,7 +373,7 @@ async function handle(conversationId) {
         case 'damaged_number': return askDamageProof(c, cut(text, 30));
         case 'damaged_media':
             if (tap === 'r:done' || /^done\b/i.test(text)) return damagedDone(c);
-            return buttons(c, 'Send the photos and unboxing video here, then tap Done.', [{ id: 'r:done', title: 'Done' }, PERSON]);
+            return buttons(c, 'Send the photos and unboxing video here, then tap Done.', [{ id: 'r:done', title: 'Done' }]);
 
         case 'answered':
             if (tap?.startsWith('chart:')) return sendChart(c, tap.slice(6));
@@ -384,7 +391,7 @@ async function handle(conversationId) {
     const misses = (c.flow_data?.misses || 0) + 1;
     if (misses >= 2) return handOff(c, 'The menu couldn’t answer', `Customer wrote: "${cut(text, 200)}"`);
     await setStep(c, 'menu', { misses });
-    return showMenu(c, settings, 'Sorry, I didn’t get that. Please choose an option below — or tap “Talk to our team”.');
+    return stuck(c, 'Sorry, I couldn’t find an answer to that. Would you like to talk to our team, or see the menu?');
 }
 
 /** Start the menu on a chat that has just been handed to it. */

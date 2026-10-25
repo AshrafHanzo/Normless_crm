@@ -427,7 +427,7 @@ export function NlMenuTab() {
   const m = s.draft.menu
   const set = (patch) => s.set('menu', x => ({ ...x, ...patch }))
   const setItem = (key, patch) => set({ items: m.items.map(i => (i.key === key ? { ...i, ...patch } : i)) })
-  const shown = m.items.filter(i => i.enabled)
+  const shown = m.items.filter(i => i.enabled && i.key !== 'person')
   return (
     <>
       <Head title="Welcome menu" actions={s.canEdit && <SaveButton dirty={s.dirty('menu')} saving={s.saving} onClick={() => s.save('menu')} />}>
@@ -447,7 +447,7 @@ export function NlMenuTab() {
             </div>
             <div className="nl-row-head"><b>Options</b><span className="was-hint">Rename or hide them — 24 characters each, WhatsApp’s limit</span></div>
             <ul className="nl-rules">
-              {m.items.map(it => (
+              {m.items.filter(it => it.key !== 'person').map(it => (
                 <li key={it.key}>
                   <Toggle on={it.enabled} label={`Show ${it.label}`} disabled={!s.canEdit} onChange={v => setItem(it.key, { enabled: v })} />
                   <span style={{ flex: 1 }}>
@@ -458,6 +458,7 @@ export function NlMenuTab() {
                 </li>
               ))}
             </ul>
+            <p className="was-hint" style={{ margin: 0 }}>“Talk to our team” isn’t in the menu: it’s offered only when the menu can’t find an answer, and typing “talk to a person” always works.</p>
             <div className="input-group">
               <label htmlFor="nl-exch">Returns & Exchange Center link</label>
               <input id="nl-exch" value={m.exchange_url} disabled={!s.canEdit} onChange={e => set({ exchange_url: e.target.value })} />
