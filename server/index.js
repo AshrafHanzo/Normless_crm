@@ -1910,6 +1910,16 @@ async function ensureWaLinesSchema() {
             ALTER TABLE wa_calls ADD COLUMN IF NOT EXISTS recording_bytes INTEGER;
             ALTER TABLE wa_calls ADD COLUMN IF NOT EXISTS recorded_by TEXT;
             ALTER TABLE wa_calls ADD COLUMN IF NOT EXISTS notice_sent_at TIMESTAMPTZ;
+            -- Crewfit's lead statuses gain "Follow-up", once, and are put in the order the team
+            -- works through them. After that the order is whatever is set in Settings.
+            DO $$ BEGIN
+                IF to_regclass('wa_lead_statuses') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM wa_lead_statuses WHERE key = 'followup') THEN
+                    INSERT INTO wa_lead_statuses (key, name, color, stage, sort_order) VALUES ('followup', 'Follow-up', '#f59e0b', 'open', 5);
+                    UPDATE wa_lead_statuses SET sort_order = CASE key WHEN 'new' THEN 0 WHEN 'enquiry' THEN 1 WHEN 'qualified' THEN 2
+                        WHEN 'need_mockup' THEN 3 WHEN 'mock_completed' THEN 4 WHEN 'followup' THEN 5 WHEN 'paid' THEN 6
+                        WHEN 'partially_paid' THEN 7 ELSE sort_order + 10 END;
+                END IF;
+            END $$;
             -- Marketing broadcasts: one approved template sent to a list of customers, in the
             -- background. Recipients are worked out when it is made; each row is one message.
             CREATE TABLE IF NOT EXISTS wa_broadcasts (

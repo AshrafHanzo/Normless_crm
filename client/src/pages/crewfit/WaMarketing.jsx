@@ -4,7 +4,7 @@ import { useToast } from '../../components/Toast'
 import Icon from '../../components/Icon'
 import { Head, Loading } from './waSettingsUi'
 import { useWaBrand } from './waBrand'
-import { TemplatePreview } from './NlSettings'
+import { TemplatePreview, TemplateEditor } from './NlSettings'
 import { formFrom } from './nlTemplates'
 
 /**
@@ -331,7 +331,12 @@ export default function WaMarketing() {
   const [making, setMaking] = useState(false)
   const [open, setOpen] = useState(null)
   const [busy, setBusy] = useState(false)
-  const load = () => apiFetch(`${brand.api}/marketing`).then(r => { if (!r || r.error) toast.error(r?.error || 'Could not load marketing'); else setData(r) })
+  const [editing, setEditing] = useState(null)
+  const [byName, setByName] = useState({})               // template rows (with ids) for Edit
+  const load = () => Promise.all([apiFetch(`${brand.api}/marketing`), apiFetch(`${brand.api}/tpl/templates`)]).then(([r, t]) => {
+    if (!r || r.error) toast.error(r?.error || 'Could not load marketing'); else setData(r)
+    if (t && !t.error) setByName(Object.fromEntries(t.templates.map(x => [x.name, x])))
+  })
   useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!data?.broadcasts?.some(b => b.status === 'sending')) return
@@ -393,7 +398,8 @@ export default function WaMarketing() {
             const ff = formFrom({ components: t.components })
             return (
               <div key={t.name} className="wmk-template">
-                <div className="nl-pick-head"><b>{t.label}</b><span className={`status-badge ${look}`}>{word}</span></div>
+                <div className="nl-pick-head"><b>{t.label}</b><span className={`status-badge ${look}`}>{word}</span>
+                  {data.canSend && byName[t.name] && <button type="button" className="mini-btn" onClick={() => setEditing(byName[t.name])}><Icon name="edit" size={11} /> Edit</button>}</div>
                 <TemplatePreview header={ff.header} body={ff.body} examples={t.gaps.map(g => g[1])} footer={ff.footer} buttons={ff.buttons} image={t.image || null} />
                 <span className="was-hint">{t.name}</span>
               </div>
@@ -405,6 +411,7 @@ export default function WaMarketing() {
         )}
       </section>
 
+      {editing && <TemplateEditor template={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load() }} />}
       {making && <NewBroadcast data={data} onClose={() => setMaking(false)} onMade={(id) => { setMaking(false); load(); setOpen(id) }} />}
       {open && <BroadcastDrawer id={open} canSend={data.canSend} onClose={() => setOpen(null)} onChanged={load} />}
     </>

@@ -7,6 +7,7 @@ import { useWaBrand } from './waBrand'
 import { NlTemplateLibrary, TemplatePreview, TemplateEditor } from './NlSettings'
 import { STATUS_LOOK, formFrom } from './nlTemplates'
 import WaMarketing from './WaMarketing'
+import WaReopen from './WaReopen'
 
 /**
  * Normless's templates, grouped by what sends them — abandoned carts, orders, COD confirmation,
@@ -23,6 +24,7 @@ const GROUPS = [
   { key: 'cod', label: 'COD confirmation', icon: 'check', intro: 'Asks a cash-on-delivery customer to confirm before it ships. A Confirm is noted on the chat; a Cancel goes to the team to cancel in Shopify.' },
   { key: 'fulfillment', label: 'Shipping', icon: 'truck', intro: 'Sent when an order is fulfilled in Shopify with a tracking number.' },
   { key: 'payment', label: 'Payment & refund', icon: 'card', intro: 'Sent when a refund is made in Shopify.' },
+  { key: 'reopen', label: 'Reopen chats', icon: 'refresh' },
   { key: 'marketing', label: 'Marketing', icon: 'spark' },
   { key: 'library', label: 'All templates', icon: 'mail' },
 ]
@@ -44,7 +46,7 @@ function useAutomations() {
   const [templates, setTemplates] = useState([])
   const [draft, setDraft] = useState(null)
   const [saving, setSaving] = useState(false)
-  const load = () => Promise.all([apiFetch(`${brand.api}/nl/automations`), apiFetch(`${brand.api}/nl/templates`)]).then(([a, t]) => {
+  const load = () => Promise.all([apiFetch(`${brand.api}/nl/automations`), apiFetch(`${brand.api}/tpl/templates`)]).then(([a, t]) => {
     if (!a || a.error) return toast.error(a?.error || 'Could not read the automatic messages')
     // Whatever is being edited survives a reload; everything else takes what was saved.
     setDraft(d => d ? { ...a.config, ...Object.fromEntries(Object.entries(d).filter(([k, v]) => !same(v, data?.config?.[k]))) } : a.config)
@@ -129,7 +131,7 @@ function EventCard({ ev, cfg, data, templates, onChange, onEdit, canEdit }) {
   const recKey = data.recommended?.[ev.key]
   const rec = recKey && templates.find(t => keyOf(t) === recKey)
   const hint = (name) => data.set.find(x => x.name === name) || data.suggest?.[name] || null
-  const usable = templates.filter(t => !viaUpdatrr(t))
+  const usable = templates.filter(t => t.ours && !viaUpdatrr(t))
   const suits = (t) => keyOf(t) === recKey || (data.suggest?.[t.name]?.events || []).includes(ev.key) || data.set.some(x => x.name === t.name && x.event === ev.key)
   const fitting = usable.filter(suits).sort((x, y) => (keyOf(y) === recKey) - (keyOf(x) === recKey) || (y.status === 'APPROVED') - (x.status === 'APPROVED'))
   const others = usable.filter(t => !suits(t))
@@ -379,11 +381,11 @@ export function NlTemplatesTab() {
       <div className="scan-tabs nl-auto-tabs" role="tablist" aria-label="Template groups">
         {GROUPS.map(x => (
           <button key={x.key} type="button" role="tab" aria-selected={group === x.key} className={group === x.key ? 'active' : ''} onClick={() => setGroup(x.key)}>
-            <Icon name={x.icon} size={13} /> {x.label}{!['library', 'marketing'].includes(x.key) && on(x.key) > 0 && <span className="tab-count">{on(x.key)} on</span>}
+            <Icon name={x.icon} size={13} /> {x.label}{!['library', 'marketing', 'reopen'].includes(x.key) && on(x.key) > 0 && <span className="tab-count">{on(x.key)} on</span>}
           </button>
         ))}
       </div>
-      {group === 'marketing' ? <WaMarketing /> : group === 'library' ? <NlTemplateLibrary embedded reloadKey={libKey} /> : !a.data || !a.draft ? <Loading /> : (
+      {group === 'reopen' ? <WaReopen /> : group === 'marketing' ? <WaMarketing /> : group === 'library' ? <NlTemplateLibrary embedded reloadKey={libKey} /> : !a.data || !a.draft ? <Loading /> : (
         <>
           <div className="nl-auto-bar">
             <p className="was-hint">{g.intro}{!a.data.started_at && ' Nothing has been sent yet: only orders and carts from the moment you switch one on are ever messaged.'}</p>

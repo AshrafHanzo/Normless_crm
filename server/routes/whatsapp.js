@@ -313,6 +313,11 @@ async function receiveMessage(message, profileName) {
         console.error('whatsapp flow error:', err.message);
     }
 
+    // Crewfit's helper: a lead that sends its logo, a quantity, billing details or names a product is
+    // marked Qualified; and while nobody has the chat, product questions are answered from the
+    // catalogue (cf-assist). It stays out of chats the menu or a person is handling.
+    await require('../services/cf-assist').onInbound(conversation.id, message, { text: describe(message), mediaUrl });
+
     // A customer now waiting for a person, outside working hours, is told when somebody is back.
     try {
         const now = (await db.query('SELECT mode FROM wa_conversations WHERE id = $1', [conversation.id])).rows[0];
@@ -610,6 +615,9 @@ router.use((req, res, next) => {
     next();
 });
 
+// Templates on either line: list, write, edit, delete (Normless's are also under /nl).
+router.use('/tpl', require('./wa-templates'));
+
 // Normless's own settings: bot, knowledge, handoff rules, menu, hours, team.
 router.use('/nl', (req, res, next) => (req.waLine?.brand === 'normless' ? next()
     : res.status(404).json({ error: 'Not part of this inbox' })), require('./whatsapp-normless'));
@@ -778,6 +786,16 @@ router.get('/dashboard', async (req, res) => {
     }
 });
 
+router.get('/dashboard/messages', async (req, res) => {
+    try {
+        if (!req.waDashboard) return res.status(403).json({ error: 'You don’t have access to the WhatsApp dashboard' });
+        res.json(await dashboard.messageLog(req.waLine.id, req.query));
+    } catch (err) {
+        console.error('whatsapp message log error:', err);
+        res.status(500).json({ error: 'Could not read the message log' });
+    }
+});
+
 router.get('/dashboard/me', async (req, res) => {
     try {
         if (req.waLine.brand !== 'crewfit') return res.status(404).json({ error: 'Not part of this inbox' });
@@ -802,8 +820,9 @@ router.get('/conversations', async (req, res) => {
         } else if (filter === 'unassigned') {
             where.push('c.assigned_to IS NULL');
         } else if (filter === 'waiting') {
-            // Normless's "Needs a person": a person is answering it, and the customer spoke last.
-            where.push(`c.mode = 'human' AND ${LAST_DIRECTION} = 'in'`);
+            // "Needs a person": a person is answering it, and the customer spoke last. On Crewfit,
+            // only chats nobody has taken yet — the queue somebody picks up from.
+            where.push(`c.status = 'open' AND c.mode = 'human' AND ${LAST_DIRECTION} = 'in'${req.waLine.brand === 'crewfit' ? ' AND c.assigned_to IS NULL' : ''}`);
         } else if (filter === 'bot') {
             where.push(`c.mode IN ('flow', 'ai')`);
         } else if (filter === 'ticket') {
@@ -862,7 +881,12 @@ router.get('/conversations', async (req, res) => {
                     -- A chat this person muted adds nothing to their badge.
                     COALESCE(SUM(c.unread_count) FILTER (WHERE NOT EXISTS (SELECT 1 FROM wa_conversation_mutes mu
                               WHERE mu.conversation_id = c.id AND mu.username = ${me})), 0) AS unread,
-                    COUNT(*) FILTER (WHERE c.status = 'open' AND c.mode = 'human' AND ${LAST_DIRECTION} = 'in')::int AS waiting,
+                    COUNT(*) FILTER (WHERE c.status = 'open' AND c.mode = 'human' AND ${LAST_DIRECTION} = 'in'${req.waLine.brand === 'crewfit' ? ' AND c.assigned_to IS NULL' : ''})::int AS waiting,
+                    -- Unread customer messages behind each of Crewfit's chips (muted chats left out).
+                    COALESCE(SUM(c.unread_count) FILTER (WHERE c.assigned_to IS NULL AND NOT EXISTS (SELECT 1 FROM wa_conversation_mutes mu
+                              WHERE mu.conversation_id = c.id AND mu.username = ${me})), 0)::int AS unread_unassigned,
+                    COALESCE(SUM(c.unread_count) FILTER (WHERE LOWER(COALESCE(c.assigned_to, '')) = ${me} AND NOT EXISTS (SELECT 1 FROM wa_conversation_mutes mu
+                              WHERE mu.conversation_id = c.id AND mu.username = ${me})), 0)::int AS unread_mine,
                     COUNT(*) FILTER (WHERE c.status = 'open' AND c.mode IN ('flow', 'ai'))::int AS bot,
                     COUNT(*) FILTER (WHERE c.status = 'open' AND LOWER(COALESCE(c.assigned_to, '')) = ${me})::int AS mine,
                     COUNT(*) FILTER (WHERE c.status = 'open' AND ${HAS_OPEN_TICKET})::int AS ticket,
@@ -870,9 +894,15 @@ router.get('/conversations', async (req, res) => {
                ${LIST_FROM} WHERE ${vis}`, tallyParams);
 
         const muted = await mutedFor(req, rows.rows.map(r => r.id));
+        // How many chats are at each lead status (Crewfit), over everything this person can see.
+        const statusParams = [];
+        const statusVis = visibility(req, statusParams);
+        const byStatus = req.waLine.brand === 'crewfit' ? (await db.query(
+            `SELECT COALESCE(l.status, 'none') AS status, COUNT(*)::int AS n ${LIST_FROM} WHERE ${statusVis} GROUP BY 1`, statusParams)).rows : [];
         res.json({
             conversations: rows.rows.map(r => ({ ...shapeConversation(r), muted: muted.has(r.id) })),
-            tally: tally.rows[0],
+            tally: { ...tally.rows[0], unread: Number(tally.rows[0].unread) || 0 },
+            statusCounts: Object.fromEntries(byStatus.map(x => [x.status, x.n])),
         });
     } catch (err) {
         console.error('whatsapp conversations error:', err);
@@ -1231,6 +1261,18 @@ router.patch('/conversations/:id', async (req, res) => {
                             nl_handoff_at = CASE WHEN $2 = 'closed' THEN NULL ELSE nl_handoff_at END,
                             updated_at = CURRENT_TIMESTAMP
                       WHERE id = $1`, [conversation.id, closing ? 'closed' : 'open']);
+                // The customer is told the chat is closed, and how to pick it up again — once, and
+                // only when WhatsApp lets us write to them (within 24 hours of their last message).
+                if (closing && conversation.status !== 'closed' && !conversation.is_demo && conversation.window_open) {
+                    try {
+                        const note = 'Our team has closed this chat. If you need anything else, just send us a message here and we’ll be happy to help.';
+                        const wamid = await wa.sendText(conversation.phone, note);
+                        await db.query(
+                            `INSERT INTO wa_messages (conversation_id, wamid, direction, sender_type, sender_user, type, body, status)
+                             VALUES ($1,$2,'out','auto',$3,'text',$4,'sent')`, [conversation.id, wamid, req.user?.username || null, note]);
+                        await db.query(`UPDATE wa_conversations SET last_message_at = CURRENT_TIMESTAMP, last_message_preview = $2 WHERE id = $1`, [conversation.id, note.slice(0, 200)]);
+                    } catch (err) { console.error('normless close message failed:', err.message); }
+                }
                 await orders.logActivity({ conversationId: conversation.id, kind: 'status', actor: req.user?.username,
                     body: closing ? `${String(req.user?.username || '').split('@')[0]} closed the chat — the bot answers if they write again`
                         : `${String(req.user?.username || '').split('@')[0]} reopened the chat` });
@@ -1460,7 +1502,9 @@ router.get('/calls/live', async (req, res) => {
                LEFT JOIN crewfit_leads l ON l.id = k.lead_id
                LEFT JOIN customers cu ON cu.id = k.customer_id
               WHERE ${vis} AND w.ended_at IS NULL
-                AND ((w.direction = 'in' AND w.status = 'ringing')
+                -- A customer's call rings for the person their chat is with; a chat nobody has
+                -- rings for everyone who can see it.
+                AND ((w.direction = 'in' AND w.status = 'ringing' AND (c.assigned_to IS NULL OR LOWER(c.assigned_to) = ${me}))
                      OR LOWER(COALESCE(w.started_by, '')) = ${me} OR LOWER(COALESCE(w.answered_by, '')) = ${me})
               ORDER BY w.id DESC LIMIT 10`, params);
         res.json({
@@ -2518,7 +2562,7 @@ router.post('/conversations/:id/mode', async (req, res) => {
                 await orders.logActivity({ conversationId: conversation.id, kind: 'status', actor: req.user?.username,
                     body: `${String(req.user?.username || '').split('@')[0]} handed the chat back to the ${who === 'ai' ? 'bot' : 'menu'}` });
                 // The menu speaks first, so the customer sees the options again.
-                if (who === 'flow' && !conversation.is_demo && wa.windowOpen(conversation.last_inbound_at)) {
+                if (who === 'flow' && !conversation.is_demo && conversation.window_open) {
                     const { readSettings } = require('../services/nl-settings');
                     await require('../services/nl-flow').start(conversation, await readSettings(req.waLine.id)).catch(err => console.error('normless menu start failed:', err.message));
                 }

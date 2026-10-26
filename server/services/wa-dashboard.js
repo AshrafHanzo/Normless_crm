@@ -437,4 +437,81 @@ async function myPerformance(lineId, username, q) {
     };
 }
 
-module.exports = { normless, crewfit, myPerformance, range, userForSo, shortName, median };
+/* ── Template messages: what went out, and what WhatsApp did with it ────────────────────────── */
+
+const EVENT_LABELS = {
+    cart_1: 'Abandoned cart 1', cart_2: 'Abandoned cart 2', cart_3: 'Abandoned cart 3',
+    order_prepaid: 'New prepaid order', order_partial_cod: 'New partial COD order', order_cod: 'New COD order',
+    cod_confirm: 'COD confirmation', order_cancelled: 'Order cancelled', fulfilled: 'Shipped with tracking',
+    out_for_delivery: 'Out for delivery', delivered: 'Delivered', refund: 'Refund issued',
+    broadcast: 'Broadcast', manual: 'Sent by a person',
+};
+const RESTRICTED = /healthy ecosystem|131049|131050|restricted|frequency/i;
+
+/**
+ * Every template message in the range — automatic ones, broadcasts and the ones people sent —
+ * with WhatsApp's verdict (sent, delivered, read, or refused), link taps and cart revenue.
+ * `q.event` narrows it to one kind; `q.page` pages the log 20 at a time.
+ */
+async function messageLog(lineId, q) {
+    const r = range(q, 1);
+    const rows = (await db.query(
+        `WITH s AS (
+            SELECT a.created_at AT TIME ZONE 'Asia/Kolkata' AS at, a.phone, a.event, a.ref, a.label, a.status AS st, a.error, m.status AS ms,
+                   m.error AS merror, a.template
+              FROM nl_auto_sends a LEFT JOIN wa_messages m ON m.wamid = a.wamid
+             WHERE a.line_id = $1 AND a.status IN ('sent', 'failed')
+               AND a.created_at AT TIME ZONE 'Asia/Kolkata' >= $2::timestamp AND a.created_at AT TIME ZONE 'Asia/Kolkata' < $3::timestamp
+            UNION ALL
+            SELECT COALESCE(rc.sent_at, b.started_at, b.created_at) AT TIME ZONE 'Asia/Kolkata', rc.phone, 'broadcast', b.id::text, b.name, rc.status, rc.error, m.status,
+                   m.error, b.template
+              FROM wa_broadcast_recipients rc JOIN wa_broadcasts b ON b.id = rc.broadcast_id LEFT JOIN wa_messages m ON m.wamid = rc.wamid
+             WHERE b.line_id = $1 AND rc.status IN ('sent', 'failed')
+               AND COALESCE(rc.sent_at, b.started_at, b.created_at) AT TIME ZONE 'Asia/Kolkata' >= $2::timestamp
+               AND COALESCE(rc.sent_at, b.started_at, b.created_at) AT TIME ZONE 'Asia/Kolkata' < $3::timestamp
+            UNION ALL
+            SELECT m.created_at, k.phone, 'manual', NULL, m.sender_user, 'sent', NULL, m.status, m.error, NULL
+              FROM wa_messages m JOIN wa_conversations c ON c.id = m.conversation_id JOIN wa_contacts k ON k.id = c.contact_id
+             WHERE c.line_id = $1 AND m.type = 'template' AND m.sender_type = 'user' AND m.created_at >= $2 AND m.created_at < $3
+         )
+         SELECT s.*,
+                (SELECT COALESCE(SUM(l.clicks), 0) FROM nl_links l WHERE s.ref IS NOT NULL AND l.kind = s.event
+                   AND l.ref = CASE WHEN s.event = 'broadcast' THEN s.ref || ':' || s.phone ELSE s.ref END)::int AS clicks,
+                (SELECT k.total FROM nl_carts k WHERE s.event LIKE 'cart_%' AND k.token = s.ref AND k.line_id = $1
+                   AND k.recovered_at IS NOT NULL AND k.recovered_at AT TIME ZONE 'Asia/Kolkata' > s.at) AS revenue,
+                (SELECT k.order_name FROM nl_carts k WHERE s.event LIKE 'cart_%' AND k.token = s.ref AND k.line_id = $1) AS cart_order
+           FROM s ORDER BY s.at DESC`, [lineId, r.start, r.end])).rows;
+
+    const verdict = (x) => {
+        const err = x.error || x.merror || '';
+        if (x.st === 'failed' || x.ms === 'failed') return RESTRICTED.test(err) ? 'restricted' : 'failed';
+        return x.ms === 'read' ? 'read' : x.ms === 'delivered' ? 'delivered' : 'sent';
+    };
+    const all = rows.map(x => ({
+        at: x.at, phone: x.phone, event: x.event, label: EVENT_LABELS[x.event] || x.event,
+        detail: x.event === 'broadcast' ? x.label : x.event === 'manual' ? (x.label ? String(x.label).split('@')[0] : null) : null,
+        order: x.event === 'broadcast' || x.event === 'manual' ? null : (x.event.startsWith('cart_') ? x.cart_order : x.label) || null,
+        clicked: (x.clicks || 0) > 0, revenue: x.revenue != null ? Number(x.revenue) : null,
+        status: verdict(x), error: x.error || x.merror || null, template: x.template,
+    }));
+    const events = [...new Set(all.map(x => x.event))].map(e => ({ key: e, label: EVENT_LABELS[e] || e, count: all.filter(x => x.event === e).length }));
+    const list = q.event ? all.filter(x => x.event === q.event) : all;
+    const count = (f) => list.filter(f).length;
+    const page = Math.max(1, Number(q.page) || 1);
+    return {
+        range: { from: r.from, to: r.to },
+        events,
+        kpis: {
+            sent: count(x => x.status !== 'failed' && x.status !== 'restricted'),
+            delivered: count(x => ['delivered', 'read'].includes(x.status)),
+            read: count(x => x.status === 'read'),
+            restricted: count(x => x.status === 'restricted' || x.status === 'failed'),
+            clicked: count(x => x.clicked),
+            revenue: list.reduce((n, x) => n + (x.revenue || 0), 0),
+        },
+        total: list.length, page, per: 20,
+        rows: list.slice((page - 1) * 20, page * 20),
+    };
+}
+
+module.exports = { normless, crewfit, myPerformance, messageLog, range, userForSo, shortName, median };

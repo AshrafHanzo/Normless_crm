@@ -227,7 +227,8 @@ async function message(b, t, person, broadcastId) {
         if (btn.type === 'URL' && /\{\{1\}\}/.test(btn.url || '')) {
             const dest = b.link_url || (lines.current().brand === 'normless' ? 'https://normless.store' : null);
             if (!dest) throw new Error('This template has a link button — say where it goes');
-            buttons.push({ index, text: String(btn.url).startsWith(links.BUTTON_BASE()) ? await links.shorten(dest, { kind: 'broadcast', ref: broadcastId }) : dest });
+            // One link per customer, so a tap shows against the person who made it.
+            buttons.push({ index, text: String(btn.url).startsWith(links.BUTTON_BASE()) ? await links.shorten(dest, { kind: 'broadcast', ref: `${broadcastId}:${person.phone || ''}` }) : dest });
         } else if (btn.type === 'QUICK_REPLY') {
             buttons.push({ index, payload: /stop/i.test(btn.text || '') ? 'optout' : `bcast:${broadcastId}` });
         }
@@ -311,7 +312,7 @@ async function report(lineId, id) {
           WHERE r.broadcast_id = $1`, [id])).rows[0];
     const errors = (await db.query(
         `SELECT error, COUNT(*)::int AS n FROM wa_broadcast_recipients WHERE broadcast_id = $1 AND status = 'failed' GROUP BY 1 ORDER BY 2 DESC LIMIT 5`, [id])).rows;
-    const taps = (await db.query(`SELECT COALESCE(SUM(clicks), 0)::int AS n FROM nl_links WHERE kind = 'broadcast' AND ref = $1`, [String(id)])).rows[0].n;
+    const taps = (await db.query(`SELECT COALESCE(SUM(clicks), 0)::int AS n FROM nl_links WHERE kind = 'broadcast' AND (ref = $1 OR ref LIKE $1 || ':%')`, [String(id)])).rows[0].n;
     return { ...b, counts: { ...counts, taps }, errors };
 }
 

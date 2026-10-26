@@ -40,6 +40,8 @@ const EVENTS = [
     { key: 'order_cancelled', group: 'order', label: 'Order cancelled', hint: 'When an order is cancelled in Shopify.', links: ['store', 'order'] },
     { key: 'cod_confirm', group: 'cod', label: 'COD confirmation', hint: 'Asks a COD customer to confirm or cancel before it ships.', links: ['order', 'store'] },
     { key: 'fulfilled', group: 'fulfillment', label: 'Shipped with tracking', hint: 'When an order is fulfilled with a tracking number.', links: ['tracking', 'order', 'store'] },
+    { key: 'out_for_delivery', group: 'fulfillment', label: 'Out for delivery', hint: 'When the courier marks the parcel out for delivery (Delhivery’s tracking, as Shopify has it).', links: ['tracking', 'order', 'store'] },
+    { key: 'delivered', group: 'fulfillment', label: 'Delivered', hint: 'When the courier marks the parcel delivered.', links: ['order', 'store', 'tracking'] },
     { key: 'refund', group: 'payment', label: 'Refund issued', hint: 'When a refund is made in Shopify.', links: ['order', 'store'] },
 ];
 const EVENT = Object.fromEntries(EVENTS.map(e => [e.key, e]));
@@ -445,10 +447,14 @@ function orderEvents(o, startedAt) {
     }
     if (after(o.cancelled_at)) out.push(['order_cancelled', o.id]);
     for (const f of o.fulfillments || []) {
-        if (!after(f.created_at) || !f.tracking_number || f.status === 'cancelled') continue;
+        if (!f.tracking_number || f.status === 'cancelled') continue;
         const trackUrl = f.tracking_url || f.tracking_urls?.[0]
             || `https://www.delhivery.com/track-v2/package/${encodeURIComponent(f.tracking_number)}`;
-        out.push(['fulfilled', f.id, { courier: f.tracking_company || 'our courier', tracking_number: f.tracking_number, urls: { ...facts.urls, tracking: trackUrl } }]);
+        const extra = { courier: f.tracking_company || 'our courier', tracking_number: f.tracking_number, urls: { ...facts.urls, tracking: trackUrl } };
+        if (after(f.created_at)) out.push(['fulfilled', f.id, extra]);
+        // The courier's stages, which Delhivery reports to Shopify: sent when the stage is new.
+        if (f.shipment_status === 'out_for_delivery' && after(f.updated_at)) out.push(['out_for_delivery', f.id, extra]);
+        if (f.shipment_status === 'delivered' && after(f.updated_at)) out.push(['delivered', f.id, extra]);
     }
     for (const r of o.refunds || []) {
         if (!after(r.created_at)) continue;
@@ -456,6 +462,33 @@ function orderEvents(o, startedAt) {
         if (amount > 0) out.push(['refund', r.id, { refund_amount: money(amount), refund_amount_inr: rupees(amount), refund_note: r.note || 'Refund' }]);
     }
     return out.map(([event, ref, extra]) => ({ event, ref, facts: { ...facts, ...(extra || {}) } }));
+}
+
+/**
+ * Every ten minutes: parcels on their way. A courier's stage may not move the order's own
+ * "updated" time, so shipped orders from the last three weeks are read again for it.
+ */
+async function shipmentTick(lineId) {
+    const cfg = await config(lineId);
+    if (!cfg.started_at || !['out_for_delivery', 'delivered'].some(k => cfg.events[k]?.enabled)) return { sent: 0 };
+    const startedAt = new Date(cfg.started_at);
+    const since = new Date(Date.now() - 21 * 86400000).toISOString();
+    let url = `https://${process.env.SHOPIFY_STORE_DOMAIN}/admin/api/2026-04/orders.json?status=any&limit=250&fulfillment_status=shipped`
+        + `&created_at_min=${encodeURIComponent(since)}&fields=${ORDER_FIELDS}`;
+    let sent = 0;
+    for (let page = 0; url && page < 20; page++) {
+        const res = await fetch(url, { headers: { 'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN } });
+        if (!res.ok) throw new Error(`Shopify ${res.status}`);
+        for (const o of (await res.json()).orders || []) {
+            for (const ev of orderEvents(o, startedAt)) {
+                if (!['out_for_delivery', 'delivered'].includes(ev.event) || !cfg.events[ev.event].enabled) continue;
+                const r = await fire(lineId, ev.event, ev.ref, ev.facts, { label: o.name });
+                if (r?.status === 'sent') sent++;
+            }
+        }
+        url = (res.headers.get('Link') || '').match(/<([^>]+)>;\s*rel="next"/)?.[1] || null;
+    }
+    return { sent };
 }
 
 /** Every few minutes: orders Shopify changed since the last look. */
@@ -633,10 +666,11 @@ function start() {
     };
     timers.push(setInterval(guard('carts', cartTick), 60 * 1000));
     timers.push(setInterval(guard('orders', orderTick), 3 * 60 * 1000));
+    timers.push(setInterval(guard('shipments', shipmentTick), 10 * 60 * 1000));
     timers.forEach(t => t.unref());
 }
 
 module.exports = {
-    EVENTS, config, saveEvents, fire, onAbandoned, onText, onOptOut, cartTick, orderTick, orderEvents, onReply, recent, cartStats,
+    EVENTS, config, saveEvents, fire, onAbandoned, onText, onOptOut, cartTick, orderTick, shipmentTick, orderEvents, onReply, recent, cartStats,
     createSetTemplate, recoverCarts, start, CART_HOURS,
 };

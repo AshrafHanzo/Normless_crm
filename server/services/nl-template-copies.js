@@ -212,10 +212,12 @@ const PREFERRED = {
     order_prepaid: ['nl_newprepaidorderwithimage', 'nl_newprepaidorder', 'nlcrm_order_prepaid'],
     order_partial_cod: ['nl_newpartialcod', 'nlcrm_order_partial_cod'],
     order_cod: ['nl_neworder', 'nl_newcodwithoutpaymentmethod', 'nlcrm_order_cod'],
-    cod_confirm: ['newcodorderwithcancel', 'nlcrm_cod_confirm', 'codconfirmation1'],
-    order_cancelled: ['ordercancelled', 'nlcrm_order_cancelled'],
+    cod_confirm: ['nlcrm_cod_confirm', 'newcodorderwithcancel'],
+    order_cancelled: ['nlcrm_order_cancelled', 'ordercancelled'],
     fulfilled: ['nl_orderdispatchedwithimage', 'nl_orderdispatched', 'nl_orderfulfilledwithimage', 'nl_orderfulfilled', 'nlcrm_order_shipped'],
-    refund: ['refundconfirmation', 'nlcrm_refund_issued'],
+    out_for_delivery: ['nlcrm_out_for_delivery'],
+    delivered: ['nlcrm_order_delivered'],
+    refund: ['nlcrm_refund_issued', 'refundconfirmation'],
 };
 function recommended(templates) {
     const out = {};

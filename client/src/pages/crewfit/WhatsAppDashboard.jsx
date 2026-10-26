@@ -174,6 +174,83 @@ function useDash(url) {
   return { ...state, loading: state.key !== key, setRange }
 }
 
+/* ── Template messages ─────────────────────────────────────────────────────────────────────────
+   Every template that went out in these dates — automatic, broadcasts, and ones people sent — and
+   what WhatsApp did with it, like the old provider's log. */
+
+const MSG_STATUS = {
+  read: ['success', 'Read'], delivered: ['success', 'Delivered'], sent: ['', 'Sent'],
+  restricted: ['error', 'Restricted'], failed: ['error', 'Not sent'],
+}
+const fmtStamp = (v) => new Date(v).toLocaleString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })
+
+function MessageLog({ brand }) {
+  const apiFetch = useApi()
+  const [params] = useSearchParams()
+  const [event, setEvent] = useState('')
+  const [page, setPage] = useState(1)
+  const [data, setData] = useState(null)
+  const qs = new URLSearchParams({ ...Object.fromEntries(params), ...(event ? { event } : {}), page: String(page) }).toString()
+  useEffect(() => {
+    let live = true
+    apiFetch(`${brand.api}/dashboard/messages?${qs}`).then(r => { if (live) setData(r && !r.error ? r : { error: r?.error || 'Could not load the log' }) })
+    return () => { live = false }
+  }, [qs]) // eslint-disable-line react-hooks/exhaustive-deps
+  if (!data) return <div className="loader"><div className="spinner" /></div>
+  if (data.error) return <section className="was-card"><p className="was-bad">{data.error}</p></section>
+  const k = data.kpis
+  const pages = Math.max(1, Math.ceil(data.total / data.per))
+  return (
+    <section className="was-card wdb-msglog">
+      <div className="was-card-head">
+        <h3>Template messages</h3>
+        <label className="wdb-event">
+          <span className="sr-only">Event</span>
+          <select value={event} onChange={e => { setEvent(e.target.value); setPage(1) }} aria-label="Event">
+            <option value="">All events ({data.events.reduce((n, e) => n + e.count, 0)})</option>
+            {data.events.map(e => <option key={e.key} value={e.key}>{e.label} ({e.count})</option>)}
+          </select>
+        </label>
+      </div>
+      <div className="wdb-msgkpis">
+        <div className="wdb-msgkpi"><Icon name="mail" size={16} /><span className="wdb-lbl">Sent</span><b>{num(k.sent)}</b></div>
+        <div className="wdb-msgkpi good"><Icon name="check" size={16} /><span className="wdb-lbl">Delivered</span><b>{num(k.delivered)}</b></div>
+        <div className="wdb-msgkpi read"><Icon name="eye" size={16} /><span className="wdb-lbl">Read</span><b>{num(k.read)}</b></div>
+        <div className="wdb-msgkpi bad"><Icon name="alert" size={16} /><span className="wdb-lbl">Restricted / not sent</span><b>{num(k.restricted)}</b></div>
+        <div className="wdb-msgkpi"><Icon name="trending" size={16} /><span className="wdb-lbl">Link clicked</span><b>{num(k.clicked)}</b></div>
+        <div className="wdb-msgkpi good"><Icon name="wallet" size={16} /><span className="wdb-lbl">Revenue</span><b>{k.revenue ? inr(k.revenue) : '—'}</b></div>
+      </div>
+      <div className="data-table-wrapper wdb-table">
+        <table className="data-table">
+          <thead><tr><th scope="col">Date</th><th scope="col">Phone</th><th scope="col">Event</th><th scope="col">Revenue</th><th scope="col">Link clicked</th><th scope="col">Order</th><th scope="col">Status</th></tr></thead>
+          <tbody>
+            {data.rows.length ? data.rows.map((x, i) => (
+              <tr key={i}>
+                <td data-label="Date">{fmtStamp(x.at)}</td>
+                <td data-label="Phone">{x.phone ? `+${x.phone}` : "—"}</td>
+                <td data-label="Event">{x.label}{x.detail ? <span className="wdb-sub"> · {x.detail}</span> : null}</td>
+                <td data-label="Revenue">{x.revenue ? inr(x.revenue) : '—'}</td>
+                <td data-label="Link clicked">{x.clicked ? <span className="wdb-yes" aria-label="Clicked"><Icon name="check" size={14} /></span> : '—'}</td>
+                <td data-label="Order">{x.order || '—'}</td>
+                <td data-label="Status"><span className={`status-badge ${MSG_STATUS[x.status]?.[0] || ''}`} title={x.error || undefined}>{MSG_STATUS[x.status]?.[1] || x.status}</span>
+                  {x.error && <span className="wdb-sub wdb-err">{x.error}</span>}</td>
+              </tr>
+            )) : <tr><td colSpan={7} className="wdb-empty">No template messages in these dates.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+      {data.total > data.per && (
+        <div className="wdb-pager">
+          <span className="wdb-sub">Showing {(page - 1) * data.per + 1}–{Math.min(page * data.per, data.total)} of {data.total}</span>
+          <button type="button" className="btn-icon" aria-label="Previous page" disabled={page <= 1} onClick={() => setPage(p => p - 1)}>‹</button>
+          <button type="button" className="btn-icon" aria-label="Next page" disabled={page >= pages} onClick={() => setPage(p => p + 1)}>›</button>
+        </div>
+      )}
+      <p className="wdb-sub">“Restricted” means WhatsApp held the message back (usually because that person has had a lot of marketing recently); it isn’t charged.</p>
+    </section>
+  )
+}
+
 /* ── Normless ─────────────────────────────────────────────────────────────────────────────── */
 
 const NL_EVENTS = {
@@ -418,7 +495,10 @@ export default function WhatsAppDashboard({ brand: brandKey = 'crewfit' }) {
       </div>
       {error ? <div className="was-card"><p>{error}</p>{brand.key === 'crewfit' && <Link to={`${brand.path}/me`} className="btn btn-primary btn-sm">See my performance</Link>}</div>
         : !data ? <div className="loader"><div className="spinner" /></div>
-          : <div className={`wdb-content${loading ? ' wdb-loading' : ''}`}>{brand.key === 'normless' ? <NormlessDash d={data} /> : <CrewfitDash d={data} brand={brand} />}</div>}
+          : <div className={`wdb-content${loading ? ' wdb-loading' : ''}`}>
+              {brand.key === 'normless' ? <NormlessDash d={data} /> : <CrewfitDash d={data} brand={brand} />}
+              <MessageLog brand={brand} />
+            </div>}
     </Frame>
   )
 }

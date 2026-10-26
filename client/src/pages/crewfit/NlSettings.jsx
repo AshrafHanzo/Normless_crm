@@ -652,7 +652,7 @@ export function TemplateEditor({ template, onClose, onSaved }) {
   const setButton = (i, patch) => set({ buttons: f.buttons.map((b, k) => (k === i ? { ...b, ...patch } : b)) })
   const save = async () => {
     setSaving(true)
-    const r = await apiFetch(editing ? `${brand.api}/nl/templates/${template.id}` : `${brand.api}/nl/templates`,
+    const r = await apiFetch(editing ? `${brand.api}/tpl/templates/${template.id}` : `${brand.api}/tpl/templates`,
       { method: editing ? 'PUT' : 'POST', body: JSON.stringify(f) })
     setSaving(false)
     if (!r || r.error) return toast.error(r?.error || 'Meta refused that', { duration: 0 })
@@ -752,7 +752,7 @@ export function TemplateEditor({ template, onClose, onSaved }) {
 }
 
 /** Every template on the account: search, preview, write, edit and delete. */
-export function NlTemplateLibrary({ embedded = false, reloadKey = 0 }) {
+export function NlTemplateLibrary({ embedded = false, reloadKey = 0, extraDetail = null }) {
   const apiFetch = useApi()
   const toast = useToast()
   const brand = useWaBrand()
@@ -762,7 +762,7 @@ export function NlTemplateLibrary({ embedded = false, reloadKey = 0 }) {
   const [status, setStatus] = useState('ALL')
   const [picked, setPicked] = useState(null)
   const [editing, setEditing] = useState(null)        // a template, or {} for a new one
-  const load = () => apiFetch(`${brand.api}/nl/templates`).then(r => setData(r && !r.error ? r : { templates: [], error: r?.error }))
+  const load = () => apiFetch(`${brand.api}/tpl/templates`).then(r => setData(r && !r.error ? r : { templates: [], error: r?.error }))
   useEffect(() => { load() }, [reloadKey]) // eslint-disable-line react-hooks/exhaustive-deps
   const sync = async () => {
     setSyncing(true)
@@ -773,13 +773,18 @@ export function NlTemplateLibrary({ embedded = false, reloadKey = 0 }) {
   }
   const remove = async (t) => {
     if (!await toast.confirm({ title: `Delete ${t.name}?`, message: 'It is deleted at Meta too, in every language. Automatic messages that use it stop until another template is chosen. The name can’t be reused for 30 days.', confirmLabel: 'Delete', danger: true })) return
-    const r = await apiFetch(`${brand.api}/nl/templates/${t.id}`, { method: 'DELETE' })
+    const r = await apiFetch(`${brand.api}/tpl/templates/${t.id}`, { method: 'DELETE' })
     if (!r || r.error) return toast.error(r?.error || 'Could not delete that')
     setPicked(null); load(); toast.success(`${t.name} deleted`)
   }
-  const list = (data?.templates || []).filter(t => (status === 'ALL' || t.status === status || (status === 'PENDING' && t.status === 'IN_APPEAL'))
-    && (!query || `${t.name} ${t.body_text}`.toLowerCase().includes(query.toLowerCase())))
-  const counts = (data?.templates || []).reduce((n, t) => ({ ...n, [t.status]: (n[t.status] || 0) + 1 }), {})
+  // Only ours (Updatrr's and Meta's samples are hidden), found by name — "out for delivery" finds
+  // nlcrm_out_for_delivery.
+  const mine = (data?.templates || []).filter(t => t.ours)
+  const hidden = (data?.templates || []).length - mine.length
+  const words = query.toLowerCase().replace(/[_\s]+/g, ' ').trim()
+  const list = mine.filter(t => (status === 'ALL' || t.status === status || (status === 'PENDING' && t.status === 'IN_APPEAL'))
+    && (!words || t.name.toLowerCase().replace(/_/g, ' ').includes(words)))
+  const counts = mine.reduce((n, t) => ({ ...n, [t.status]: (n[t.status] || 0) + 1 }), {})
   const current = picked && (data?.templates || []).find(t => t.id === picked)
   const pf = current && formFrom(current)
   return (
@@ -796,15 +801,16 @@ export function NlTemplateLibrary({ embedded = false, reloadKey = 0 }) {
             {embedded && data?.canEdit && (
               <button type="button" className="btn btn-primary btn-sm" disabled={!data?.connected} onClick={() => setEditing({})}><Icon name="plus" size={13} /> New template</button>
             )}
-            <input className="input" aria-label="Search templates" placeholder="Search by name or words" value={query} onChange={e => setQuery(e.target.value)} />
+            <input className="input" aria-label="Search templates" placeholder="Search by name, e.g. out for delivery" value={query} onChange={e => setQuery(e.target.value)} />
             <div className="nl-days" role="group" aria-label="Status">
               {[['ALL', 'All'], ['APPROVED', 'Approved'], ['PENDING', 'In review'], ['REJECTED', 'Rejected']].map(([k, label]) => (
                 <button key={k} type="button" aria-pressed={status === k} className={`chip${status === k ? ' chip-on' : ''}`} onClick={() => setStatus(k)}>
-                  {label} {k === 'ALL' ? (data.templates || []).length : (counts[k] || 0) + (k === 'PENDING' ? (counts.IN_APPEAL || 0) : 0)}
+                  {label} {k === 'ALL' ? mine.length : (counts[k] || 0) + (k === 'PENDING' ? (counts.IN_APPEAL || 0) : 0)}
                 </button>
               ))}
             </div>
-            {!list.length && <p className="was-hint">{data.templates?.length ? 'No template matches.' : 'None yet — sync from Meta, or write a new one.'}</p>}
+            {!list.length && <p className="was-hint">{mine.length ? 'No template matches.' : 'None yet — sync from Meta, or write a new one.'}</p>}
+            {hidden > 0 && <p className="was-hint">{hidden} of Updatrr’s and Meta’s sample templates are hidden.</p>}
             <ul className="nl-tpl-items">
               {list.map(t => (
                 <li key={t.id}>
@@ -838,6 +844,7 @@ export function NlTemplateLibrary({ embedded = false, reloadKey = 0 }) {
                 {current.rejected_reason && current.rejected_reason !== 'NONE' && <p className="was-bad">Meta rejected it: {current.rejected_reason}</p>}
                 <TemplatePreview header={pf.header} headerExample={pf.header_example} body={pf.body} examples={pf.examples} footer={pf.footer} buttons={pf.buttons}
                   image={current.components?.some(c => c.type === 'HEADER' && c.format === 'IMAGE') || null} />
+                {extraDetail && extraDetail(current, load)}
               </>
             )}
           </section>

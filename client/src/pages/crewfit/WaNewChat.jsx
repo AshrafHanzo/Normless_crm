@@ -90,7 +90,7 @@ export default function WaNewChat({ API, brandName, onClose, onOpened }) {
 
   const approvedOpeners = openers.filter(o => o.status === 'APPROVED')
   const missing = openers.filter(o => !o.status)
-  const others = templates.filter(t => !openers.some(o => o.name === t.name))
+  const others = templates.filter(t => /^(nl_|nlcrm_|normless_|crewfit_)/.test(t.name) && !/\d{13}$/.test(t.name) && !openers.some(o => o.name === t.name))
 
   return (
     <div className="drawer-overlay" onClick={onClose}>

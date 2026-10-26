@@ -61,17 +61,17 @@ const SET = [
     },
     {
         event: 'order_prepaid', name: 'nlcrm_order_prepaid', category: 'UTILITY', image: true,
-        body: 'Hi {{1}}, thank you for shopping with Normless! 🎉\n\nYour order {{2}} of ₹{{3}} is paid and confirmed. We’ll message you here when it ships.\n\nItems: {{4}}',
+        body: 'Hi {{1}}, thank you for shopping with Normless! 🎉\n\nYour order {{2}} of ₹{{3}} is paid and confirmed.\nItems: {{4}}\n\nWe’ll message you here when it ships.',
         vars: ['first_name', 'order_number', 'order_total', 'items'], link: { text: 'View my order', source: 'order' },
     },
     {
         event: 'order_partial_cod', name: 'nlcrm_order_partial_cod', category: 'UTILITY', image: true,
-        body: 'Hi {{1}}, thank you for shopping with Normless! 🎉\n\nYour order {{2}} is confirmed. We have your advance; ₹{{3}} is to be paid in cash on delivery.\n\nItems: {{4}}',
+        body: 'Hi {{1}}, thank you for shopping with Normless! 🎉\n\nYour order {{2}} is confirmed. We have your advance; ₹{{3}} is to be paid in cash on delivery.\nItems: {{4}}\n\nWe’ll message you here when it ships.',
         vars: ['first_name', 'order_number', 'cod_amount', 'items'], link: { text: 'View my order', source: 'order' },
     },
     {
         event: 'order_cod', name: 'nlcrm_order_cod', category: 'UTILITY', image: true,
-        body: 'Hi {{1}}, thank you for shopping with Normless! 🎉\n\nYour cash-on-delivery order {{2}} of ₹{{3}} is placed. We’ll message you here when it ships.\n\nItems: {{4}}',
+        body: 'Hi {{1}}, thank you for shopping with Normless! 🎉\n\nYour cash-on-delivery order {{2}} of ₹{{3}} is placed.\nItems: {{4}}\n\nWe’ll message you here when it ships.',
         vars: ['first_name', 'order_number', 'order_total', 'items'], link: { text: 'View my order', source: 'order' },
     },
     {
@@ -86,8 +86,18 @@ const SET = [
     },
     {
         event: 'fulfilled', name: 'nlcrm_order_shipped', category: 'UTILITY', image: true,
-        body: 'Hi {{1}}, your order {{2}} is on its way! 🚚\n\nCourier: {{3}}\nTracking number: {{4}}',
+        body: 'Hi {{1}}, your order {{2}} is on its way! 🚚\n\nCourier: {{3}}\nTracking number: {{4}}\n\nTap below to follow your parcel.',
         vars: ['first_name', 'order_number', 'courier', 'tracking_number'], link: { text: 'Track my order', source: 'tracking' },
+    },
+    {
+        event: 'out_for_delivery', name: 'nlcrm_out_for_delivery', category: 'UTILITY', image: true,
+        body: 'Hi {{1}}, your Normless order {{2}} is out for delivery today 🚚\n\nPlease keep your phone handy so the courier can reach you.',
+        vars: ['first_name', 'order_number'], link: { text: 'Track my order', source: 'tracking' },
+    },
+    {
+        event: 'delivered', name: 'nlcrm_order_delivered', category: 'UTILITY', image: false,
+        body: 'Hi {{1}}, your Normless order {{2}} has been delivered. We hope you love it!\n\nIf anything isn’t right, just reply to this message within 24 hours.',
+        vars: ['first_name', 'order_number'], link: { text: 'View my order', source: 'order' },
     },
     {
         event: 'refund', name: 'nlcrm_refund_issued', category: 'UTILITY', image: false,

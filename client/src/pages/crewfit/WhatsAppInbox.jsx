@@ -13,9 +13,10 @@ import { useWaCalls, WaCallDock } from './WaCalls'
 import WaNewChat from './WaNewChat'
 
 const FILTERS = [
-  { key: 'mine', label: 'Mine' },
-  { key: 'unassigned', label: 'Unassigned' },
-  { key: 'all', label: 'All' },
+  { key: 'waiting', label: 'Needs a person', hot: true },
+  { key: 'mine', label: 'Mine', badge: 'unread_mine' },
+  { key: 'unassigned', label: 'Unassigned', badge: 'unread_unassigned' },
+  { key: 'all', label: 'All', badge: 'unread' },
 ]
 
 // Normless's queues, as the design lays them out: who needs a person first.
@@ -229,6 +230,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
   const [search, setSearch] = useState('')
   const [term, setTerm] = useState('')
   const [conversations, setConversations] = useState([])
+  const [statusCounts, setStatusCounts] = useState({})
   const [tally, setTally] = useState({ open: 0, unassigned: 0, unread: 0, waiting: 0, bot: 0, mine: 0, ticket: 0, closed: 0 })
   const [newChat, setNewChat] = useState(false)
   const [openId, setOpenId] = useState(params.get('c') ? Number(params.get('c')) : null)
@@ -332,6 +334,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
     if (r && !r.error) {
       setConversations(r.conversations || [])
       setTally(r.tally || { open: 0, unassigned: 0, unread: 0 })
+      setStatusCounts(r.statusCounts || {})
     }
     setLoading(false)
   }
@@ -1152,22 +1155,21 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                 className={`chip${filter === f.key ? ' chip-on' : ''}`}
                 onClick={() => setFilter(f.key)}>{f.label}
                 {!cf && f.key !== 'all' && <span className={`wa-q-count${f.hot && tally[f.key] ? ' hot' : ''}`}>{tally[f.key] ?? 0}</span>}
+                {/* Crewfit: chats waiting for somebody, and unread customer messages behind each chip. */}
+                {cf && f.key === 'waiting' && <span className={`wa-q-count${tally.waiting ? ' hot' : ''}`} title="Chats waiting for somebody to pick up">{tally.waiting ?? 0}</span>}
+                {cf && f.badge && tally[f.badge] > 0 && <span className="wa-q-count wa-q-unread" title="Unread messages from customers">{tally[f.badge]}</span>}
               </button>
             ))}
           </div>
           {!!statuses.length && (
-            <div className="wa-status-filters" role="group" aria-label="Lead status">
-              <button type="button" className={`wa-sf${!statusFilter ? ' wa-sf-on' : ''}`}
-                onClick={() => setStatusFilter('')}>Any status</button>
-              {statuses.map(s => (
-                <button key={s.key} type="button"
-                  className={`wa-sf${statusFilter === s.key ? ' wa-sf-on' : ''}`}
-                  style={statusFilter === s.key ? { borderColor: s.color } : undefined}
-                  onClick={() => setStatusFilter(statusFilter === s.key ? '' : s.key)}>
-                  <span className="wa-dot" style={{ background: s.color }} />{s.name}
-                </button>
-              ))}
-            </div>
+            <label className="wa-status-select">
+              <span className="wa-dot" style={{ background: statuses.find(x => x.key === statusFilter)?.color || 'var(--text-muted)' }} aria-hidden="true" />
+              <span className="sr-only">Lead status</span>
+              <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} aria-label="Lead status">
+                <option value="">Any status ({Object.values(statusCounts).reduce((n, v) => n + v, 0)})</option>
+                {statuses.map(st => <option key={st.key} value={st.key}>{st.name} ({statusCounts[st.key] || 0})</option>)}
+              </select>
+            </label>
           )}
 
           {loading ? (
@@ -1398,6 +1400,23 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                 ))}
               </div>
 
+              {/* Replying is for the person the chat is with: nobody types into a chat that is
+                  waiting for someone, or into someone else's, without taking it first. */}
+              {!thread.is_demo && String(thread.assigned_to || '').toLowerCase() !== String(user?.username || '').toLowerCase() ? (
+                <footer className="wa-compose wa-compose-locked">
+                  <div className="wa-locked">
+                    <Icon name="lock" size={15} />
+                    <span>{thread.assigned_to
+                      ? <><b>{short(thread.assigned_to)}</b> is handling this chat.</>
+                      : <><b>Nobody has this chat yet.</b> Assign it to yourself to reply{cf ? '' : ' — the customer is told who is helping'}.</>}</span>
+                    {(!thread.assigned_to || config?.canManage) && (
+                      <button type="button" className="btn btn-primary btn-sm" onClick={() => assign(user?.username)}>
+                        {thread.assigned_to ? 'Take over' : 'Assign to me'}
+                      </button>
+                    )}
+                  </div>
+                </footer>
+              ) : (
               <footer className={`wa-compose${thread.window_open ? '' : ' wa-compose-shut'}`}>
                 <div className="wa-tools">
                   <div className="wa-pop-anchor">
@@ -1420,7 +1439,9 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                           const reopen = openers.filter(o => o.status === 'APPROVED')
                             .map(o => ({ o, t: templates.find(t => t.name === o.name && t.language === o.language) || templates.find(t => t.name === o.name) }))
                             .filter(x => x.t)
-                          const rest = templates.filter(t => !reopen.some(x => x.t.id === t.id))
+                          // Only ours: Updatrr's (names ending in a 13-digit stamp) and Meta's samples are left out.
+                          const ours = (t) => /^(nl_|nlcrm_|normless_|crewfit_)/.test(t.name) && !/\d{13}$/.test(t.name)
+                          const rest = templates.filter(t => ours(t) && !reopen.some(x => x.t.id === t.id))
                           const restList = rest.map(t => (
                             <button key={t.id} type="button" className="wa-snippet-use" onClick={() => pickTemplate(t)}>
                               <b>{t.name}</b>
@@ -1600,6 +1621,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                   </div>
                 )}
               </footer>
+              )}
             </>
           )}
         </section>

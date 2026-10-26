@@ -10,6 +10,8 @@ import { NlBotTab, NlKnowledgeTab, NlProductsTab, NlHandoffTab, NlMenuTab, NlRep
 import { NlTemplatesTab } from './NlAutomations'
 import { WaCallsTab } from './WaCallsSettings'
 import WaMarketing from './WaMarketing'
+import WaReopen from './WaReopen'
+import { NlTemplateLibrary } from './NlSettings'
 
 /**
  * WhatsApp settings.
@@ -492,237 +494,65 @@ const VAR_SOURCES = [
   ['tracking_id', 'Tracking ID'],
   ['tracking_url', 'Tracking link'],
 ]
-const STATUS_TONE = { APPROVED: 'success', PENDING: 'warning', IN_APPEAL: 'warning', REJECTED: 'danger', PAUSED: 'danger', DISABLED: 'danger' }
-const tone = (s) => ({ success: 'success', warning: 'pending', danger: 'error' })[STATUS_TONE[String(s || '').toUpperCase()]] || ''
-const blankTemplate = () => ({ name: '', category: 'UTILITY', language: 'en', body: '', examples: [], var_map: [], buttons: [''] })
-const gapCount = (body) => new Set((String(body).match(/\{\{\s*(\d+)\s*\}\}/g) || []).map(m => m.replace(/\D/g, ''))).size
 
-/** Crewfit's Templates: every approved template, and Marketing (promotional templates and broadcasts). */
+/**
+ * Crewfit's Templates, laid out like Normless's: Reopen chats (what to send after 24 quiet hours or
+ * to message someone first), Marketing (promotional templates and broadcasts) and All templates
+ * (search, preview, write, edit, delete). Order messages fill their gaps from what is set here.
+ */
 function TemplatesTab() {
-  const [view, setView] = useState('templates')
-  return (
-    <>
-      <div className="scan-tabs nl-auto-tabs" role="tablist" aria-label="Templates">
-        <button type="button" role="tab" aria-selected={view === 'templates'} className={view === 'templates' ? 'active' : ''} onClick={() => setView('templates')}><Icon name="mail" size={13} /> Templates</button>
-        <button type="button" role="tab" aria-selected={view === 'marketing'} className={view === 'marketing' ? 'active' : ''} onClick={() => setView('marketing')}><Icon name="spark" size={13} /> Marketing</button>
-      </div>
-      {view === 'marketing' ? <><Head title="Marketing" /><WaMarketing /></> : <CrewfitTemplateLibrary />}
-    </>
-  )
-}
-
-function CrewfitTemplateLibrary() {
   const apiFetch = useApi()
   const toast = useToast()
-  const [list, setList] = useState(null)
-  const [canCreate, setCanCreate] = useState(false)
-  const [picked, setPicked] = useState(null)
-  const [query, setQuery] = useState('')
+  const [view, setView] = useState('reopen')
   const [syncing, setSyncing] = useState(false)
-  const [form, setForm] = useState(null)
-  const [saving, setSaving] = useState(false)
-
-  const guard = useDirtyGuard({ snapshot: form, identity: form ? 'new' : null, onDiscard: () => setForm(null), confirm: toast.confirm })
-
-  const take = (r) => {
-    if (!r || r.error) return toast.error(r?.error || 'Could not load the templates')
-    setList(r.templates)
-    setCanCreate(!!r.canCreate)
-    setPicked(p => p ?? r.templates[0]?.id ?? null)
-  }
-  const load = () => apiFetch('/api/whatsapp/admin/templates').then(take)
-  useEffect(() => { apiFetch('/api/whatsapp/admin/templates').then(take) }, []) // eslint-disable-line react-hooks/exhaustive-deps
-
+  const [libKey, setLibKey] = useState(0)
   const sync = async () => {
     setSyncing(true)
     const r = await apiFetch('/api/whatsapp/templates/sync', { method: 'POST' })
     setSyncing(false)
     if (!r || r.error) return toast.error(r?.error || 'Could not read the templates from Meta')
     toast.success(`${r.approved} approved template${r.approved === 1 ? '' : 's'} from Meta`)
-    load()
+    setLibKey(k => k + 1)
   }
-
-  const t = list?.find(x => x.id === picked)
-  const shown = (list || []).filter(x => !query || x.name.includes(query.toLowerCase()) || (x.body_text || '').toLowerCase().includes(query.toLowerCase()))
-
-  const saveMap = async (map) => {
+  const saveMap = async (t, map, reload) => {
     const r = await apiFetch(`/api/whatsapp/admin/templates/${t.id}`, { method: 'PUT', body: JSON.stringify({ var_map: map }) })
     if (!r || r.error) return toast.error(r?.error || 'Could not save that')
-    setList(l => l.map(x => (x.id === t.id ? r.template : x)))
+    reload()
   }
-
-  const create = async () => {
-    setSaving(true)
-    const r = await apiFetch('/api/whatsapp/admin/templates', {
-      method: 'POST',
-      body: JSON.stringify({ ...form, buttons: form.buttons.filter(b => b.trim()) }),
-    })
-    setSaving(false)
-    if (!r || r.error) return toast.error(r?.error || 'Could not send that to Meta')
-    guard.reset()
-    setForm(null)
-    toast.success('Sent to Meta for approval — it shows as pending until they decide')
-    await load()
-    setPicked(r.template.id)
-  }
-
-  if (!list) return <Loading />
-  const gaps = form ? gapCount(form.body) : 0
-
+  // Under each template in All templates: what fills its gaps when an order message sends it.
+  const gapsFor = (t, reload) => (t.variables > 0 ? (
+    <div className="nl-auto-gaps">
+      <span className="wnc-label">When order messages send it, each gap is filled from</span>
+      {Array.from({ length: t.variables }, (_, i) => (
+        <label key={i} className="nl-auto-gap">
+          <code>{`{{${i + 1}}}`}</code>
+          <select value={t.var_map?.[i] || ''} onChange={e => { const m = Array.from({ length: t.variables }, (_, k) => t.var_map?.[k] || ''); m[i] = e.target.value; saveMap(t, m, reload) }}>
+            {VAR_SOURCES.map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+          </select>
+        </label>
+      ))}
+    </div>
+  ) : null)
+  const TABS = [['reopen', 'Reopen chats', 'refresh'], ['marketing', 'Marketing', 'spark'], ['library', 'All templates', 'mail']]
   return (
     <>
-      <Head title="Templates"
-        actions={<>
-          <button type="button" className="btn btn-secondary btn-sm" disabled={syncing} onClick={sync}>
-            <Icon name="refresh" size={14} /> {syncing ? 'Syncing…' : 'Sync from Meta'}
-          </button>
-          {canCreate && <button type="button" className="btn btn-primary btn-sm" onClick={() => setForm(blankTemplate())}>New template</button>}
-        </>}>
-        Pre-approved messages. After 24 hours of silence they are the only thing WhatsApp lets you send.
-        Pick what fills each gap and the inbox fills it in for the rep.
+      <Head title="Templates" actions={
+        <button type="button" className="btn btn-secondary btn-sm" disabled={syncing} onClick={sync}><Icon name="refresh" size={13} /> {syncing ? 'Syncing…' : 'Sync from Meta'}</button>
+      }>
+        Crewfit’s approved WhatsApp messages: to reopen a chat, for marketing, and every other template.
       </Head>
-
-      <div className="was-split was-split-2">
-        <section className="was-card was-table-card">
-          <div className="was-table-tools">
-            <input type="search" aria-label="Search templates" placeholder="Search templates" value={query} onChange={e => setQuery(e.target.value)} />
-          </div>
-          {!list.length ? (
-            <p className="wa-empty">Nothing yet. Sync from Meta to bring in the templates on the account.</p>
-          ) : (
-            <ul className="was-rows">
-              {shown.map(x => (
-                <li key={x.id}>
-                  <button type="button" className={`was-row${x.id === picked ? ' was-row-on' : ''}`} onClick={() => setPicked(x.id)}>
-                    <span className="was-row-main">
-                      <b className="was-mono">{x.name}</b>
-                      <span>{x.body_text}</span>
-                    </span>
-                    <span className="was-row-meta">{x.category ? x.category.toLowerCase() : ''} · {x.language}</span>
-                    <span className={`status-badge ${tone(x.status)}`}>{String(x.status || '').toLowerCase()}</span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-
-        {t && (
-          <section className="was-card">
-            <div className="was-card-head">
-              <h3 className="was-mono">{t.name}</h3>
-              <span className={`status-badge ${tone(t.status)}`}>{String(t.status || '').toLowerCase()}</span>
-            </div>
-            <div className="wa-template-preview">{t.body_text || '(no body text)'}</div>
-            {t.variables > 0 ? (
-              <>
-                <div className="form-section">Fill the gaps from</div>
-                {Array.from({ length: t.variables }).map((_, i) => (
-                  <div className="input-group" key={i}>
-                    <label htmlFor={`wa-map-${i}`}>{`{{${i + 1}}}`}</label>
-                    <select id={`wa-map-${i}`} value={t.var_map?.[i] || ''}
-                      onChange={e => { const m = Array.from({ length: t.variables }, (_, j) => t.var_map?.[j] || ''); m[i] = e.target.value; saveMap(m) }}>
-                      {VAR_SOURCES.map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-                    </select>
-                  </div>
-                ))}
-              </>
-            ) : <p className="wa-flow-hint">No gaps: this one is sent exactly as written.</p>}
-            <p className="wa-flow-hint">The wording is Meta’s once approved. To change it, write a new template.</p>
-          </section>
-        )}
+      <div className="scan-tabs nl-auto-tabs" role="tablist" aria-label="Templates">
+        {TABS.map(([k, label, icon]) => (
+          <button key={k} type="button" role="tab" aria-selected={view === k} className={view === k ? 'active' : ''} onClick={() => setView(k)}>
+            <Icon name={icon} size={13} /> {label}
+          </button>
+        ))}
       </div>
-
-      {form && (
-        <div className="drawer-overlay" onClick={guard.requestClose}>
-          <aside className="drawer" role="dialog" aria-label="New template" onClick={e => e.stopPropagation()}>
-            <div className="drawer-header">
-              <h3>New template</h3>
-              <button type="button" className="btn-icon" aria-label="Close" onClick={guard.requestClose}><Icon name="close" size={16} /></button>
-            </div>
-            <div className="drawer-body">
-              <div className="input-group">
-                <label htmlFor="wt-name">Name</label>
-                <input id="wt-name" value={form.name} placeholder="quote_ready"
-                  onChange={e => setForm(f => ({ ...f, name: e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '_') }))} />
-              </div>
-              <div className="form-row">
-                <div className="input-group">
-                  <label htmlFor="wt-cat">Category</label>
-                  <select id="wt-cat" value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))}>
-                    <option value="UTILITY">Utility (order updates)</option>
-                    <option value="MARKETING">Marketing (offers)</option>
-                  </select>
-                </div>
-                <div className="input-group">
-                  <label htmlFor="wt-lang">Language</label>
-                  <select id="wt-lang" value={form.language} onChange={e => setForm(f => ({ ...f, language: e.target.value }))}>
-                    <option value="en">English</option>
-                    <option value="en_US">English (US)</option>
-                    <option value="ml">Malayalam</option>
-                    <option value="hi">Hindi</option>
-                    <option value="ta">Tamil</option>
-                  </select>
-                </div>
-              </div>
-              <div className="input-group">
-                <label htmlFor="wt-body">Message</label>
-                <textarea id="wt-body" rows={5} maxLength={1024} value={form.body}
-                  placeholder={'Hi {{1}}, your quote for {{2}} is ready.'}
-                  onChange={e => setForm(f => ({ ...f, body: e.target.value }))} />
-                <span className="was-hint">Put {'{{1}}'}, {'{{2}}'} … where the details go.</span>
-              </div>
-              {gaps > 0 && (
-                <>
-                  <div className="form-section" style={{ margin: 0 }}>The gaps</div>
-                  {Array.from({ length: gaps }).map((_, i) => (
-                    <div className="form-row" key={i}>
-                      <div className="input-group">
-                        <label htmlFor={`wt-ex-${i}`}>{`{{${i + 1}}}`} example for Meta</label>
-                        <input id={`wt-ex-${i}`} value={form.examples[i] || ''}
-                          onChange={e => setForm(f => { const ex = [...f.examples]; ex[i] = e.target.value; return { ...f, examples: ex } })} />
-                      </div>
-                      <div className="input-group">
-                        <label htmlFor={`wt-map-${i}`}>Filled from</label>
-                        <select id={`wt-map-${i}`} value={form.var_map[i] || ''}
-                          onChange={e => setForm(f => { const m = [...f.var_map]; m[i] = e.target.value; return { ...f, var_map: m } })}>
-                          {VAR_SOURCES.map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-                        </select>
-                      </div>
-                    </div>
-                  ))}
-                </>
-              )}
-              <div className="form-section" style={{ margin: 0 }}>Reply buttons (optional)</div>
-              {form.buttons.map((b, i) => (
-                <div className="was-inline" key={i}>
-                  <input aria-label={`Button ${i + 1}`} value={b} maxLength={25} placeholder="e.g. Talk to us"
-                    onChange={e => setForm(f => ({ ...f, buttons: f.buttons.map((x, j) => (j === i ? e.target.value : x)) }))} />
-                  <button type="button" className="btn-icon" aria-label="Remove button"
-                    onClick={() => setForm(f => ({ ...f, buttons: f.buttons.filter((_, j) => j !== i) }))}><Icon name="trash" size={14} /></button>
-                </div>
-              ))}
-              {form.buttons.length < 3 && (
-                <button type="button" className="mini-btn" style={{ alignSelf: 'flex-start' }}
-                  onClick={() => setForm(f => ({ ...f, buttons: [...f.buttons, ''] }))}>Add button</button>
-              )}
-            </div>
-            <div className="drawer-footer">
-              <button type="button" className="btn btn-secondary" onClick={guard.requestClose}>Cancel</button>
-              <button type="button" className="btn btn-primary" disabled={saving || !form.name || !form.body.trim()} onClick={create}>
-                {saving ? 'Sending…' : 'Submit for approval'}
-              </button>
-            </div>
-          </aside>
-        </div>
-      )}
+      {view === 'reopen' ? <WaReopen key={libKey} /> : view === 'marketing' ? <WaMarketing key={libKey} />
+        : <NlTemplateLibrary embedded reloadKey={libKey} extraDetail={gapsFor} />}
     </>
   )
 }
-
-/* ════════════════════════════════════════════════════════════════════════════════════════════
-   Order messages
-   ════════════════════════════════════════════════════════════════════════════════════════════ */
 
 function OrderMessagesTab() {
   const apiFetch = useApi()
