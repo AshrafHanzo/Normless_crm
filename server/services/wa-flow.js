@@ -240,12 +240,12 @@ async function summaryText(answers) {
 /* ── Running it ──────────────────────────────────────────────────────────────────────────────── */
 
 /** Write down what the bot said, so the thread reads as one conversation. */
-async function record(conversation, wamid, body, type = 'text') {
+async function record(conversation, wamid, body, type = 'text', payload = null) {
     await db.query(
-        `INSERT INTO wa_messages (conversation_id, wamid, direction, sender_type, type, body, status)
-         VALUES ($1,$2,'out','bot',$3,$4,'sent')
+        `INSERT INTO wa_messages (conversation_id, wamid, direction, sender_type, type, body, interactive_payload, status)
+         VALUES ($1,$2,'out','bot',$3,$4,$5,'sent')
          ON CONFLICT (wamid) DO NOTHING`,
-        [conversation.id, wamid, type, body]);
+        [conversation.id, wamid, type, body, payload ? JSON.stringify(payload) : null]);
     await db.query(
         `UPDATE wa_conversations SET last_message_at = CURRENT_TIMESTAMP, last_message_preview = $2,
                 updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
@@ -304,7 +304,10 @@ async function send(conversation, flow, stepId, answers) {
     } else {
         wamid = await wa.sendText(conversation.phone, step.text);
     }
-    await record(conversation, wamid, step.text, step.type === 'text' ? 'text' : 'interactive');
+    // The buttons or list options, so the chat shows them as the customer sees them.
+    const look = step.type === 'buttons' ? { kind: 'buttons', options: (step.buttons || []).map(b => b.title || b.text || b) }
+        : step.type === 'list' ? { kind: 'list', button: step.button, options: (step.sections || []).flatMap(s => (s.rows || []).map(r => r.title)) } : null;
+    await record(conversation, wamid, step.text, step.type === 'text' ? 'text' : 'interactive', look);
 
     await db.query(
         `UPDATE wa_conversations SET mode = 'flow', flow_id = $2, flow_step = $3, flow_data = $4,

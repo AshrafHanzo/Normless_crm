@@ -379,6 +379,7 @@ async function tick() {
                              VALUES ($1,$2,'out','auto',$3,'template',$4,$5,$6,'sent')`,
                             [conv.id, wamid, b.created_by, body, m.headerImage, m.headerImage ? 'image/jpeg' : null]);
                         await db.query(`UPDATE wa_conversations SET last_message_preview = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1`, [conv.id, `📣 ${body}`.slice(0, 200)]);
+                        await require('./wa-template-look').stamp(wamid, b.line_id, t.name, t.language);
                         await db.query(
                             `UPDATE wa_broadcast_recipients SET status = 'sent', wamid = $2, conversation_id = $3, sent_at = CURRENT_TIMESTAMP WHERE id = $1`,
                             [p.id, wamid, conv.id]);

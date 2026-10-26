@@ -3682,8 +3682,6 @@ p.wdb-sub { margin: 0; }
 .wa-locked > span { flex: 1 1 220px; }
 .wa-locked b { color: var(--text-primary); }
 .wa-q-unread { background: var(--primary); color: #fff; }
-.wa-status-select { display: flex; align-items: center; gap: 8px; padding: 0 2px; flex: none; }
-.wa-status-select select { flex: 1; min-width: 0; padding: 7px 10px; border-radius: 8px; background: var(--surface); border: 1px solid var(--border); color: var(--text-primary); font: inherit; font-size: 13px; }
 .wdb-msglog .was-card-head { align-items: center; }
 .wdb-event select { padding: 7px 10px; border-radius: 8px; background: var(--surface); border: 1px solid var(--border); color: var(--text-primary); font: inherit; font-size: 13px; }
 .wdb-msgkpis { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; }
@@ -3698,3 +3696,22 @@ p.wdb-sub { margin: 0; }
 .wdb-pager { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
 @media (max-width: 1100px) { .wdb-msgkpis { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 600px) { .wdb-msgkpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* ---- Messages drawn the way the customer sees them ------------------------------------------- */
+.wa-msg { display: flex; flex-direction: column; width: fit-content; max-width: 72%; gap: 3px; }
+.wa-msg-out { align-self: flex-end; margin-left: auto; }
+.wa-msg > .wa-bubble { max-width: none; }
+.wa-msg-out > .wa-bubble { margin-left: 0; }
+.wa-text strong { font-weight: 700; }
+.wa-text code { font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+.wa-text a { color: #53bdeb; word-break: break-all; }
+.wa-tfooter { margin-top: 4px; font-size: 11.5px; color: var(--text-muted); }
+.wa-ticks { display: inline-flex; align-items: center; color: var(--text-muted); }
+.wa-ticks-read { color: #53bdeb; }
+.wa-ticks-bad { color: var(--danger); font-weight: 800; }
+.wa-bbuttons { display: flex; flex-direction: column; gap: 3px; }
+.wa-bbutton { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 6px; padding: 8px 10px; border-radius: 10px; background: var(--surface-2, rgba(255,255,255,0.06)); color: #53bdeb; font-size: 12.5px; font-weight: 600; text-align: center; }
+.wa-bbutton-list { flex-basis: 100%; font-size: 11px; font-weight: 500; color: var(--text-muted); }
+/* The inbox's status filter (its own class: wa-status-select is the side panel's). */
+.wa-status-filter { display: flex; align-items: center; gap: 8px; flex: none; }
+.wa-status-filter select { flex: 1; min-width: 0; padding: 7px 10px; border-radius: 8px; background: var(--surface); border: 1px solid var(--border); color: var(--text-primary); font: inherit; font-size: 13px; }

@@ -288,6 +288,7 @@ async function fire(lineId, eventKey, ref, facts, { label = null } = {}) {
             `INSERT INTO wa_activity (conversation_id, kind, body) VALUES ($1,'automation',$2)`,
             [conv.id, `Sent “${EVENT[eventKey].label}”${label ? ` for ${label}` : ''} (${t.name})`]);
         await db.query(`UPDATE nl_auto_sends SET status = 'sent', wamid = $2, conversation_id = $3 WHERE id = $1`, [claim.id, wamid, conv.id]);
+        await require('./wa-template-look').stamp(wamid, lineId, t.name, t.language);
         return { id: claim.id, status: 'sent', wamid };
     } catch (err) {
         console.error(`normless automation ${eventKey} ${ref}:`, err.message);

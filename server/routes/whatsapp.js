@@ -2735,6 +2735,9 @@ router.post('/conversations/:id/template', async (req, res) => {
              RETURNING id, wamid, direction, sender_type, sender_user, type, body, media_url,
                        media_mime, media_name, status, error, sent_at`,
             [conversation.id, wamid, req.user?.username || null, body]);
+        // Its footer and buttons, so the chat shows it the way the customer sees it.
+        await require('../services/wa-template-look').stamp(wamid, req.waLine.id, name, language);
+        row.rows[0].interactive_payload = await require('../services/wa-template-look').lookOf(req.waLine.id, name, language);
         await db.query(
             `UPDATE wa_conversations SET last_message_at = CURRENT_TIMESTAMP, last_message_preview = $2,
                     status = 'open', assigned_to = COALESCE(assigned_to, $3), updated_at = CURRENT_TIMESTAMP

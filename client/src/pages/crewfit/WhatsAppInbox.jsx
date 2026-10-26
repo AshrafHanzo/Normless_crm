@@ -11,6 +11,7 @@ import TicketDrawer from '../support/TicketDrawer'
 import { refOf } from '../support/ticket'
 import { useWaCalls, WaCallDock } from './WaCalls'
 import WaNewChat from './WaNewChat'
+import { WaText, Ticks, BubbleButtons } from './WaBubble'
 
 const FILTERS = [
   { key: 'waiting', label: 'Needs a person', hot: true },
@@ -150,7 +151,6 @@ const todayStr = () => { const d = new Date(); return `${d.getFullYear()}-${Stri
 const ago10 = (phone) => String(phone || '').slice(-10)
 const soName = (username) => { const n = String(username || '').split('@')[0].replace(/[._-]+/g, ' ').trim(); return n ? n.replace(/\b\w/g, c => c.toUpperCase()) : '' }
 
-const TICK = { sent: '✓', delivered: '✓✓', read: '✓✓', failed: '!' }
 
 /** A status's colour as a pill: tinted ground, full-strength text. */
 const pillStyle = (color) => ({ background: `color-mix(in srgb, ${color} 16%, transparent)`, color })
@@ -1162,7 +1162,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
             ))}
           </div>
           {!!statuses.length && (
-            <label className="wa-status-select">
+            <label className="wa-status-filter">
               <span className="wa-dot" style={{ background: statuses.find(x => x.key === statusFilter)?.color || 'var(--text-muted)' }} aria-hidden="true" />
               <span className="sr-only">Lead status</span>
               <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} aria-label="Lead status">
@@ -1346,6 +1346,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                   return (
                     <div key={m.id}>
                       {newDay && <div className="wa-day">{day(m.sent_at)}</div>}
+                      <div className={`wa-msg${mine ? ' wa-msg-out' : ''}`}>
                       <div className={`wa-bubble${mine ? ' wa-bubble-out' : ''}${m.type === 'call' ? ` wa-bubble-call${/Missed|declined|Declined|no answer|failed/.test(m.body || '') ? ' wa-bubble-call-missed' : ''}` : ''}${(m.sender_type === 'bot' || m.sender_type === 'ai') ? ' wa-bubble-bot' : ''}${m.sender_type === 'auto' ? ' wa-bubble-auto' : ''}${m.status === 'failed' ? ' wa-bubble-bad' : ''}`}>
                         {m.media_url && /^image\//.test(m.media_mime || '') && (
                           <div className="wa-media-wrap">
@@ -1365,7 +1366,10 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                           <DocCard name={m.media_name} mime={m.media_mime} url={m.media_url ? fileUrl(m.media_url) : null}
                             onOpen={() => m.media_url && setPreview({ url: fileUrl(m.media_url), name: m.media_name, mime: m.media_mime })} />
                         )}
-                        {m.body && <div className="wa-text">{m.body}</div>}
+                        {m.body && <WaText text={m.body} />}
+                        {mine && m.interactive_payload?.kind === 'template' && m.interactive_payload.footer && (
+                          <div className="wa-tfooter">{m.interactive_payload.footer}</div>
+                        )}
                         {m.type === 'call' && !mine && /Missed/.test(m.body || '') && !calls.active && (
                           <button type="button" className="mini-btn wa-call-back" onClick={startCall}><Icon name="phone" size={12} /> Call back</button>
                         )}
@@ -1375,9 +1379,12 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                             : m.sender_type === 'ai' ? <span>assistant</span>
                               : m.sender_user ? <span>{short(m.sender_user)}</span> : null)}
                           <span>{clock(m.sent_at)}</span>
-                          {mine && <span className={`wa-tick${m.status === 'read' ? ' wa-tick-read' : ''}`}>{TICK[m.status] || ''}</span>}
+                          {mine && <Ticks status={m.status} />}
                         </div>
                         {m.error && <div className="wa-error">{m.error}</div>}
+                      </div>
+                      {/* The buttons under it, as the customer's phone shows them. */}
+                      {mine && <BubbleButtons payload={m.interactive_payload} />}
                       </div>
                     </div>
                   )

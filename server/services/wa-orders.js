@@ -513,6 +513,7 @@ async function sendOnce(orderId, kind, { user = null, auto = false } = {}) {
             }
             const wamid = await wa.sendTemplate(conv.phone, { name: t.name, language: t.language, variables });
             sent.push(await record(conv, { wamid, type: 'template', body: wa.renderTemplate(t.body_text, variables), user, auto }));
+            await require('./wa-template-look').stamp(wamid, t.line_id, t.name, t.language);
         } else {
             for (const [i, f] of files.entries()) {
                 const out = await wa.sendMedia(conv.phone, { filePath: f.path, mime: f.mime, filename: f.filename, caption: i === 0 ? caption : '' });
