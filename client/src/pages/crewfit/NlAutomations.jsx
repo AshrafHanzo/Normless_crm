@@ -6,6 +6,7 @@ import { SaveButton, Head, Toggle, Loading } from './waSettingsUi'
 import { useWaBrand } from './waBrand'
 import { NlTemplateLibrary, TemplatePreview, TemplateEditor } from './NlSettings'
 import { STATUS_LOOK, formFrom } from './nlTemplates'
+import WaMarketing from './WaMarketing'
 
 /**
  * Normless's templates, grouped by what sends them — abandoned carts, orders, COD confirmation,
@@ -22,6 +23,7 @@ const GROUPS = [
   { key: 'cod', label: 'COD confirmation', icon: 'check', intro: 'Asks a cash-on-delivery customer to confirm before it ships. A Confirm is noted on the chat; a Cancel goes to the team to cancel in Shopify.' },
   { key: 'fulfillment', label: 'Shipping', icon: 'truck', intro: 'Sent when an order is fulfilled in Shopify with a tracking number.' },
   { key: 'payment', label: 'Payment & refund', icon: 'card', intro: 'Sent when a refund is made in Shopify.' },
+  { key: 'marketing', label: 'Marketing', icon: 'spark' },
   { key: 'library', label: 'All templates', icon: 'mail' },
 ]
 
@@ -377,11 +379,11 @@ export function NlTemplatesTab() {
       <div className="scan-tabs nl-auto-tabs" role="tablist" aria-label="Template groups">
         {GROUPS.map(x => (
           <button key={x.key} type="button" role="tab" aria-selected={group === x.key} className={group === x.key ? 'active' : ''} onClick={() => setGroup(x.key)}>
-            <Icon name={x.icon} size={13} /> {x.label}{x.key !== 'library' && on(x.key) > 0 && <span className="tab-count">{on(x.key)} on</span>}
+            <Icon name={x.icon} size={13} /> {x.label}{!['library', 'marketing'].includes(x.key) && on(x.key) > 0 && <span className="tab-count">{on(x.key)} on</span>}
           </button>
         ))}
       </div>
-      {group === 'library' ? <NlTemplateLibrary embedded reloadKey={libKey} /> : !a.data || !a.draft ? <Loading /> : (
+      {group === 'marketing' ? <WaMarketing /> : group === 'library' ? <NlTemplateLibrary embedded reloadKey={libKey} /> : !a.data || !a.draft ? <Loading /> : (
         <>
           <div className="nl-auto-bar">
             <p className="was-hint">{g.intro}{!a.data.started_at && ' Nothing has been sent yet: only orders and carts from the moment you switch one on are ever messaged.'}</p>

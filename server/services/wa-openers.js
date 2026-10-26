@@ -1,5 +1,6 @@
 /**
- * Opener templates: how a person on the team starts a WhatsApp chat themselves.
+ * Opener ("reopen the chat") templates: how a person on the team starts a WhatsApp chat themselves,
+ * or picks one up again after the customer has been quiet for more than a day.
  *
  * WhatsApp only lets a business write freely within 24 hours of the customer's last message. To
  * message someone first — a new number from a phone call, or a customer whose order has a problem
@@ -22,8 +23,23 @@ const OPENERS = {
             examples: ['Rahul', 'Anu'], gaps: ['name', 'me'],
         },
         {
+            name: 'crewfit_enquiry_reply', label: 'Late reply to their enquiry',
+            body: 'Hi {{1}}, sorry for the delay in getting back to you about your Crewfit enquiry. This is {{2}} from our team. Reply to this message and I will help you right away.',
+            examples: ['Rahul', 'Anu'], gaps: ['name', 'me'],
+        },
+        {
+            name: 'crewfit_quote_follow_up', label: 'Following up on a quote',
+            body: 'Hi {{1}}, this is {{2}} from Crewfit, following up on the quote we shared with you. Reply to this message if you have any questions or would like to go ahead.',
+            examples: ['Rahul', 'Anu'], gaps: ['name', 'me'],
+        },
+        {
             name: 'crewfit_order_update', label: 'About their order',
             body: 'Hi {{1}}, this is {{2}} from Crewfit about your order {{3}}. We need a quick word with you about it, please reply to this message.',
+            examples: ['Rahul', 'Anu', 'CF-142'], gaps: ['name', 'me', 'order'],
+        },
+        {
+            name: 'crewfit_details_needed', label: 'Need details for their order',
+            body: 'Hi {{1}}, this is {{2}} from Crewfit. To go ahead with your order {{3}} we need a few details from you, such as sizes, logo or delivery address. Please reply to this message.',
             examples: ['Rahul', 'Anu', 'CF-142'], gaps: ['name', 'me', 'order'],
         },
     ],
@@ -34,8 +50,23 @@ const OPENERS = {
             examples: ['Meera', 'Priya'], gaps: ['name', 'me'],
         },
         {
+            name: 'normless_query_reply', label: 'Late reply to their message',
+            body: 'Hi {{1}}, sorry for the delay in getting back to you. This is {{2}} from Normless. Reply to this message and I will help you right away.',
+            examples: ['Meera', 'Priya'], gaps: ['name', 'me'],
+        },
+        {
             name: 'normless_order_issue', label: 'About their order',
             body: 'Hi {{1}}, this is {{2}} from Normless about your order {{3}}. We need a quick confirmation from you, please reply to this message so we can sort it out.',
+            examples: ['Meera', 'Priya', '#94182'], gaps: ['name', 'me', 'order'],
+        },
+        {
+            name: 'normless_return_update', label: 'Return or exchange update',
+            body: 'Hi {{1}}, this is {{2}} from Normless with an update on the return or exchange for your order {{3}}. Please reply to this message to continue.',
+            examples: ['Meera', 'Priya', '#94182'], gaps: ['name', 'me', 'order'],
+        },
+        {
+            name: 'normless_delivery_check', label: 'Confirm delivery details',
+            body: 'Hi {{1}}, this is {{2}} from Normless. We need to confirm the delivery details for your order {{3}} before it ships. Please reply to this message.',
             examples: ['Meera', 'Priya', '#94182'], gaps: ['name', 'me', 'order'],
         },
     ],

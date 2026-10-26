@@ -1904,6 +1904,41 @@ async function ensureWaLinesSchema() {
             ALTER TABLE wa_calls ADD COLUMN IF NOT EXISTS recording_bytes INTEGER;
             ALTER TABLE wa_calls ADD COLUMN IF NOT EXISTS recorded_by TEXT;
             ALTER TABLE wa_calls ADD COLUMN IF NOT EXISTS notice_sent_at TIMESTAMPTZ;
+            -- Marketing broadcasts: one approved template sent to a list of customers, in the
+            -- background. Recipients are worked out when it is made; each row is one message.
+            CREATE TABLE IF NOT EXISTS wa_broadcasts (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                line_id INTEGER NOT NULL REFERENCES wa_lines(id),
+                name TEXT NOT NULL,
+                template TEXT NOT NULL,
+                language TEXT NOT NULL,
+                vars TEXT,
+                header_image TEXT,
+                link_url TEXT,
+                audience TEXT,
+                status TEXT NOT NULL DEFAULT 'draft',      -- draft | sending | paused | done | cancelled
+                total INTEGER NOT NULL DEFAULT 0,
+                sent INTEGER NOT NULL DEFAULT 0,
+                failed INTEGER NOT NULL DEFAULT 0,
+                skipped INTEGER NOT NULL DEFAULT 0,
+                error TEXT,
+                created_by TEXT,
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                started_at TIMESTAMPTZ,
+                finished_at TIMESTAMPTZ
+            );
+            CREATE TABLE IF NOT EXISTS wa_broadcast_recipients (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                broadcast_id INTEGER NOT NULL REFERENCES wa_broadcasts(id) ON DELETE CASCADE,
+                phone TEXT NOT NULL,
+                name TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',     -- pending | sending | sent | failed | skipped | cancelled
+                wamid TEXT,
+                conversation_id INTEGER,
+                error TEXT,
+                sent_at TIMESTAMPTZ
+            );
+            CREATE INDEX IF NOT EXISTS wa_broadcast_recipients_queue_idx ON wa_broadcast_recipients (broadcast_id, status, id);
             CREATE INDEX IF NOT EXISTS wa_calls_thread_idx ON wa_calls (conversation_id, id);
             -- A chat somebody has muted: no sound, no badge for them. Per person, not per chat.
             CREATE TABLE IF NOT EXISTS wa_conversation_mutes (
@@ -2217,6 +2252,8 @@ app.listen(PORT, async () => {
     // actually looking at.
     // Normless's automatic WhatsApp messages: abandoned-cart reminders and order updates.
     require('./services/nl-automations').start();
+    // Marketing broadcasts that were going when the server stopped carry on.
+    require('./services/wa-marketing').startWorker();
 
     const thumbs = require('./routes/thumbs');
     setTimeout(() => thumbs.warm().catch(e => console.error('thumb warm:', e.message)), 60 * 1000).unref();

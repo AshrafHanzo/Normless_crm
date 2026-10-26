@@ -534,7 +534,7 @@ async function onReply(conversationId, payload) {
  */
 async function onText(conversationId, text) {
     const word = String(text || '').trim().toUpperCase();
-    if (!['STOP', 'UNSUBSCRIBE', 'START'].includes(word)) return false;
+    if (!['STOP', 'UNSUBSCRIBE', 'START', 'STOP PROMOTIONS'].includes(word)) return false;
     const stop = word !== 'START';
     const conv = (await db.query(
         `SELECT c.*, k.phone, k.profile_name FROM wa_conversations c JOIN wa_contacts k ON k.id = c.contact_id WHERE c.id = $1`,
@@ -545,9 +545,23 @@ async function onText(conversationId, text) {
         [conv.id, stop ? 'Customer opted out of offers and reminders (STOP)' : 'Customer opted back in (START)']);
     const { tell } = require('./nl-handover');
     await tell(conv, stop
-        ? 'You won’t get offers or cart reminders from Normless any more. You’ll still get updates about your orders. Reply START to opt back in.'
-        : 'Welcome back! You’ll get offers and reminders from Normless again. Reply STOP any time to opt out.');
+        ? `You won’t get offers or reminders from ${brandName()} any more. You’ll still get updates about your orders. Reply START to opt back in.`
+        : `Welcome back! You’ll get offers and reminders from ${brandName()} again. Reply STOP any time to opt out.`);
     return true;
+}
+
+const brandName = () => (lines.current()?.brand === 'crewfit' ? 'Crewfit' : 'Normless');
+
+/**
+ * Opting out on either number: STOP / START typed, or a marketing template's "Stop promotions"
+ * button. Returns true when the message was that and has been answered.
+ */
+async function onOptOut(conversationId, message) {
+    if (message?.type === 'text') return onText(conversationId, message.text?.body);
+    if (message?.type === 'button' && (/^optout$/i.test(message.button?.payload || '') || /stop promotions|unsubscribe/i.test(message.button?.text || ''))) {
+        return onText(conversationId, 'STOP');
+    }
+    return false;
 }
 
 /* ── For the settings page ────────────────────────────────────────────────────────────────── */
@@ -623,6 +637,6 @@ function start() {
 }
 
 module.exports = {
-    EVENTS, config, saveEvents, fire, onAbandoned, onText, cartTick, orderTick, orderEvents, onReply, recent, cartStats,
+    EVENTS, config, saveEvents, fire, onAbandoned, onText, onOptOut, cartTick, orderTick, orderEvents, onReply, recent, cartStats,
     createSetTemplate, recoverCarts, start, CART_HOURS,
 };

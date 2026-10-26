@@ -253,6 +253,11 @@ async function receiveMessage(message, profileName) {
     // Allow / Don't allow on a call permission request: written down, never answered by a bot.
     if (message.interactive?.type === 'call_permission_reply') return;
 
+    // STOP / START, or a marketing message's "Stop promotions" button, on either number: no more
+    // offers or broadcasts to them (order updates still go).
+    try { if (await require('../services/nl-automations').onOptOut(conversation.id, message)) return; }
+    catch (err) { console.error('whatsapp opt-out error:', err.message); }
+
     // Normless has its own bot (nl-bot); Crewfit's menu, assistant and away message must never
     // answer a Normless customer.
     if (!onCrewfit()) {
@@ -260,7 +265,6 @@ async function receiveMessage(message, profileName) {
         try {
             const nlAuto = require('../services/nl-automations');
             if (await nlAuto.onReply(conversation.id, interactivePayload(message))) return;
-            if (message.type === 'text' && await nlAuto.onText(conversation.id, message.text?.body)) return;
         }
         catch (err) { console.error('normless automation reply error:', err.message); }
         try { await nlBot.onInbound({ id: conversation.id, phone }); }
@@ -941,6 +945,88 @@ router.post('/openers', settingsOnly, async (req, res) => {
         console.error('whatsapp openers submit error:', err);
         res.status(500).json({ error: 'Could not send those to Meta' });
     }
+});
+
+/* ── Marketing ───────────────────────────────────────────────────────────────────────────────
+   The brand's promotional templates and broadcasts to many customers at once. Seeing them is for
+   anyone on the inbox; making and sending them is the Settings grant. */
+
+const marketing = require('../services/wa-marketing');
+const mkError = (res, err, fallback) => {
+    if (err?.status) return res.status(err.status).json({ error: err.message });
+    if (err instanceof wa.WhatsAppError) return res.status(502).json({ error: err.message });
+    console.error('whatsapp marketing error:', err);
+    res.status(500).json({ error: fallback });
+};
+
+router.get('/marketing', async (req, res) => {
+    try {
+        const ours = await marketing.listTemplates(req.waLine);
+        const approved = (await db.query(
+            `SELECT name, language, category, body_text, variables, components FROM wa_templates
+              WHERE line_id = $1 AND status = 'APPROVED' AND category = 'MARKETING'
+                -- Not for broadcasts: links through the old provider, and cart reminders (they're
+                -- about one customer's own checkout).
+                AND COALESCE(components, '') NOT LIKE '%prizmacommunicator%'
+                AND name NOT ILIKE '%cart%' AND name NOT ILIKE '%reminder%'
+              ORDER BY LOWER(name)`, [req.waLine.id])).rows
+            .map(t => ({ ...t, components: (() => { try { return JSON.parse(t.components || '[]'); } catch { return []; } })() }));
+        const statuses = req.waLine.brand === 'crewfit'
+            ? (await db.query(`SELECT key, name FROM wa_lead_statuses ORDER BY sort_order`)).rows : [];
+        res.json({ ours, approved, broadcasts: await marketing.list(req.waLine.id), statuses, canSend: !!req.waSettings, brand: req.waLine.brand });
+    } catch (err) { mkError(res, err, 'Could not load marketing'); }
+});
+
+router.post('/marketing/templates', settingsOnly, async (req, res) => {
+    try {
+        if (!wa.configured() || !wa.wabaId()) return res.status(503).json({ error: 'Connect this WhatsApp number first' });
+        res.json({ results: await marketing.submitTemplates(req.waLine), ours: await marketing.listTemplates(req.waLine) });
+    } catch (err) { mkError(res, err, 'Could not send those to Meta'); }
+});
+
+router.post('/marketing/audience', settingsOnly, async (req, res) => {
+    try {
+        const people = await marketing.audience(req.waLine, req.body?.audience || {});
+        res.json({ count: people.length, opted_out: people.optedOut || 0, sample: people.slice(0, 5) });
+    } catch (err) { mkError(res, err, 'Could not work out that audience'); }
+});
+
+/** Shop photos for a broadcast's photo header (Normless). */
+router.get('/marketing/products', async (req, res) => {
+    try {
+        if (req.waLine.brand !== 'normless') return res.json({ products: [] });
+        const products = await require('../services/shopify').fetchProducts();
+        res.json({ products: products.filter(p => p.image).map(p => ({ title: p.title, image: p.image, url: p.handle ? `https://normless.store/products/${p.handle}` : null })) });
+    } catch (err) { mkError(res, err, 'Could not read the products from Shopify'); }
+});
+
+router.post('/marketing/test', settingsOnly, async (req, res) => {
+    try {
+        const wamid = await marketing.testSend(req.waLine, req.body || {}, req.body?.phone);
+        res.json({ sent: !!wamid });
+    } catch (err) { mkError(res, err, 'Could not send the test'); }
+});
+
+router.post('/marketing/broadcasts', settingsOnly, async (req, res) => {
+    try { res.status(201).json({ broadcast: await marketing.create(req.waLine, req.body || {}, req.user?.username) }); }
+    catch (err) { mkError(res, err, 'Could not make that broadcast'); }
+});
+
+router.get('/marketing/broadcasts/:id', async (req, res) => {
+    try {
+        const r = await marketing.report(req.waLine.id, req.params.id);
+        if (!r) return res.status(404).json({ error: 'No such broadcast' });
+        res.json({ broadcast: r });
+    } catch (err) { mkError(res, err, 'Could not load that broadcast'); }
+});
+
+router.post('/marketing/broadcasts/:id/:action', settingsOnly, async (req, res) => {
+    try {
+        if (!['start', 'pause', 'cancel'].includes(req.params.action)) return res.status(404).json({ error: 'No such action' });
+        const b = await marketing[req.params.action](req.waLine.id, req.params.id);
+        if (!b) return res.status(409).json({ error: 'That broadcast can’t do that now' });
+        res.json({ broadcast: await marketing.report(req.waLine.id, b.id) });
+    } catch (err) { mkError(res, err, 'Could not change that broadcast'); }
 });
 
 /** One thread's header: who it is, what we know about them, who it belongs to. */

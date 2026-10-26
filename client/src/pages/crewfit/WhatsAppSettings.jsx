@@ -9,6 +9,7 @@ import { SaveButton, Head, Toggle, Loading } from './waSettingsUi'
 import { NlBotTab, NlKnowledgeTab, NlProductsTab, NlHandoffTab, NlMenuTab, NlRepliesTab, NlTeamTab, NlHoursTab } from './NlSettings'
 import { NlTemplatesTab } from './NlAutomations'
 import { WaCallsTab } from './WaCallsSettings'
+import WaMarketing from './WaMarketing'
 
 /**
  * WhatsApp settings.
@@ -496,7 +497,21 @@ const tone = (s) => ({ success: 'success', warning: 'pending', danger: 'error' }
 const blankTemplate = () => ({ name: '', category: 'UTILITY', language: 'en', body: '', examples: [], var_map: [], buttons: [''] })
 const gapCount = (body) => new Set((String(body).match(/\{\{\s*(\d+)\s*\}\}/g) || []).map(m => m.replace(/\D/g, ''))).size
 
+/** Crewfit's Templates: every approved template, and Marketing (promotional templates and broadcasts). */
 function TemplatesTab() {
+  const [view, setView] = useState('templates')
+  return (
+    <>
+      <div className="scan-tabs nl-auto-tabs" role="tablist" aria-label="Templates">
+        <button type="button" role="tab" aria-selected={view === 'templates'} className={view === 'templates' ? 'active' : ''} onClick={() => setView('templates')}><Icon name="mail" size={13} /> Templates</button>
+        <button type="button" role="tab" aria-selected={view === 'marketing'} className={view === 'marketing' ? 'active' : ''} onClick={() => setView('marketing')}><Icon name="spark" size={13} /> Marketing</button>
+      </div>
+      {view === 'marketing' ? <><Head title="Marketing" /><WaMarketing /></> : <CrewfitTemplateLibrary />}
+    </>
+  )
+}
+
+function CrewfitTemplateLibrary() {
   const apiFetch = useApi()
   const toast = useToast()
   const [list, setList] = useState(null)

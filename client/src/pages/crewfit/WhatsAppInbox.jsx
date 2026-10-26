@@ -243,6 +243,8 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
   const [notes, setNotes] = useState([])
   const [settings, setSettings] = useState(null)
   const [templates, setTemplates] = useState([])
+  // The "reopen the chat" templates: what to send when the customer has been quiet over a day.
+  const [openers, setOpeners] = useState([])
   const [picking, setPicking] = useState(null)        // the template being filled in
   const [values, setValues] = useState([])
   const [noteDraft, setNoteDraft] = useState('')
@@ -292,6 +294,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
     apiFetch(`${API}/agents`).then(r => r && !r.error && setAgents(r.agents || []))
     apiFetch(`${API}/quick-replies`).then(r => r && !r.error && setQuickReplies(r.quickReplies || []))
     apiFetch(`${API}/templates`).then(r => r && !r.error && setTemplates(r.templates || []))
+    apiFetch(`${API}/openers`).then(r => r && !r.error && setOpeners(r.openers || []))
     apiFetch(`${API}/health`).then(r => r && setHealth(r))
     if (!cf) return
     apiFetch(`${API}/statuses`).then(r => r && !r.error && setStatuses(r.statuses || []))
@@ -879,6 +882,13 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
   const pickTemplate = (t) => {
     setPop(null)
     setPicking(t)
+    const opener = openers.find(o => o.name === t.name)
+    if (opener) {
+      // Their name, yours, and their latest order when the chat knows it.
+      const me = short(user?.username)
+      const order = cf && orders[0]?.sl_no ? `CF-${orders[0].sl_no}` : ''
+      return setValues(opener.gaps.map(g => (g === 'name' ? fillFrom('first_name', thread, user?.username) : g === 'me' ? me.charAt(0).toUpperCase() + me.slice(1) : order)))
+    }
     const map = Array.isArray(t.var_map) ? t.var_map : []
     setValues(Array.from({ length: t.variables }, (_, i) => fillFrom(map[i], thread, user?.username)))
   }
@@ -1404,12 +1414,41 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                               : <> <button type="button" className="mini-btn" onClick={syncTemplates}>Sync from Meta</button></>)}
                           </p>
                         )}
-                        {templates.map(t => (
-                          <button key={t.id} type="button" className="wa-snippet-use" onClick={() => pickTemplate(t)}>
-                            <b>{t.name}</b>
-                            <span>{t.body_text}</span>
-                          </button>
-                        ))}
+                        {(() => {
+                          // Reopen-the-chat templates first (and highlighted when the window has
+                          // closed), with everything else folded away below them.
+                          const reopen = openers.filter(o => o.status === 'APPROVED')
+                            .map(o => ({ o, t: templates.find(t => t.name === o.name && t.language === o.language) || templates.find(t => t.name === o.name) }))
+                            .filter(x => x.t)
+                          const rest = templates.filter(t => !reopen.some(x => x.t.id === t.id))
+                          const restList = rest.map(t => (
+                            <button key={t.id} type="button" className="wa-snippet-use" onClick={() => pickTemplate(t)}>
+                              <b>{t.name}</b>
+                              <span>{t.body_text}</span>
+                            </button>
+                          ))
+                          return (
+                            <>
+                              {!!reopen.length && (
+                                <div className={`wa-reopen${thread.window_open ? '' : ' wa-reopen-hot'}`}>
+                                  <div className="wa-reopen-head">
+                                    <b>{thread.window_open ? 'Reopen templates' : 'Reopen the chat'}</b>
+                                    <span>{thread.window_open ? 'for when they’ve been quiet over a day' : 'they haven’t written in 24 hours — start with one of these'}</span>
+                                  </div>
+                                  {reopen.map(({ o, t }) => (
+                                    <button key={t.id} type="button" className="wa-snippet-use" onClick={() => pickTemplate(t)}>
+                                      <b>{o.label}</b>
+                                      <span>{t.body_text}</span>
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
+                              {reopen.length && rest.length
+                                ? <details className="wa-reopen-more"><summary>All templates ({rest.length})</summary>{restList}</details>
+                                : restList}
+                            </>
+                          )
+                        })()}
                       </div>
                     )}
                   </div>
