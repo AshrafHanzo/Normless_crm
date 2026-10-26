@@ -20,6 +20,7 @@ const links = require('./nl-links');
 const shopify = require('./shopify');
 
 const STOP_FOOTER = 'Reply STOP to opt out';
+// Meta refuses a template that starts or ends on a gap, so every body here ends in words.
 const EXAMPLE_CODE = 'k3Jx9aQ';
 
 /** `gaps`: what each {{n}} is, for the broadcast form (first_name is filled per customer). */
@@ -32,7 +33,7 @@ const TEMPLATES = {
         },
         {
             name: 'normless_mkt_sale', label: 'Sale', image: true, link: 'Shop the sale',
-            body: 'Hi {{1}}, the Normless sale is live! Get {{2}} off on {{3}} with code {{4}}.\n\nOffer ends {{5}}.',
+            body: 'Hi {{1}}, the Normless sale is live! Get {{2}} off on {{3}} with code {{4}}.\n\nThe offer ends {{5}}, so grab your favourites before they sell out.',
             gaps: [['first_name', 'Meera'], ['Discount', '20%'], ['On what', 'all oversized tees'], ['Coupon code', 'NORMLESS20'], ['Ends', 'Sunday midnight']],
         },
         {
@@ -42,7 +43,7 @@ const TEMPLATES = {
         },
         {
             name: 'normless_mkt_thank_you', label: 'Thank-you offer', image: false, link: 'Shop now',
-            body: 'Hi {{1}}, thank you for being a Normless customer! Here is {{2}} off your next order with code {{3}}. Valid till {{4}}.',
+            body: 'Hi {{1}}, thank you for being a Normless customer! Here is {{2}} off your next order with code {{3}}, valid till {{4}}. We can’t wait to see you again.',
             gaps: [['first_name', 'Meera'], ['Discount', '10%'], ['Coupon code', 'THANKYOU10'], ['Valid till', '30 November']],
         },
     ],
