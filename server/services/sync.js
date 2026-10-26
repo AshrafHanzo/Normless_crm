@@ -133,8 +133,8 @@ async function syncAll() {
         for (const item of orders) {
             item.line_items_json = mergeLineItems(item.line_items_json, storedItems.get(item.shopify_id));
             await db.query(`
-                INSERT INTO orders (shopify_id, order_number, customer_shopify_id, total_price, currency, financial_status, fulfillment_status, cancelled_at, line_items_json, created_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                INSERT INTO orders (shopify_id, order_number, customer_shopify_id, total_price, currency, financial_status, fulfillment_status, cancelled_at, line_items_json, created_at, phones, email)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
                 ON CONFLICT(shopify_id) DO UPDATE SET
                     order_number = excluded.order_number,
                     customer_shopify_id = excluded.customer_shopify_id,
@@ -143,10 +143,13 @@ async function syncAll() {
                     financial_status = excluded.financial_status,
                     fulfillment_status = excluded.fulfillment_status,
                     cancelled_at = excluded.cancelled_at,
-                    line_items_json = excluded.line_items_json
+                    line_items_json = excluded.line_items_json,
+                    phones = COALESCE(excluded.phones, orders.phones),
+                    email = COALESCE(excluded.email, orders.email)
             `, [
                 item.shopify_id, item.order_number, item.customer_shopify_id, item.total_price, item.currency,
-                item.financial_status, item.fulfillment_status, item.cancelled_at, item.line_items_json, item.created_at
+                item.financial_status, item.fulfillment_status, item.cancelled_at, item.line_items_json, item.created_at,
+                item.phones?.length ? item.phones : null, item.email || null
             ]);
         }
 

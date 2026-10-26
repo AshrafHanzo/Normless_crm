@@ -386,11 +386,9 @@ async function quietThread(phone, name) {
 async function linkCustomer(c, contactId, phone) {
     const last10 = String(phone).slice(-10);
     if (last10.length < 10) return;
-    const hit = (await c.query(
-        `SELECT id FROM customers
-          WHERE RIGHT(REGEXP_REPLACE(COALESCE(phone, ''), '\\D', '', 'g'), 10) = $1
-          ORDER BY orders_count DESC NULLS LAST, id LIMIT 1`, [last10])).rows[0];
-    if (hit) await c.query('UPDATE wa_contacts SET customer_id = $2 WHERE id = $1', [contactId, hit.id]);
+    // By the profile's phone, or the customer on an order placed with this phone (nl-shop).
+    const id = await nlShop.findCustomerId(last10);
+    if (id) await c.query('UPDATE wa_contacts SET customer_id = $2 WHERE id = $1', [contactId, id]);
 }
 
 /** Move a thread's "last message" on, but never back to something older. */

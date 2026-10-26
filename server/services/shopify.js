@@ -150,13 +150,20 @@ function liveQuantity(li) {
     return li.current_quantity;
 }
 
+/** Every phone on an order, as its last ten digits, once each — however Shopify stored them. */
+function orderPhones(o) {
+    const all = [o.phone, o.shipping_address?.phone, o.billing_address?.phone, o.customer?.phone, o.customer?.default_address?.phone]
+        .map(p => String(p || '').replace(/\D+/g, '').slice(-10)).filter(p => p.length === 10);
+    return [...new Set(all)];
+}
+
 /**
  * Fetch all orders using REST API (status=any gets ALL orders including closed/archived)
  * GraphQL is limited to ~60 days by read_orders scope, but REST returns everything.
  */
 async function fetchAllOrders() {
     const allOrders = [];
-    let url = `${REST_BASE}/orders.json?status=any&limit=250&fields=id,name,created_at,total_price,currency,financial_status,fulfillment_status,cancelled_at,customer,line_items`;
+    let url = `${REST_BASE}/orders.json?status=any&limit=250&fields=id,name,created_at,total_price,currency,financial_status,fulfillment_status,cancelled_at,customer,line_items,phone,email,shipping_address,billing_address`;
 
     while (url) {
         const response = await fetch(url, {
@@ -180,6 +187,8 @@ async function fetchAllOrders() {
             fulfillment_status: (o.fulfillment_status || 'unfulfilled').toUpperCase(),
             // A cancelled order is never shipping, so nothing should be reserved or offered for it.
             cancelled_at: o.cancelled_at || null,
+            phones: orderPhones(o),
+            email: String(o.email || o.customer?.email || '').trim().toLowerCase() || null,
             line_items_json: JSON.stringify((o.line_items || []).map(li => ({
                 title: li.title,
                 quantity: liveQuantity(li),
@@ -361,6 +370,7 @@ async function testConnection() {
 }
 
 module.exports = {
+    orderPhones,
     fetchAllCustomers,
     fetchAllOrders,
     fetchOnHoldOrderNames,

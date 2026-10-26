@@ -60,15 +60,64 @@ async function dispatchesFor(numbers) {
  * number, their orders (by customer, and by the phone a parcel went to), their support tickets and
  * what they have sent in the chat. Matches the customer onto the chat when it was not yet.
  */
+/**
+ * The Shopify customer behind a phone number: the one whose profile has it, or — when the profile
+ * has no phone, as with Razorpay checkouts that put it only on the order — the customer on the
+ * latest order placed with it.
+ */
+async function findCustomerId(phone10) {
+    if (String(phone10).length !== 10) return null;
+    const byProfile = (await db.query(
+        `SELECT id FROM customers
+          WHERE RIGHT(REGEXP_REPLACE(COALESCE(phone, ''), '\\D', '', 'g'), 10) = $1
+          ORDER BY orders_count DESC NULLS LAST, id LIMIT 1`, [phone10])).rows[0];
+    if (byProfile) return byProfile.id;
+    const byOrder = (await db.query(
+        `SELECT c.id FROM orders o JOIN customers c ON c.shopify_id = o.customer_shopify_id
+          WHERE $1 = ANY(o.phones) ORDER BY o.created_at DESC NULLS LAST LIMIT 1`, [phone10])).rows[0];
+    return byOrder?.id || null;
+}
+
+/**
+ * Orders placed with this phone in the last week, asked of Shopify directly — for the minutes
+ * between someone ordering and the sync bringing the order in. Cached for a minute.
+ */
+let recentCache = { at: 0, orders: [] };
+async function recentShopifyOrders(phone10) {
+    if (!process.env.SHOPIFY_STORE_DOMAIN || String(phone10).length !== 10) return [];
+    if (Date.now() - recentCache.at > 60000) {
+        try {
+            const since = new Date(Date.now() - 7 * 86400000).toISOString();
+            let url = `https://${process.env.SHOPIFY_STORE_DOMAIN}/admin/api/2026-04/orders.json?status=any&limit=250&created_at_min=${encodeURIComponent(since)}`
+                + '&fields=id,name,created_at,total_price,financial_status,fulfillment_status,cancelled_at,customer,line_items,phone,shipping_address,billing_address';
+            const orders = [];
+            for (let page = 0; url && page < 8; page++) {
+                const res = await fetch(url, { headers: { 'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN }, signal: AbortSignal.timeout(15000) });
+                if (!res.ok) throw new Error(`Shopify ${res.status}`);
+                orders.push(...((await res.json()).orders || []));
+                url = (res.headers.get('Link') || '').match(/<([^>]+)>;\s*rel="next"/)?.[1] || null;
+            }
+            recentCache = { at: Date.now(), orders };
+        } catch (err) {
+            console.error('normless recent orders:', err.message);
+            return [];
+        }
+    }
+    return recentCache.orders.filter(o => shopify.orderPhones(o).includes(phone10)).map(o => ({
+        order_number: o.name, shopify_id: `gid://shopify/Order/${o.id}`, created_at: o.created_at, total_price: Number(o.total_price) || 0,
+        financial_status: String(o.financial_status || '').toUpperCase(), fulfillment_status: String(o.fulfillment_status || 'unfulfilled').toUpperCase(),
+        cancelled_at: o.cancelled_at || null, on_hold: false, fulfilled_at: null,
+        line_items_json: JSON.stringify((o.line_items || []).map(li => ({ title: li.title, variant: li.variant_title || '', quantity: li.current_quantity ?? li.quantity, price: li.price }))),
+        customer_shopify_id: o.customer?.id ? `gid://shopify/Customer/${o.customer.id}` : null,
+    }));
+}
+
 async function customerFor(conversation) {
     const phone10 = last10(conversation.phone);
 
     let customerId = conversation.customer_id;
     if (!customerId && phone10.length === 10) {
-        customerId = (await db.query(
-            `SELECT id FROM customers
-              WHERE RIGHT(REGEXP_REPLACE(COALESCE(phone, ''), '\\D', '', 'g'), 10) = $1
-              ORDER BY orders_count DESC NULLS LAST, id LIMIT 1`, [phone10])).rows[0]?.id || null;
+        customerId = await findCustomerId(phone10);
         if (customerId) {
             await db.query(
                 `UPDATE wa_contacts SET customer_id = $2
@@ -79,14 +128,22 @@ async function customerFor(conversation) {
         `SELECT id, shopify_id, first_name, last_name, email, phone, orders_count, total_spent, tags, created_at
            FROM customers WHERE id = $1`, [customerId])).rows[0] || null : null;
 
+    // Theirs: placed by their Shopify customer, placed with this phone on the order itself, or
+    // shipped to this phone.
     const orders = (await db.query(
         `SELECT ${ORDER_FIELDS}
            FROM orders o
           WHERE ($1::text IS NOT NULL AND o.customer_shopify_id = $1)
+             OR ($2 <> '' AND $2 = ANY(o.phones))
              OR o.order_number IN (SELECT p.order_number FROM packed_orders p
                                     WHERE $2 <> '' AND RIGHT(REGEXP_REPLACE(COALESCE(p.customer_phone, ''), '\\D', '', 'g'), 10) = $2)
           ORDER BY o.created_at DESC NULLS LAST
           LIMIT 12`, [customer?.shopify_id || null, phone10])).rows;
+    // An order from the last few minutes may not have synced yet: Shopify is asked directly.
+    for (const o of await recentShopifyOrders(phone10)) {
+        if (!orders.some(x => x.order_number === o.order_number)) orders.push(o);
+    }
+    orders.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
     const numbers = orders.map(o => o.order_number);
     const dispatchOf = await dispatchesFor(numbers);
 
@@ -127,14 +184,14 @@ async function orderByNumber(conversation, orderNumber, { email = null, pincode 
     if (!digits) return { error: 'That doesn’t look like an order number. Normless order numbers look like #12151.' };
     const number = `#${digits[0]}`;
     const o = (await db.query(
-        `SELECT ${ORDER_FIELDS}, c.phone AS customer_phone, c.email AS customer_email
+        `SELECT ${ORDER_FIELDS}, c.phone AS customer_phone, COALESCE(o.email, c.email) AS customer_email, o.phones
            FROM orders o LEFT JOIN customers c ON c.shopify_id = o.customer_shopify_id
           WHERE o.order_number = $1`, [number])).rows[0];
     const dispatch = (await dispatchesFor([number])).get(number) || null;
     if (!o && !dispatch) return { error: `No order ${number} found. It may be older than the CRM's records — a person can check.` };
 
     const phone10 = last10(conversation.phone);
-    const ownPhone = [o?.customer_phone, dispatch && (await db.query(
+    const ownPhone = (o?.phones || []).includes(phone10) || [o?.customer_phone, dispatch && (await db.query(
         'SELECT customer_phone FROM packed_orders WHERE order_number = $1', [number])).rows[0]?.customer_phone]
         .some(p => p && last10(p) === phone10);
     const emailOk = email && o?.customer_email && String(email).trim().toLowerCase() === String(o.customer_email).trim().toLowerCase();
@@ -184,4 +241,4 @@ async function productByHandle(handle) {
         || products.find(p => p.title.toLowerCase() === want) || null;
 }
 
-module.exports = { customerFor, orderByNumber, searchProducts, productByHandle, shapeProduct, productUrl, paymentKind, last10, STORE };
+module.exports = { findCustomerId, recentShopifyOrders, customerFor, orderByNumber, searchProducts, productByHandle, shapeProduct, productUrl, paymentKind, last10, STORE };

@@ -1383,6 +1383,12 @@ async function ensureInventorySchema() {
             -- offering pieces to orders that are never going out.
             ALTER TABLE orders ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMP;
             ALTER TABLE orders ADD COLUMN IF NOT EXISTS on_hold BOOLEAN DEFAULT false;
+            -- Every phone on an order (the order's own, shipping, billing, the customer's), last ten
+            -- digits each, and its email: how a WhatsApp chat finds its orders when the Shopify
+            -- customer profile has no phone (Razorpay checkouts put it on the order, not the profile).
+            ALTER TABLE orders ADD COLUMN IF NOT EXISTS phones TEXT[];
+            ALTER TABLE orders ADD COLUMN IF NOT EXISTS email TEXT;
+            CREATE INDEX IF NOT EXISTS orders_phones_idx ON orders USING GIN (phones);
 
             ALTER TABLE inventory_rto ADD COLUMN IF NOT EXISTS variant_id BIGINT;
             ALTER TABLE inventory_damaged ADD COLUMN IF NOT EXISTS variant_id BIGINT;
