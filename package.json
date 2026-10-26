@@ -37,6 +37,7 @@
     "helmet": "^8.1.0",
     "jimp": "^0.22.12",
     "jsonwebtoken": "^9.0.3",
+    "jszip": "^3.10.1",
     "multer": "^2.2.0",
     "node-cron": "^4.6.0",
     "node-fetch": "^3.3.2",

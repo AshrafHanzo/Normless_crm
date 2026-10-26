@@ -1057,6 +1057,97 @@ router.post('/marketing/broadcasts/:id/:action', settingsOnly, async (req, res) 
     } catch (err) { mkError(res, err, 'Could not change that broadcast'); }
 });
 
+/* ── Importing chats exported from the WhatsApp (Business) app ───────────────────────────────
+   Before a number moves to the CRM, the chats that matter are exported from the phone (Chat ›
+   ⋮ › More › Export chat › Include media) and brought in here: each lands in that customer's
+   thread (a Crewfit lead is made, as for any new chat) in date order, with its photos and files.
+   Importing the same export twice adds nothing. Nothing is sent to anybody. */
+
+const chatImport = require('../services/wa-chat-import');
+const importUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 200 * 1024 * 1024, files: 1 } });
+const takeExport = (req, res, next) => importUpload.single('file')(req, res, (err) => {
+    if (!err) return lines.resume(req, next);
+    res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? 'That export is over 200MB — export it without media, or split it' : 'Could not read that file' });
+});
+
+router.post('/import/preview', settingsOnly, takeExport, async (req, res) => {
+    try {
+        if (!req.file) return res.status(400).json({ error: 'Choose an exported chat (.zip or .txt)' });
+        const x = await chatImport.read(req.file.buffer, req.file.originalname);
+        const businessNames = [req.waLine.brand === 'crewfit' ? 'Crewfit' : 'Normless', req.waLine.name].filter(Boolean);
+        res.json({
+            file: req.file.originalname, contact: x.contact, senders: x.senders,
+            customer: chatImport.guessCustomer(x.senders, x.contact, businessNames),
+            count: x.messages.length, media: x.media.size,
+            first: x.messages[0].at, last: x.messages[x.messages.length - 1].at,
+        });
+    } catch (err) {
+        res.status(400).json({ error: err.message || 'Could not read that export' });
+    }
+});
+
+router.post('/import/commit', settingsOnly, takeExport, async (req, res) => {
+    try {
+        if (!req.file) return res.status(400).json({ error: 'Choose an exported chat (.zip or .txt)' });
+        const phone = wa.normalisePhone(req.body?.phone);
+        if (!phone || phone.length < 11 || phone.length > 15) return res.status(400).json({ error: 'Give the customer’s WhatsApp number with its country code, or a 10-digit Indian number' });
+        const x = await chatImport.read(req.file.buffer, req.file.originalname);
+        const customer = trim(req.body?.customer);
+        if (!customer || !x.senders.some(s => s.name === customer)) return res.status(400).json({ error: 'Say which name in the chat is the customer' });
+        const name = trim(req.body?.name) || (/\d{6,}/.test(customer) ? null : customer);
+
+        const thread = await quietThread(phone, name);
+        const dir = path.join(__dirname, '..', 'uploads', 'whatsapp', 'imported', String(thread.id));
+        let imported = 0, media = 0, latest = null;
+        for (const m of x.messages) {
+            const inbound = m.sender === customer;
+            const wamid = `import:${crypto.createHash('sha1').update([req.waLine.id, phone, m.at, m.sender, m.text, m.attachment || ''].join('|')).digest('hex').slice(0, 32)}`;
+            let mediaUrl = null, mime = null, mediaName = null, type = 'text';
+            if (m.attachment) {
+                mime = chatImport.mimeOf(m.attachment);
+                type = chatImport.kindOf(mime);
+                mediaName = m.attachment;
+                const entry = x.media.get(m.attachment);
+                if (entry) {
+                    fs.mkdirSync(dir, { recursive: true });
+                    const file = `${crypto.createHash('sha1').update(wamid).digest('hex').slice(0, 12)}-${m.attachment.replace(/[^\w.-]+/g, '_')}`;
+                    const target = path.join(dir, file);
+                    if (!fs.existsSync(target)) fs.writeFileSync(target, await entry.async('nodebuffer'));
+                    mediaUrl = `/uploads/whatsapp/imported/${thread.id}/${file}`;
+                }
+            }
+            const r = await db.query(
+                `INSERT INTO wa_messages (conversation_id, wamid, direction, sender_type, type, body, media_url, media_mime, media_name, status, sent_at, created_at)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11)
+                 ON CONFLICT (wamid) DO NOTHING RETURNING id`,
+                [thread.id, wamid, inbound ? 'in' : 'out', inbound ? 'customer' : 'phone', type, m.text || null,
+                    mediaUrl, mediaUrl ? mime : null, mediaName, inbound ? 'delivered' : 'read', m.at]);
+            if (r.rows[0]) { imported++; if (mediaUrl) media++; }
+            if (!latest || m.at > latest.at) latest = m;
+            // Crewfit: what the customer sent (logo, quantity, GST, a product) qualifies the lead,
+            // as it would have live. Nothing is sent.
+            if (r.rows[0] && inbound && req.waLine.brand === 'crewfit') {
+                await require('../services/cf-assist').qualify(thread.id, { type }, { text: m.text || '', mediaUrl }).catch(() => {});
+            }
+        }
+        if (latest) {
+            // The thread's "last message" moves on only if the history is newer than what it has.
+            await db.query(
+                `UPDATE wa_conversations SET last_message_preview = CASE WHEN last_message_at IS NULL OR last_message_at < $2::timestamp THEN $3 ELSE last_message_preview END,
+                        last_message_at = GREATEST(COALESCE(last_message_at, $2::timestamp), $2::timestamp), updated_at = CURRENT_TIMESTAMP
+                  WHERE id = $1`, [thread.id, latest.at, String(latest.text || `📎 ${latest.attachment || 'File'}`).slice(0, 200)]);
+        }
+        if (imported) {
+            await orders.logActivity({ conversationId: thread.id, kind: 'message', actor: req.user?.username,
+                body: `Imported ${imported} message${imported === 1 ? '' : 's'} from a WhatsApp app export (${x.messages[0].at.slice(0, 10)} to ${x.messages[x.messages.length - 1].at.slice(0, 10)})` });
+        }
+        res.status(201).json({ conversation_id: thread.id, imported, already: x.messages.length - imported, media });
+    } catch (err) {
+        console.error('whatsapp chat import error:', err);
+        res.status(500).json({ error: err.message || 'Could not import that chat' });
+    }
+});
+
 /** One thread's header: who it is, what we know about them, who it belongs to. */
 async function loadConversation(req, id) {
     const params = [id];
@@ -1096,10 +1187,16 @@ router.get('/conversations/:id/messages', async (req, res) => {
             params.push(after);
             where += ` AND id > $${params.length}`;
         }
-        const rows = await db.query(
-            `SELECT id, wamid, direction, sender_type, sender_user, type, body, media_url,
-                    media_mime, media_name, interactive_payload, status, error, sent_at
-               FROM wa_messages WHERE ${where} ORDER BY id ASC LIMIT 500`, params);
+        // In the order they were said — imported history arrives after newer messages, so the
+        // save order is not the conversation's order. The latest 500; polling asks for new ids.
+        const rows = await db.query(Number.isFinite(after)
+            ? `SELECT id, wamid, direction, sender_type, sender_user, type, body, media_url,
+                      media_mime, media_name, interactive_payload, status, error, sent_at
+                 FROM wa_messages WHERE ${where} ORDER BY id ASC LIMIT 500`
+            : `SELECT * FROM (SELECT id, wamid, direction, sender_type, sender_user, type, body, media_url,
+                      media_mime, media_name, interactive_payload, status, error, sent_at
+                 FROM wa_messages WHERE ${where} ORDER BY COALESCE(sent_at, created_at) DESC, id DESC LIMIT 500) t
+               ORDER BY COALESCE(sent_at, '-infinity'::timestamp) ASC, id ASC`, params);
         res.json({
             messages: rows.rows.map(m => ({ ...m, interactive_payload: safeJson(m.interactive_payload, null) })),
         });
