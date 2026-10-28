@@ -1098,11 +1098,22 @@ router.post('/import/commit', settingsOnly, takeExport, async (req, res) => {
 
         const thread = await quietThread(phone, name);
         const dir = path.join(__dirname, '..', 'uploads', 'whatsapp', 'imported', String(thread.id));
-        let imported = 0, media = 0, latest = null;
+        // Importing a chat again (say, exported once more with its photos) replaces what an earlier
+        // import put in over the same dates, rather than doubling it.
+        const replaced = (await db.query(
+            `DELETE FROM wa_messages WHERE conversation_id = $1 AND wamid LIKE 'import:%' AND sent_at BETWEEN $2::timestamp AND $3::timestamp`,
+            [thread.id, x.messages[0].at, x.messages[x.messages.length - 1].at])).rowCount;
+        let imported = 0, media = 0, latest = null, missingMedia = 0;
         for (const m of x.messages) {
             const inbound = m.sender === customer;
-            const wamid = `import:${crypto.createHash('sha1').update([req.waLine.id, phone, m.at, m.sender, m.text, m.attachment || ''].join('|')).digest('hex').slice(0, 32)}`;
+            const wamid = `import:${crypto.createHash('sha1').update([req.waLine.id, phone, m.at, m.sender, m.raw ?? m.text, m.attachment || ''].join('|')).digest('hex').slice(0, 32)}`;
             let mediaUrl = null, mime = null, mediaName = null, type = 'text';
+            if (m.omitted) {
+                // A file the export left out: shown as a photo (or video…) that isn't here.
+                type = m.omitted;
+                mediaName = `${{ image: 'Photo', video: 'Video', audio: 'Voice note', document: 'File' }[m.omitted] || 'File'} not included in the export`;
+                missingMedia++;
+            }
             if (m.attachment) {
                 mime = chatImport.mimeOf(m.attachment);
                 type = chatImport.kindOf(mime);
@@ -1141,7 +1152,10 @@ router.post('/import/commit', settingsOnly, takeExport, async (req, res) => {
             await orders.logActivity({ conversationId: thread.id, kind: 'message', actor: req.user?.username,
                 body: `Imported ${imported} message${imported === 1 ? '' : 's'} from a WhatsApp app export (${x.messages[0].at.slice(0, 10)} to ${x.messages[x.messages.length - 1].at.slice(0, 10)})` });
         }
-        res.status(201).json({ conversation_id: thread.id, imported, already: x.messages.length - imported, media });
+        const lead = req.waLine.brand === 'crewfit' ? (await db.query(
+            `SELECT l.id, l.status FROM wa_conversations c JOIN wa_contacts k ON k.id = c.contact_id JOIN crewfit_leads l ON l.id = k.lead_id WHERE c.id = $1`, [thread.id])).rows[0] : null;
+        res.status(201).json({ conversation_id: thread.id, imported, replaced, already: Math.max(0, x.messages.length - imported), media, missing_media: missingMedia,
+            lead: lead ? { id: lead.id, status: lead.status } : null });
     } catch (err) {
         console.error('whatsapp chat import error:', err);
         res.status(500).json({ error: err.message || 'Could not import that chat' });

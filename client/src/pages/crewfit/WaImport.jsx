@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { useApi } from '../../App'
 import { useToast } from '../../components/Toast'
@@ -21,6 +21,17 @@ export function WaImportTab() {
   const brand = useWaBrand()
   const [rows, setRows] = useState([])             // { id, file, status, preview, phone, name, customer, result, error }
   const set = (id, patch) => setRows(rs => rs.map(r => (r.id === id ? { ...r, ...patch } : r)))
+  // Crewfit's lead statuses are its WhatsApp labels: each imported chat gets one after import.
+  const [labels, setLabels] = useState([])
+  useEffect(() => {
+    if (brand.key === 'crewfit') apiFetch(`${brand.api}/statuses`).then(r => r && !r.error && setLabels(r.statuses || []))
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  const setLabel = async (r, status) => {
+    set(r.id, { result: { ...r.result, lead: { ...r.result.lead, status } } })
+    const res = await apiFetch(`${brand.api}/leads/${r.result.lead.id}`, { method: 'PATCH', body: JSON.stringify({ status }) })
+    if (!res || res.error) toast.error(res?.error || 'Could not set that label')
+    else toast.success('Label set')
+  }
 
   const add = async (files) => {
     const fresh = [...files].map(file => ({ id: `${file.name}-${file.size}-${Math.random()}`, file, status: 'reading' }))
@@ -111,7 +122,16 @@ export function WaImportTab() {
                 {r.status === 'done' && (
                   <div className="wim-done">
                     <span className="status-badge success">Imported</span>
-                    <span>{r.result.imported} messages{r.result.media ? `, ${r.result.media} files` : ''}{r.result.already ? ` · ${r.result.already} were already here` : ''}</span>
+                    <span>{r.result.imported} messages{r.result.media ? `, ${r.result.media} files` : ''}{r.result.replaced ? ` · replaced an earlier import` : ''}</span>
+                    {r.result.missing_media > 0 && <span className="was-bad">{r.result.missing_media} photo{r.result.missing_media === 1 ? '' : 's'}/file{r.result.missing_media === 1 ? '' : 's'} weren’t in the export — export again with “Include media” and import it to bring them in.</span>}
+                    {r.result.lead && !!labels.length && (
+                      <label className="wim-label">
+                        <span>Label</span>
+                        <select value={r.result.lead.status || ''} onChange={e => setLabel(r, e.target.value)}>
+                          {labels.map(l => <option key={l.key} value={l.key}>{l.name}</option>)}
+                        </select>
+                      </label>
+                    )}
                     <Link to={`${brand.path}?c=${r.result.conversation_id}`} className="mini-btn">Open the chat</Link>
                   </div>
                 )}

@@ -3731,3 +3731,6 @@ p.wdb-sub { margin: 0; }
 .wim-fields .input-group { margin: 0; display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-secondary); }
 .wim-done { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; font-size: 13px; }
 @media (max-width: 800px) { .wim-fields { grid-template-columns: minmax(0, 1fr); } }
+.wa-missing-media { display: inline-flex; align-items: center; gap: 6px; padding: 10px 12px; margin-bottom: 4px; border-radius: 8px; border: 1px dashed var(--border); color: var(--text-muted); font-size: 12px; }
+.wim-label { display: inline-flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text-secondary); }
+.wim-label select { padding: 6px 10px; border-radius: 8px; background: var(--surface); border: 1px solid var(--border); color: var(--text-primary); font: inherit; font-size: 13px; }

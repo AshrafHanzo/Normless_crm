@@ -25,7 +25,9 @@ const ATTACHED = [
     /^(.+?\.[a-z0-9]{2,5}) \(file attached\)\s*([\s\S]*)$/i,          // Android
     /^<attached: (.+?\.[a-z0-9]{2,5})>\s*([\s\S]*)$/i,                 // iPhone
 ];
-const OMITTED = /^<(media omitted|image omitted|video omitted|audio omitted|document omitted|sticker omitted|gif omitted)>$/i;
+// "Without media" exports leave a marker where each file was, sometimes with its caption after it.
+const OMITTED = /^<(media|image|video|audio|document|sticker|gif|gif image) omitted>\s*([\s\S]*)$/i;
+const OMITTED_KIND = { image: 'image', sticker: 'image', gif: 'image', 'gif image': 'image', video: 'video', audio: 'audio', document: 'document', media: 'image' };
 
 const MIME = {
     jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif', heic: 'image/heic',
@@ -86,14 +88,16 @@ function parseText(raw) {
     }
     for (const msg of out) {
         msg.text = msg.text.replace(/\s+$/, '');
+        msg.raw = msg.text;                        // as written, for recognising it again
         for (const rx of ATTACHED) {
             const a = msg.text.match(rx);
             if (a) { msg.attachment = a[1].trim(); msg.text = a[2].trim(); break; }
         }
-        if (OMITTED.test(msg.text.trim())) { msg.omitted = true; msg.text = `[${msg.text.trim().slice(1, -1)}]`; }
+        const o = !msg.attachment && msg.text.trim().match(OMITTED);
+        if (o) { msg.omitted = OMITTED_KIND[o[1].toLowerCase()] || 'image'; msg.text = o[2].trim(); }
         msg.text = msg.text.replace(/<This message was edited>$/i, '').trim();
     }
-    return out.filter(msg => msg.text || msg.attachment);
+    return out.filter(msg => msg.text || msg.attachment || msg.omitted);
 }
 
 /**
@@ -109,8 +113,9 @@ async function read(buffer, fileName) {
             || Object.values(zip.files).find(f => !f.dir && /\.txt$/i.test(f.name));
         if (!txt) throw new Error('No chat text inside that zip — export the chat again from WhatsApp');
         text = await txt.async('string');
+        // Everything else is the chat's media — not the export's own text copies (chat.md and the like).
         for (const f of Object.values(zip.files)) {
-            if (!f.dir && f !== txt) media.set(path.basename(f.name), f);
+            if (!f.dir && f !== txt && !/\.(txt|md)$/i.test(f.name) && !path.basename(f.name).startsWith('.')) media.set(path.basename(f.name), f);
         }
     } else {
         text = buffer.toString('utf8');

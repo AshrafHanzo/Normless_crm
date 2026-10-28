@@ -1362,7 +1362,11 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                         {m.type === 'call' && m.media_url && (
                           <audio className="wa-call-rec" controls preload="none" src={fileUrl(m.media_url)} aria-label="Call recording" />
                         )}
-                        {m.type !== 'call' && (m.media_url || m.media_name) && !/^image\//.test(m.media_mime || '') && (
+                        {/* A photo or file an imported chat refers to but its export didn't include. */}
+                        {!m.media_url && m.media_name && ['image', 'video', 'audio', 'document'].includes(m.type) && /not included/i.test(m.media_name) && (
+                          <div className="wa-missing-media"><Icon name={m.type === 'image' ? 'eye' : 'note'} size={14} /> {m.media_name}</div>
+                        )}
+                        {m.type !== 'call' && (m.media_url || (m.media_name && !/not included/i.test(m.media_name))) && !/^image\//.test(m.media_mime || '') && (
                           <DocCard name={m.media_name} mime={m.media_mime} url={m.media_url ? fileUrl(m.media_url) : null}
                             onOpen={() => m.media_url && setPreview({ url: fileUrl(m.media_url), name: m.media_name, mime: m.media_mime })} />
                         )}
