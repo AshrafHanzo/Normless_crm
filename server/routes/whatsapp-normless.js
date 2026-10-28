@@ -50,6 +50,16 @@ const CLEAN = {
             items, exchange_url: str(v?.exchange_url, 500) || DEFAULTS.menu.exchange_url,
         };
     },
+    assignment: (v) => {
+        const user = (u) => str(u, 120).toLowerCase();
+        const caps = Object.entries(v?.caps && typeof v.caps === 'object' ? v.caps : {})
+            .map(([u, n]) => [user(u), Math.round(Number(n))]).filter(([u, n]) => u && n > 0 && n <= 1000);
+        return {
+            mode: ['least_busy', 'round_robin', 'manual'].includes(v?.mode) ? v.mode : 'least_busy',
+            off: [...new Set((Array.isArray(v?.off) ? v.off : []).map(user).filter(Boolean))].slice(0, 200),
+            caps: Object.fromEntries(caps.slice(0, 200)),
+        };
+    },
     hours: (v) => {
         const time = (t, d) => (/^([01]\d|2[0-3]):[0-5]\d$/.test(String(t)) ? String(t) : d);
         const days = [...new Set((Array.isArray(v?.days) ? v.days : []).map(Number).filter(d => d >= 0 && d <= 6))].sort();

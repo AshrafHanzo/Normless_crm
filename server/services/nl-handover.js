@@ -3,7 +3,7 @@
  *
  * The bot answers everything it can. When it can't — a refund, a damaged parcel, an upset
  * customer, a question it has no grounded answer to — the chat goes to somebody on the Normless
- * team, chosen automatically (whoever has the fewest open chats), and the customer is told who:
+ * team — chosen as Settings › Assignment says, or left for someone to take — and the customer is told who:
  * "Hi Meera, this is Priya from the Normless team…". The same introduction is sent whenever a
  * person takes a chat or a manager hands it to someone, so the customer always knows who they are
  * talking to.
@@ -36,21 +36,31 @@ async function userByName(username) {
 }
 
 /**
- * Who gets a chat the bot hands over: someone with the Normless inbox grant (owners and admins
- * only when they have been given it too, so the founders' inboxes don't fill with returns), the
- * one with the fewest open Normless chats; ties go to whoever was handed one longest ago.
+ * Who gets a chat the bot hands over, as Settings › Assignment says: nobody when it is set to
+ * manual; otherwise someone with the Normless inbox grant (owners and admins only when they have
+ * been given it too, so the founders' inboxes don't fill with returns) who hasn't been switched
+ * off and isn't at their cap — the one with the fewest open Normless chats, or for round robin
+ * whoever was handed one longest ago.
  */
 async function pickAgent(lineId) {
+    const { assignment } = await readSettings(lineId);
+    if (assignment.mode === 'manual') return null;
+    const order = assignment.mode === 'round_robin'
+        ? 'last_given ASC NULLS FIRST, LOWER(username) ASC'
+        : 'open_chats ASC, last_given ASC NULLS FIRST, LOWER(username) ASC';
     const r = await db.query(
-        `SELECT u.username, u.wa_display_name,
-                (SELECT COUNT(*) FROM wa_conversations c
-                  WHERE c.line_id = $1 AND c.status = 'open' AND LOWER(c.assigned_to) = LOWER(u.username)) AS open_chats,
-                (SELECT MAX(a.created_at) FROM wa_activity a JOIN wa_conversations c ON c.id = a.conversation_id
-                  WHERE c.line_id = $1 AND a.kind = 'assign' AND a.body ILIKE '%' || u.username || '%') AS last_given
-           FROM admin_users u
-          WHERE COALESCE(u.is_active, true) = true AND COALESCE(u.can_view_wa_normless, false) = true
-          ORDER BY open_chats ASC, last_given ASC NULLS FIRST, LOWER(u.username) ASC
-          LIMIT 1`, [lineId]);
+        `SELECT * FROM (
+            SELECT u.username, u.wa_display_name,
+                   (SELECT COUNT(*) FROM wa_conversations c
+                     WHERE c.line_id = $1 AND c.status = 'open' AND LOWER(c.assigned_to) = LOWER(u.username)) AS open_chats,
+                   (SELECT MAX(a.created_at) FROM wa_activity a JOIN wa_conversations c ON c.id = a.conversation_id
+                     WHERE c.line_id = $1 AND a.kind = 'assign' AND a.body ILIKE '%' || u.username || '%') AS last_given
+              FROM admin_users u
+             WHERE COALESCE(u.is_active, true) = true AND COALESCE(u.can_view_wa_normless, false) = true
+               AND NOT (LOWER(u.username) = ANY($2::text[]))) t
+          WHERE ($3::jsonb ->> LOWER(username)) IS NULL OR open_chats < ($3::jsonb ->> LOWER(username))::int
+          ORDER BY ${order}
+          LIMIT 1`, [lineId, assignment.off || [], JSON.stringify(assignment.caps || {})]);
     return r.rows[0] || null;
 }
 
@@ -111,8 +121,9 @@ async function assign(conversation, username, { actor = null, introduce = true }
 
 /**
  * The bot stops and a person takes over. The reason and the bot's summary are left as a note for
- * them; the chat goes to the next person on the team, who is introduced to the customer. With
- * nobody on the team yet, it waits in "Needs a person" and the customer is told someone will reply.
+ * them; the chat goes to the next person on the team (Settings › Assignment), who is introduced
+ * to the customer. With assignment set to manual, or nobody to give it to, it waits in "Needs a
+ * person" and the customer is told someone will reply.
  */
 async function handOver(conversation, { reason, summary = null }) {
     await db.query(

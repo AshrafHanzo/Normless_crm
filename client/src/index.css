@@ -3458,6 +3458,8 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .nl-try-media figcaption { padding: 6px 10px; font-size: 12px; white-space: pre-wrap; color: var(--text-secondary); }
 .nl-try-handover { font-size: 12px; color: var(--warning); }
 .nl-name { width: 100%; padding: 6px 9px; border-radius: 8px; background: var(--surface); border: 1px solid var(--border); color: var(--text-primary); font: inherit; }
+.nl-cap { width: 96px; padding: 6px 9px; border-radius: 8px; background: var(--surface); border: 1px solid var(--border); color: var(--text-primary); font: inherit; }
+.nl-cap:disabled { opacity: .5; }
 .nl-tpl-layout { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
 .nl-tpl-list { flex: 1 1 320px; max-width: 420px; margin: 0; }
 .nl-tpl-detail { flex: 999 1 380px; margin: 0; }

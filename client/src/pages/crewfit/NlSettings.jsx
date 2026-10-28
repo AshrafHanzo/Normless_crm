@@ -549,8 +549,8 @@ export function NlTeamTab() {
   return (
     <>
       <Head title="Team">
-        Who answers Normless’s chats. The bot hands chats to people marked “Gets chats”, whoever has the fewest open, and
-        introduces them by the name below. Give someone the Normless WhatsApp inbox in Admin › their user to add them.
+        Who answers Normless’s chats, and the name the customer is introduced to. Who the bot hands chats to is set on the
+        Assignment tab. Give someone the Normless WhatsApp inbox in Admin › their user to add them.
       </Head>
       {!members ? <Loading /> : (
         <section className="was-card">
@@ -558,7 +558,7 @@ export function NlTeamTab() {
             <p className="was-bad" style={{ margin: 0 }}>Nobody gets handed-over chats yet — they wait in “Needs a person”. Tick “WhatsApp inbox” under Normless for your support team in Admin.</p>
           )}
           <table className="nl-table">
-            <thead><tr><th>Person</th><th>Name customers see</th><th>Gets chats</th><th>Open chats</th></tr></thead>
+            <thead><tr><th>Person</th><th>Name customers see</th><th>Inbox</th><th>Open chats</th></tr></thead>
             <tbody>
               {members.map(m => (
                 <tr key={m.username}>
@@ -577,6 +577,79 @@ export function NlTeamTab() {
           <p className="was-hint" style={{ margin: 0 }}>Leave the name empty to use the first part of their login ({members[0]?.default_name ? `e.g. “${members[0].default_name}”` : 'their first name'}).</p>
         </section>
       )}
+    </>
+  )
+}
+
+const ASSIGN_MODES = [
+  ['least_busy', 'Least busy', 'Goes to whoever has the fewest open chats right now.'],
+  ['round_robin', 'Round robin', 'Takes turns, so everyone gets the same number of chats.'],
+  ['manual', 'Nobody, we assign', 'Chats wait in “Needs a person” until someone takes them or a manager assigns them.'],
+]
+
+/** Who a chat the bot hands over goes to: how the person is picked, and who is picked from. */
+export function NlAssignmentTab() {
+  const apiFetch = useApi()
+  const brand = useWaBrand()
+  const s = useNlSettings()
+  const [members, setMembers] = useState(null)
+  useEffect(() => { apiFetch(`${brand.api}/nl/team`).then(r => setMembers((r?.members || []).filter(m => m.in_queue))) }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  if (!s.draft || !members) return <Loading />
+  const a = s.draft.assignment
+  const set = (patch) => s.set('assignment', x => ({ ...x, ...patch }))
+  const key = (m) => m.username.toLowerCase()
+  const gets = (m) => !a.off.includes(key(m))
+  const manual = a.mode === 'manual'
+  return (
+    <>
+      <Head title="Assignment" actions={s.canEdit && <SaveButton dirty={s.dirty('assignment')} saving={s.saving} onClick={() => s.save('assignment')} />}>
+        Who gets a chat when the bot hands it over to a person. Taking a chat yourself, or a manager assigning it, works the same whatever is set here.
+      </Head>
+      <section className="was-card">
+        <h3>Pick the person by</h3>
+        <div className="was-modes" role="radiogroup" aria-label="How to pick">
+          {ASSIGN_MODES.map(([k, title, desc]) => (
+            <button key={k} type="button" role="radio" aria-checked={a.mode === k} disabled={!s.canEdit}
+              className={`was-mode${a.mode === k ? ' was-mode-on' : ''}`} onClick={() => set({ mode: k })}>
+              <b>{title}</b><span>{desc}</span>
+            </button>
+          ))}
+        </div>
+      </section>
+      <section className="was-card">
+        <h3>Who gets chats</h3>
+        {!members.length ? (
+          <p className="was-bad" style={{ margin: 0 }}>Nobody has the Normless WhatsApp inbox yet — give it to your support team in Admin › their user.</p>
+        ) : (
+          <table className="nl-table">
+            <thead><tr><th>Person</th><th>Gets chats</th><th>Most open at once</th><th>Open chats</th></tr></thead>
+            <tbody>
+              {members.map(m => (
+                <tr key={m.username}>
+                  <td>{m.username}</td>
+                  <td><Toggle on={gets(m) && !manual} disabled={!s.canEdit || manual} label={`${m.username} gets chats`}
+                    onChange={v => set({ off: v ? a.off.filter(u => u !== key(m)) : [...a.off, key(m)] })} /></td>
+                  <td>
+                    <input className="nl-cap" inputMode="numeric" placeholder="No limit" aria-label={`Most open chats for ${m.username}`}
+                      disabled={!s.canEdit || manual || !gets(m)} value={a.caps[key(m)] ?? ''}
+                      onChange={e => {
+                        const n = e.target.value.replace(/\D/g, '')
+                        const caps = { ...a.caps }
+                        if (n) caps[key(m)] = Number(n); else delete caps[key(m)]
+                        set({ caps })
+                      }} />
+                  </td>
+                  <td>{m.open_chats}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        <p className="was-hint" style={{ margin: 0 }}>
+          {manual ? 'Set to “Nobody, we assign”: no chat is handed to anyone automatically.'
+            : 'Someone at their limit is skipped. With nobody available, the chat waits in “Needs a person”.'}
+        </p>
+      </section>
     </>
   )
 }

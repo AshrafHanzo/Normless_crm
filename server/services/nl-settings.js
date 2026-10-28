@@ -34,6 +34,10 @@ const DEFAULTS = {
         ],
         exchange_url: EXCHANGE_CENTER,
     },
+    // Who a chat the bot hands over goes to: 'least_busy', 'round_robin', or 'manual' (nobody —
+    // it waits in "Needs a person" until someone takes it). `off` are people on the inbox who are
+    // never handed one; `caps` the most open chats a person is handed up to.
+    assignment: { mode: 'least_busy', off: [], caps: {} },
     hours: {
         days: [1, 2, 3, 4, 5, 6], start: '09:00', end: '18:00',
         away: 'Thanks for messaging Normless! Our team replies 9 am – 6 pm, Monday to Saturday. We have your message and will get back to you then.',

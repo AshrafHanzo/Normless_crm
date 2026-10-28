@@ -6,7 +6,7 @@ import Icon from '../../components/Icon'
 import useDirtyGuard from '../../hooks/useDirtyGuard'
 import { WA_BRANDS, WaBrandContext, useWaBrand } from './waBrand'
 import { SaveButton, Head, Toggle, Loading } from './waSettingsUi'
-import { NlBotTab, NlKnowledgeTab, NlProductsTab, NlHandoffTab, NlMenuTab, NlRepliesTab, NlTeamTab, NlHoursTab } from './NlSettings'
+import { NlBotTab, NlKnowledgeTab, NlProductsTab, NlHandoffTab, NlMenuTab, NlRepliesTab, NlTeamTab, NlHoursTab, NlAssignmentTab } from './NlSettings'
 import { NlTemplatesTab } from './NlAutomations'
 import { WaCallsTab } from './WaCallsSettings'
 import { WaImportTab } from './WaImport'
@@ -45,6 +45,7 @@ const NL_TABS = [
   { key: 'menu', label: 'Welcome menu', icon: 'note' },
   { key: 'replies', label: 'Saved replies', icon: 'copy' },
   { key: 'team', label: 'Team', icon: 'users' },
+  { key: 'assignment', label: 'Assignment', icon: 'refresh' },
   { key: 'hours', label: 'Hours & away', icon: 'clock' },
   { key: 'templates', label: 'Templates', icon: 'mail' },
   { key: 'calls', label: 'Calls & new chats', icon: 'phone' },
@@ -65,7 +66,7 @@ export default function WhatsAppSettings({ brand: brandKey = 'crewfit' }) {
   if (!tabs.some(t => t.key === tab)) return <Navigate to={`${brand.path}/settings/${brand.defaultTab}`} replace />
   const Pane = brand.key !== 'crewfit' ? {
     bot: NlBotTab, knowledge: NlKnowledgeTab, products: NlProductsTab, handoff: NlHandoffTab, menu: NlMenuTab,
-    replies: NlRepliesTab, team: NlTeamTab, hours: NlHoursTab, templates: NlTemplatesTab, calls: WaCallsTab, import: WaImportTab, connect: ConnectTab,
+    replies: NlRepliesTab, team: NlTeamTab, assignment: NlAssignmentTab, hours: NlHoursTab, templates: NlTemplatesTab, calls: WaCallsTab, import: WaImportTab, connect: ConnectTab,
   }[tab] : { connect: ConnectTab, calls: WaCallsTab, import: WaImportTab, menu: MenuTab, templates: TemplatesTab, orders: OrderMessagesTab, hours: HoursTab, catalogue: CatalogueTab, team: TeamTab, assignment: AssignmentTab, statuses: StatusesTab }[tab]
 
   return (
