@@ -1070,6 +1070,72 @@ const takeExport = (req, res, next) => importUpload.single('file')(req, res, (er
     res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? 'That export is over 200MB — export it without media, or split it' : 'Could not read that file' });
 });
 
+/**
+ * One customer's history written into their thread. Each message: { at (India time), inbound,
+ * text, key (what makes it this message, for importing it again without doubling it), missing
+ * (the kind of a file the source left out), file: { name, mime, read() → Buffer } }.
+ * Importing again replaces what an earlier import put in over the same dates.
+ */
+async function importChat({ phone, name, messages, actor, source }) {
+    messages = [...messages].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+    const brand = lines.current().brand;
+    const thread = await quietThread(phone, name);
+    const dir = path.join(__dirname, '..', 'uploads', 'whatsapp', 'imported', String(thread.id));
+    const first = messages[0].at, last = messages[messages.length - 1].at;
+    const replaced = (await db.query(
+        `DELETE FROM wa_messages WHERE conversation_id = $1 AND wamid LIKE 'import:%' AND sent_at BETWEEN $2::timestamp AND $3::timestamp`,
+        [thread.id, first, last])).rowCount;
+    let imported = 0, media = 0, latest = null, missingMedia = 0;
+    for (const m of messages) {
+        const wamid = `import:${crypto.createHash('sha1').update([lineId(), phone, m.at, ...m.key].join('|')).digest('hex').slice(0, 32)}`;
+        let mediaUrl = null, mime = null, mediaName = null, type = 'text';
+        if (m.missing) {
+            // A file the source left out: shown as a photo (or video…) that isn't here.
+            type = m.missing;
+            mediaName = `${{ image: 'Photo', video: 'Video', audio: 'Voice note', document: 'File' }[m.missing] || 'File'} not included in the export`;
+            missingMedia++;
+        }
+        if (m.file) {
+            mime = m.file.mime;
+            type = chatImport.kindOf(mime);
+            mediaName = m.file.name;
+            if (m.file.read) {
+                fs.mkdirSync(dir, { recursive: true });
+                const file = `${crypto.createHash('sha1').update(wamid).digest('hex').slice(0, 12)}-${m.file.name.replace(/[^\w.-]+/g, '_')}`;
+                const target = path.join(dir, file);
+                if (!fs.existsSync(target)) fs.writeFileSync(target, await m.file.read());
+                mediaUrl = `/uploads/whatsapp/imported/${thread.id}/${file}`;
+            }
+        }
+        const r = await db.query(
+            `INSERT INTO wa_messages (conversation_id, wamid, direction, sender_type, type, body, media_url, media_mime, media_name, status, sent_at, created_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11)
+             ON CONFLICT (wamid) DO NOTHING RETURNING id`,
+            [thread.id, wamid, m.inbound ? 'in' : 'out', m.inbound ? 'customer' : 'phone', type, m.text || null,
+                mediaUrl, mediaUrl ? mime : null, mediaName, m.inbound ? 'delivered' : 'read', m.at]);
+        if (r.rows[0]) { imported++; if (mediaUrl) media++; }
+        latest = m;
+        // Crewfit: what the customer sent (logo, quantity, GST, a product) qualifies the lead,
+        // as it would have live. Nothing is sent.
+        if (r.rows[0] && m.inbound && brand === 'crewfit') {
+            await require('../services/cf-assist').qualify(thread.id, { type }, { text: m.text || '', mediaUrl }).catch(() => {});
+        }
+    }
+    // The thread's "last message" moves on only if the history is newer than what it has.
+    await db.query(
+        `UPDATE wa_conversations SET last_message_preview = CASE WHEN last_message_at IS NULL OR last_message_at < $2::timestamp THEN $3 ELSE last_message_preview END,
+                last_message_at = GREATEST(COALESCE(last_message_at, $2::timestamp), $2::timestamp), updated_at = CURRENT_TIMESTAMP
+          WHERE id = $1`, [thread.id, latest.at, String(latest.text || `📎 ${latest.file?.name || 'File'}`).slice(0, 200)]);
+    if (imported) {
+        await orders.logActivity({ conversationId: thread.id, kind: 'message', actor,
+            body: `Imported ${imported} message${imported === 1 ? '' : 's'} from ${source} (${first.slice(0, 10)} to ${last.slice(0, 10)})` });
+    }
+    const lead = brand === 'crewfit' ? (await db.query(
+        `SELECT l.id, l.status FROM wa_conversations c JOIN wa_contacts k ON k.id = c.contact_id JOIN crewfit_leads l ON l.id = k.lead_id WHERE c.id = $1`, [thread.id])).rows[0] : null;
+    return { conversation_id: thread.id, imported, replaced, already: Math.max(0, messages.length - imported), media, missing_media: missingMedia,
+        lead: lead ? { id: lead.id, status: lead.status } : null };
+}
+
 router.post('/import/preview', settingsOnly, takeExport, async (req, res) => {
     try {
         if (!req.file) return res.status(400).json({ error: 'Choose an exported chat (.zip or .txt)' });
@@ -1096,66 +1162,16 @@ router.post('/import/commit', settingsOnly, takeExport, async (req, res) => {
         if (!customer || !x.senders.some(s => s.name === customer)) return res.status(400).json({ error: 'Say which name in the chat is the customer' });
         const name = trim(req.body?.name) || (/\d{6,}/.test(customer) ? null : customer);
 
-        const thread = await quietThread(phone, name);
-        const dir = path.join(__dirname, '..', 'uploads', 'whatsapp', 'imported', String(thread.id));
-        // Importing a chat again (say, exported once more with its photos) replaces what an earlier
-        // import put in over the same dates, rather than doubling it.
-        const replaced = (await db.query(
-            `DELETE FROM wa_messages WHERE conversation_id = $1 AND wamid LIKE 'import:%' AND sent_at BETWEEN $2::timestamp AND $3::timestamp`,
-            [thread.id, x.messages[0].at, x.messages[x.messages.length - 1].at])).rowCount;
-        let imported = 0, media = 0, latest = null, missingMedia = 0;
-        for (const m of x.messages) {
-            const inbound = m.sender === customer;
-            const wamid = `import:${crypto.createHash('sha1').update([req.waLine.id, phone, m.at, m.sender, m.raw ?? m.text, m.attachment || ''].join('|')).digest('hex').slice(0, 32)}`;
-            let mediaUrl = null, mime = null, mediaName = null, type = 'text';
-            if (m.omitted) {
-                // A file the export left out: shown as a photo (or video…) that isn't here.
-                type = m.omitted;
-                mediaName = `${{ image: 'Photo', video: 'Video', audio: 'Voice note', document: 'File' }[m.omitted] || 'File'} not included in the export`;
-                missingMedia++;
-            }
-            if (m.attachment) {
-                mime = chatImport.mimeOf(m.attachment);
-                type = chatImport.kindOf(mime);
-                mediaName = m.attachment;
-                const entry = x.media.get(m.attachment);
-                if (entry) {
-                    fs.mkdirSync(dir, { recursive: true });
-                    const file = `${crypto.createHash('sha1').update(wamid).digest('hex').slice(0, 12)}-${m.attachment.replace(/[^\w.-]+/g, '_')}`;
-                    const target = path.join(dir, file);
-                    if (!fs.existsSync(target)) fs.writeFileSync(target, await entry.async('nodebuffer'));
-                    mediaUrl = `/uploads/whatsapp/imported/${thread.id}/${file}`;
-                }
-            }
-            const r = await db.query(
-                `INSERT INTO wa_messages (conversation_id, wamid, direction, sender_type, type, body, media_url, media_mime, media_name, status, sent_at, created_at)
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11)
-                 ON CONFLICT (wamid) DO NOTHING RETURNING id`,
-                [thread.id, wamid, inbound ? 'in' : 'out', inbound ? 'customer' : 'phone', type, m.text || null,
-                    mediaUrl, mediaUrl ? mime : null, mediaName, inbound ? 'delivered' : 'read', m.at]);
-            if (r.rows[0]) { imported++; if (mediaUrl) media++; }
-            if (!latest || m.at > latest.at) latest = m;
-            // Crewfit: what the customer sent (logo, quantity, GST, a product) qualifies the lead,
-            // as it would have live. Nothing is sent.
-            if (r.rows[0] && inbound && req.waLine.brand === 'crewfit') {
-                await require('../services/cf-assist').qualify(thread.id, { type }, { text: m.text || '', mediaUrl }).catch(() => {});
-            }
-        }
-        if (latest) {
-            // The thread's "last message" moves on only if the history is newer than what it has.
-            await db.query(
-                `UPDATE wa_conversations SET last_message_preview = CASE WHEN last_message_at IS NULL OR last_message_at < $2::timestamp THEN $3 ELSE last_message_preview END,
-                        last_message_at = GREATEST(COALESCE(last_message_at, $2::timestamp), $2::timestamp), updated_at = CURRENT_TIMESTAMP
-                  WHERE id = $1`, [thread.id, latest.at, String(latest.text || `📎 ${latest.attachment || 'File'}`).slice(0, 200)]);
-        }
-        if (imported) {
-            await orders.logActivity({ conversationId: thread.id, kind: 'message', actor: req.user?.username,
-                body: `Imported ${imported} message${imported === 1 ? '' : 's'} from a WhatsApp app export (${x.messages[0].at.slice(0, 10)} to ${x.messages[x.messages.length - 1].at.slice(0, 10)})` });
-        }
-        const lead = req.waLine.brand === 'crewfit' ? (await db.query(
-            `SELECT l.id, l.status FROM wa_conversations c JOIN wa_contacts k ON k.id = c.contact_id JOIN crewfit_leads l ON l.id = k.lead_id WHERE c.id = $1`, [thread.id])).rows[0] : null;
-        res.status(201).json({ conversation_id: thread.id, imported, replaced, already: Math.max(0, x.messages.length - imported), media, missing_media: missingMedia,
-            lead: lead ? { id: lead.id, status: lead.status } : null });
+        const result = await importChat({
+            phone, name, actor: req.user?.username, source: 'a WhatsApp app export',
+            messages: x.messages.map(m => ({
+                at: m.at, inbound: m.sender === customer, text: m.text,
+                key: [m.sender, m.raw ?? m.text, m.attachment || ''],
+                missing: m.omitted || null,
+                file: m.attachment ? { name: m.attachment, mime: chatImport.mimeOf(m.attachment), read: x.media.has(m.attachment) ? () => x.media.get(m.attachment).async('nodebuffer') : null } : null,
+            })),
+        });
+        res.status(201).json(result);
     } catch (err) {
         console.error('whatsapp chat import error:', err);
         res.status(500).json({ error: err.message || 'Could not import that chat' });
@@ -2936,3 +2952,4 @@ router.get('/report', async (req, res) => {
 
 module.exports = router;
 module.exports.webhook = webhook;
+module.exports.importChat = importChat;      // scripts/import-wa-backup.js
