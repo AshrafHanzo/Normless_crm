@@ -12,8 +12,12 @@ few days, is taken as that message's file.
 
 Read copies, not the live files (sqlite3 <live> ".backup copy.sqlite"), so the app keeps running.
 
-    python3 mac-bundle.py --db ChatStorage.sqlite --lid LID.sqlite [--labels Labels.sqlite]
-        [--mac-media "~/Library/Group Containers/group.net.whatsapp.WhatsApp.shared/Message"]
+Labels and notes come from AppState.sqlite (in the container's AppState/<id>/ folder), which holds
+them for every chat the phone has labelled; a labelled chat whose messages didn't come across goes
+into the bundle with its labels and notes and no messages.
+
+    python3 mac-bundle.py --db ChatStorage.sqlite --lid LID.sqlite [--app-state AppState.sqlite]
+        [--labels Labels.sqlite] [--mac-media "~/Library/Group Containers/group.net.whatsapp.WhatsApp.shared/Message"]
         [--media-dir ".../WhatsApp Business/Media"] --out bundle
 """
 
@@ -50,6 +54,79 @@ def phone_index(lid_db):
             out[f'{ident}@lid'] = digits
     con.close()
     return out
+
+
+def protobuf(b):
+    """A protobuf message's fields as (number, value) pairs: enough to read app-state records."""
+    i, out = 0, []
+
+    def varint():
+        nonlocal i
+        n = shift = 0
+        while True:
+            c = b[i]
+            i += 1
+            n |= (c & 0x7f) << shift
+            shift += 7
+            if c < 0x80:
+                return n
+    while i < len(b):
+        key = varint()
+        field, kind = key >> 3, key & 7
+        if kind == 0:
+            out.append((field, varint()))
+        elif kind == 2:
+            n = varint()
+            out.append((field, b[i:i + n]))
+            i += n
+        elif kind in (1, 5):
+            n = 8 if kind == 1 else 4
+            out.append((field, b[i:i + n]))
+            i += n
+        else:
+            raise ValueError(f'protobuf wire type {kind}')
+    return out
+
+
+def from_app_state(app_db):
+    """
+    Labels and notes as the phone keeps them in sync with linked devices (AppState.sqlite). This
+    covers every chat the phone has ever labelled, not only the chats whose messages came across.
+    Returns ({jid: {label names}}, {jid: [{at, text}]}, {jid: when it was first labelled}).
+    """
+    labels, notes, since = {}, {}, {}
+    if not app_db or not os.path.exists(app_db):
+        return labels, notes, since
+    con = sqlite3.connect(app_db)
+    rows = con.execute('''SELECT ZACTIONNAME, CAST(ZINDEX AS TEXT), ZVALUE FROM ZAPPSTATECONFIRMEDMUTATIONENTITY
+                           WHERE ZACTIONNAME IN ('label_edit', 'label_jid', 'note_edit')''').fetchall()
+    con.close()
+    names, links = {}, []
+    for action, index, value in rows:
+        index, fields = json.loads(index), protobuf(value)
+        if action == 'label_edit':                                   # field 14: the label itself
+            edit = dict(protobuf(next(v for f, v in fields if f == 14)))
+            if not edit.get(4):                                      # 4: deleted
+                names[index[1]] = edit.get(1, b'').decode().strip()
+        elif action == 'label_jid':                                  # field 15: on (1) or off (0)
+            if dict(protobuf(next(v for f, v in fields if f == 15))).get(1):
+                links.append((index[1], index[2], dict(fields).get(1)))
+        else:                                                        # field 55: the note
+            note = dict(protobuf(next(v for f, v in fields if f == 55)))
+            text = note.get(5, b'').decode(errors='replace').strip()
+            if text and not note.get(4):
+                notes.setdefault(note[2].decode(), []).append({'at': at((note.get(3) or 0) / 1000 - APPLE_EPOCH).strftime('%Y-%m-%d %H:%M:%S'), 'text': text})
+    for label_id, jid, ms in links:
+        if names.get(label_id):
+            labels.setdefault(jid, set()).add(names[label_id])
+            when = at(ms / 1000 - APPLE_EPOCH).strftime('%Y-%m-%d %H:%M:%S') if ms else None
+            if when and (jid not in since or when < since[jid]):
+                since[jid] = when
+    for jid, ns in notes.items():
+        first = min(n['at'] for n in ns)
+        if jid not in since or first < since[jid]:
+            since[jid] = first
+    return labels, notes, since
 
 
 def labels_by_jid(labels_db):
@@ -103,6 +180,7 @@ def main():
     ap.add_argument('--db', required=True)
     ap.add_argument('--lid', required=True)
     ap.add_argument('--labels')
+    ap.add_argument('--app-state', help='AppState.sqlite: every chat\'s labels and notes')
     ap.add_argument('--mac-media', help="the Mac app's Message folder (photos it has downloaded)")
     ap.add_argument('--media-dir', help="the phone's WhatsApp Business/Media folder")
     ap.add_argument('--out', required=True)
@@ -110,13 +188,17 @@ def main():
 
     phones = phone_index(args.lid)
     labels = labels_by_jid(args.labels)
+    app_labels, notes, since = from_app_state(args.app_state)
+    for jid, names in app_labels.items():
+        labels.setdefault(jid, set()).update(names)
     phone_media = PhoneMedia(args.media_dir)
     os.makedirs(os.path.join(args.out, 'media'), exist_ok=True)
     con = sqlite3.connect(args.db)
 
     sessions = con.execute('SELECT Z_PK, ZCONTACTJID, ZPARTNERNAME FROM ZWACHATSESSION WHERE ZSESSIONTYPE = 0').fetchall()
     chats, skipped = [], {'no_phone': 0, 'empty': 0, 'not_one_to_one': con.execute('SELECT COUNT(*) FROM ZWACHATSESSION WHERE ZSESSIONTYPE <> 0').fetchone()[0]}
-    totals = {'messages': 0, 'media': 0, 'media_from_phone': 0, 'media_missing': 0}
+    totals = {'messages': 0, 'media': 0, 'media_from_phone': 0, 'media_missing': 0, 'labelled_without_messages': 0, 'notes': 0}
+    seen = set()
     for pk, jid, partner in sessions:
         phone = phones.get(jid) or (re.sub(r'\D', '', jid.split('@')[0]) if jid and jid.endswith('@s.whatsapp.net') else None)
         if not phone:
@@ -166,28 +248,48 @@ def main():
             if not msg['text'] and not msg.get('file') and not msg.get('missing'):
                 continue
             messages.append(msg)
-        if not messages:
+        if not messages and not labels.get(jid) and not notes.get(jid):
             skipped['empty'] += 1
             continue
+        seen.add(jid)
         totals['messages'] += len(messages)
-        chats.append({'phone': phone, 'name': (partner or '').strip() or None,
-                      'labels': sorted(labels.get(jid, [])), 'messages': messages})
+        # When the chat began, as far as the phone says: its first message, label or note.
+        began = min([x for x in (messages[0]['at'] if messages else None, since.get(jid)) if x], default=None)
+        chats.append({'phone': phone, 'name': (partner or '').strip() or None, 'since': began,
+                      'labels': sorted(labels.get(jid, [])), 'notes': notes.get(jid, []), 'messages': messages})
 
-    chats.sort(key=lambda c: c['messages'][-1]['at'], reverse=True)
+    # Chats the phone labelled or wrote a note on whose messages stayed on the phone.
+    for jid in sorted((set(labels) | set(notes)) - seen):
+        phone = phones.get(jid) or (re.sub(r'\D', '', jid.split('@')[0]) if jid.endswith('@s.whatsapp.net') else None)
+        if not phone:
+            skipped['no_phone'] += 1
+            continue
+        totals['labelled_without_messages'] += 1
+        chats.append({'phone': phone, 'name': None, 'since': since.get(jid),
+                      'labels': sorted(labels.get(jid, [])), 'notes': notes.get(jid, []), 'messages': []})
+    totals['notes'] = sum(len(c['notes']) for c in chats)
+
+    last = lambda c: c['messages'][-1]['at'] if c['messages'] else ''
+    chats.sort(key=last, reverse=True)
     with open(os.path.join(args.out, 'chats.json'), 'w', encoding='utf-8') as f:
         json.dump({'made_at': datetime.now(IST).isoformat(), 'source': 'WhatsApp for Mac', 'chats': chats}, f, ensure_ascii=False)
     with open(os.path.join(args.out, 'chats.csv'), 'w', newline='', encoding='utf-8') as f:
         w = csv.writer(f)
-        w.writerow(['import (yes/no)', 'phone', 'name', 'labels', 'messages', 'photos/files', 'first', 'last'])
+        w.writerow(['import (yes/no)', 'phone', 'name', 'labels', 'notes', 'messages', 'photos/files', 'first', 'last'])
         for c in chats:
-            w.writerow(['yes', c['phone'], c['name'] or '', ', '.join(c['labels']), len(c['messages']),
-                        sum(1 for m in c['messages'] if m.get('file')), c['messages'][0]['at'], c['messages'][-1]['at']])
+            w.writerow(['yes', c['phone'], c['name'] or '', ', '.join(c['labels']), len(c['notes']), len(c['messages']),
+                        sum(1 for m in c['messages'] if m.get('file')), c['messages'][0]['at'] if c['messages'] else '', last(c)])
 
     by_month = {}
     for c in chats:
         for m in c['messages']:
             by_month[m['at'][:7]] = by_month.get(m['at'][:7], 0) + 1
-    print(json.dumps({'chats': len(chats), **totals, 'skipped': skipped, 'messages_by_month': dict(sorted(by_month.items()))}, indent=1))
+    by_label = {}
+    for c in chats:
+        for l in c['labels']:
+            by_label[l] = by_label.get(l, 0) + 1
+    print(json.dumps({'chats': len(chats), **totals, 'skipped': skipped, 'messages_by_month': dict(sorted(by_month.items())),
+                      'labels': dict(sorted(by_label.items(), key=lambda kv: -kv[1]))}, ensure_ascii=False, indent=1))
 
 
 if __name__ == '__main__':

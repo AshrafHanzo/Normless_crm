@@ -1,0 +1,28 @@
+{
+  "status": {
+    "Paid": "paid",
+    "Shipping pending": "paid",
+    "partial paid": "partially_paid",
+    "Partially paid": "partially_paid",
+    "Important": "important",
+    "very important": "important",
+    "Need to follow up": "followup",
+    "waiting": "followup",
+    "Mock Completed": "mock_completed",
+    "Need Mockup": "need_mockup",
+    "Need logo": "need_mockup",
+    "New order": "qualified",
+    "New customer": "qualified",
+    "Waiting for payment": "qualified",
+    "Warm": "enquiry",
+    "warm lead": "enquiry",
+    "Enquiry Lead": "enquiry",
+    "Enquiry": "enquiry",
+    "Lead": "enquiry",
+    "Need sample": "enquiry"
+  },
+  "order": ["paid", "partially_paid", "important", "followup", "mock_completed", "need_mockup", "qualified", "enquiry"],
+  "open": ["partially_paid", "important", "followup", "mock_completed", "need_mockup", "qualified"],
+  "assign": { "anu": "anu@normless.store", "vimal": "vimal@normless.store" },
+  "leave_out_only": []
+}

@@ -2953,3 +2953,4 @@ router.get('/report', async (req, res) => {
 module.exports = router;
 module.exports.webhook = webhook;
 module.exports.importChat = importChat;      // scripts/import-wa-backup.js
+module.exports.quietThread = quietThread;    // the same, for a labelled chat with no messages
