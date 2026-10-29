@@ -255,7 +255,11 @@ def main():
         totals['messages'] += len(messages)
         # When the chat began, as far as the phone says: its first message, label or note.
         began = min([x for x in (messages[0]['at'] if messages else None, since.get(jid)) if x], default=None)
-        chats.append({'phone': phone, 'name': (partner or '').strip() or None, 'since': began,
+        # An unsaved contact's "name" is just their number, formatted: no name at all.
+        name = (partner or '').strip()
+        if not re.search(r'[^\W\d_]', name):
+            name = None
+        chats.append({'phone': phone, 'name': name, 'since': began,
                       'labels': sorted(labels.get(jid, [])), 'notes': notes.get(jid, []), 'messages': messages})
 
     # Chats the phone labelled or wrote a note on whose messages stayed on the phone.
