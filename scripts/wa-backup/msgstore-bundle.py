@@ -122,6 +122,8 @@ def main():
         elif kind == AD_REPLY:
             # What the customer saw when they tapped the ad: its greeting, or the ad's title.
             msg['text'] = (greeting or '').strip() or (f'📣 Came from the ad: {ad_title.strip()}' if ad_title else '')
+            # It carries the id and time of the customer's own first message, so it needs its own.
+            msg['key'] += ':ad'
             totals['ad_replies'] += 1
         elif kind == LOCATION and lat is not None:
             msg['text'] = f'📍 {place + " — " if place else ""}Location: https://maps.google.com/?q={lat},{lng}'
