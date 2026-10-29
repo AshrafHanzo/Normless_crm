@@ -723,7 +723,7 @@ function OrderMessagesTab() {
  * the Cloud API in the business's own Meta account, and a permanent System User token for it. Needs
  * no Tech Provider review. The token is sent once and kept encrypted on the server.
  */
-function TokenConnect({ onConnected }) {
+function TokenConnect({ onConnected, replacing }) {
   const apiFetch = useApi()
   const brand = useWaBrand()
   const toast = useToast()
@@ -747,12 +747,14 @@ function TokenConnect({ onConnected }) {
   return (
     <section className="was-card">
       <div className="was-card-head">
-        <h3>Connect with a token instead</h3>
-        {!open && <button type="button" className="btn btn-secondary btn-sm" onClick={() => setOpen(true)}>Use a token</button>}
+        <h3>{replacing ? 'Change the token or number' : 'Connect with a token instead'}</h3>
+        {!open && <button type="button" className="btn btn-secondary btn-sm" onClick={() => setOpen(true)}>{replacing ? 'Use a new token' : 'Use a token'}</button>}
       </div>
       <p className="was-hint" style={{ margin: 0 }}>
-        The way Normless’s number is connected, with no Meta review. The number must be on the Cloud API in {brand.name}’s own Meta business
-        account — which takes it off the WhatsApp Business app on the phone: from then on its chats are answered here.
+        {replacing
+          ? 'For a new System User token, or to move to another number in the account. Leave the PIN empty unless the number is new to the Cloud API.'
+          : <>The way Normless’s number is connected, with no Meta review. The number must be on the Cloud API in {brand.name}’s own Meta business
+            account — which takes it off the WhatsApp Business app on the phone: from then on its chats are answered here.</>}
       </p>
       {open && (
         <form className="was-token-form" onSubmit={submit}>
@@ -835,6 +837,7 @@ function ConnectTab() {
   if (!data) return <Loading />
 
   const conn = data.connection?.status === 'connected' ? data.connection : null
+  const byToken = conn?.method === 'token'
   const missing = [!data.appId && 'WA_APP_ID', !data.configId && 'WA_EMBEDDED_CONFIG_ID'].filter(Boolean)
 
   /**
@@ -933,8 +936,10 @@ function ConnectTab() {
   return (
     <>
       <Head title={`Connect ${brand.name}'s WhatsApp`}>
-        Link the number {brand.name} already uses on the WhatsApp Business app — pick {brand.name}'s number in Meta's window, not the other brand's. The phone keeps working exactly as before;
-        every chat, in and out — including replies typed on the phone — also appears here, and the last 180 days of chats are imported once.
+        {byToken
+          ? <>{brand.name}’s number is on Meta’s Cloud API, connected with a permanent token: every chat comes here and is answered from here. The WhatsApp Business app on the phone no longer has this number.</>
+          : <>Link the number {brand.name} already uses on the WhatsApp Business app — pick {brand.name}'s number in Meta's window, not the other brand's. The phone keeps working exactly as before;
+            every chat, in and out — including replies typed on the phone — also appears here, and the last 180 days of chats are imported once.</>}
       </Head>
 
       {missing.length > 0 && (
@@ -947,7 +952,7 @@ function ConnectTab() {
       <section className="was-card">
         <div className="was-card-head">
           <h3>{conn ? 'Connected number' : 'Not connected from the CRM'}</h3>
-          {conn && <span className={`status-badge ${conn.coexistence ? 'success' : ''}`}>{conn.coexistence ? 'Phone app + CRM' : 'CRM only'}</span>}
+          {conn && <span className={`status-badge ${conn.coexistence ? 'success' : ''}`}>{conn.coexistence ? 'Phone app + CRM' : byToken ? 'CRM only · connected with a token' : 'CRM only'}</span>}
         </div>
         {conn ? (
           <div className="was-facts">
@@ -964,19 +969,24 @@ function ConnectTab() {
             {data.connection?.status === 'disconnected' && ` Last disconnected ${fmtWhen(data.connection.disconnected_at || data.connection.last_account_event_at)}${data.connection.disconnect_reason ? ` (${data.connection.disconnect_reason})` : ''}.`}
           </p>
         )}
-        <label className="page-check" style={{ margin: 0 }}>
-          <input type="checkbox" checked={coexist} onChange={e => setCoexist(e.target.checked)} />
-          The number is already on the WhatsApp Business app — keep it there (Coexistence)
-        </label>
+        {/* Meta's popup is for a number still on the phone app; a token-connected one is changed below. */}
+        {!byToken && (
+          <label className="page-check" style={{ margin: 0 }}>
+            <input type="checkbox" checked={coexist} onChange={e => setCoexist(e.target.checked)} />
+            The number is already on the WhatsApp Business app — keep it there (Coexistence)
+          </label>
+        )}
         <div className="was-inline">
-          <button type="button" className="btn btn-primary" disabled={!!step || missing.length > 0} onClick={connect}>
-            <Icon name="whatsapp" size={15} /> {step || (conn ? 'Connect again' : 'Connect WhatsApp')}
-          </button>
+          {!byToken && (
+            <button type="button" className="btn btn-primary" disabled={!!step || missing.length > 0} onClick={connect}>
+              <Icon name="whatsapp" size={15} /> {step || (conn ? 'Connect again' : 'Connect WhatsApp')}
+            </button>
+          )}
           {conn && <button type="button" className="btn btn-secondary" onClick={disconnect}>Disconnect</button>}
         </div>
       </section>
 
-      <TokenConnect onConnected={load} />
+      <TokenConnect onConnected={load} replacing={byToken} />
 
       {conn?.coexistence && (
         <section className="was-card">
