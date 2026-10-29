@@ -207,6 +207,15 @@ const LEAD_COLUMN = { lead_company: 'company', lead_notes: 'notes' }
  * three-second poll of a handful of rows is cheaper to run and far cheaper to reason about than
  * the connection handling a push would need; a message lands here within a tick of arriving.
  */
+/** Their WhatsApp photo where we have one, else their initials. */
+function Avatar({ who, large }) {
+  // Which photo failed to load, so a new one is still tried.
+  const [broken, setBroken] = useState(null)
+  const cls = `wa-avatar${large ? ' wa-avatar-lg' : ''}`
+  if (who?.avatar_url && who.avatar_url !== broken) return <img className={`${cls} wa-avatar-img`} src={who.avatar_url} alt="" onError={() => setBroken(who.avatar_url)} />
+  return <span className={cls} aria-hidden="true">{initials(who?.display_name)}</span>
+}
+
 /** Whether chat a comes after chat b in the list: older last message, chats with none at the end. */
 const olderThan = (a, b) => {
   const ta = a.last_message_at ? new Date(a.last_message_at).getTime() : -Infinity
@@ -1242,15 +1251,17 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                     <button type="button"
                       className={`wa-thread${c.id === openId ? ' wa-thread-on' : ''}`}
                       onClick={() => openConversation(c.id)}>
-                      <span className="wa-avatar" aria-hidden="true">{initials(c.display_name)}</span>
+                      <Avatar who={c} />
                       <span className="wa-thread-main">
                         <span className="wa-thread-top">
                           <b>{c.display_name}</b>
                           <span className="wa-thread-when">{ago(c.last_message_at)}</span>
                         </span>
+                        {c.display_name !== c.phone_pretty && <span className="wa-thread-num">{c.phone_pretty}</span>}
                         <span className="wa-thread-line">{c.last_message_preview || 'No messages yet'}</span>
                         <span className="wa-thread-foot">
                           {cf && <span className="wa-pill" style={pillStyle(s.color)}>{s.name}</span>}
+                          {cf && c.unreplied > 0 && <span className="wa-pill" style={pillStyle('#f87171')}>Needs a person</span>}
                           {!cf && (c.status === 'closed'
                             ? <span className="wa-pill" style={pillStyle('#a8b0be')}>Closed</span>
                             : c.mode === 'flow' || c.mode === 'ai'
@@ -1262,6 +1273,8 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                           <span className="wa-thread-owner">{c.assigned_to ? short(c.assigned_to) : 'Unassigned'}</span>
                           {c.muted && <span className="wa-thread-muted" title="Muted for you"><Icon name="bellOff" size={12} /></span>}
                           {!!c.unread_count && <span className={`wa-unread${c.muted ? ' wa-unread-muted' : ''}`}>{c.unread_count}</span>}
+                          {/* A backed-up chat's customer is still waiting: their messages since our last reply, until somebody answers. */}
+                          {!c.unread_count && c.unreplied > 0 && <span className="wa-unread wa-unread-waiting" title="Messages waiting for a reply">{c.unreplied}</span>}
                         </span>
                       </span>
                     </button>
@@ -1289,7 +1302,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
           ) : (
             <>
               <header className="wa-chat-head">
-                <span className="wa-avatar wa-avatar-lg" aria-hidden="true">{initials(thread.display_name)}</span>
+                <Avatar who={thread} large />
                 <div className="wa-chat-who">
                   <span className="wa-chat-name">
                     <b>{thread.display_name}</b>

@@ -715,16 +715,34 @@ router.get('/config', (req, res) => {
     });
 });
 
-// Who spoke last: a chat whose last word is the customer's is one waiting for an answer.
-const LAST_DIRECTION = `(SELECT m.direction FROM wa_messages m WHERE m.conversation_id = c.id
-                          ORDER BY m.id DESC LIMIT 1)`;
+// Who spoke last: a chat whose last word is the customer's is one waiting for an answer. By when
+// it was said, not when it was saved — imported history is saved after newer messages.
+const LAST_MESSAGE = (col) => `(SELECT m.${col} FROM wa_messages m WHERE m.conversation_id = c.id
+                          ORDER BY COALESCE(m.sent_at, m.created_at) DESC, m.id DESC LIMIT 1)`;
+const LAST_DIRECTION = LAST_MESSAGE('direction');
+// A chat brought in from the phone's backup whose customer is still waiting on us: the last word is
+// theirs and nobody has written from here since. It needs a person whoever it is assigned to.
+const BACKUP_WAITING = `(${LAST_MESSAGE('wamid')} LIKE 'import:%' AND ${LAST_DIRECTION} = 'in')`;
+// How many messages the customer has sent since we last wrote.
+const UNREPLIED = `(SELECT COUNT(*) FROM wa_messages m WHERE m.conversation_id = c.id AND m.direction = 'in'
+                      AND NOT EXISTS (SELECT 1 FROM wa_messages o WHERE o.conversation_id = c.id AND o.direction = 'out'
+                                        AND (COALESCE(o.sent_at, o.created_at), o.id) > (COALESCE(m.sent_at, m.created_at), m.id)))::int`;
+// The name the customer gave on their last Crewfit order — by the order's link to the lead, or the
+// number it was raised against.
+const ORDER_BILLING_NAME = `(SELECT NULLIF(TRIM(o.billing_name), '') FROM crewfit_orders o
+                              WHERE k.lead_id IS NOT NULL AND NULLIF(TRIM(o.billing_name), '') IS NOT NULL
+                                AND (o.wa_lead_id = k.lead_id
+                                     OR RIGHT(REGEXP_REPLACE(COALESCE(o.whatsapp_number, o.contact_number, ''), '\\D', '', 'g'), 10) = RIGHT(k.phone, 10))
+                              ORDER BY o.sl_no DESC LIMIT 1)`;
 // A Normless chat with a support ticket still open on it.
 const HAS_OPEN_TICKET = `EXISTS (SELECT 1 FROM support_tickets t WHERE t.wa_conversation_id = c.id AND t.status <> 'Closed')`;
 
 const LIST_FIELDS = `c.id, c.status, c.mode, c.assigned_to, c.unread_count, c.last_message_preview,
                      c.last_inbound_at, c.last_message_at, c.ad_referral,
-                     k.phone, k.profile_name, k.lead_id, k.customer_id,
+                     k.phone, k.profile_name, k.lead_id, k.customer_id, k.avatar_url,
                      l.name AS lead_name, l.company AS lead_company, l.status AS lead_status,
+                     NULLIF(TRIM(l.billing_name), '') AS lead_billing_name, ${ORDER_BILLING_NAME} AS order_billing_name,
+                     CASE WHEN ${BACKUP_WAITING} THEN ${UNREPLIED} ELSE 0 END AS unreplied,
                      l.product_interest, l.quantity,
                      NULLIF(TRIM(CONCAT(cu.first_name, ' ', cu.last_name)), '') AS customer_name,
                      ${LAST_DIRECTION} AS last_direction,
@@ -738,7 +756,8 @@ const LIST_FROM = `FROM wa_conversations c
 const shapeConversation = (row) => ({
     ...row,
     ad_referral: safeJson(row.ad_referral, null),
-    display_name: row.lead_name || row.customer_name || row.profile_name || wa.prettyPhone(row.phone),
+    // The name they bill under first, then the one somebody gave the lead, then their WhatsApp name.
+    display_name: row.order_billing_name || row.lead_billing_name || row.lead_name || row.customer_name || row.profile_name || wa.prettyPhone(row.phone),
     phone_pretty: wa.prettyPhone(row.phone),
     window_open: wa.windowOpen(row.last_inbound_at),
     window_left_ms: wa.windowLeftMs(row.last_inbound_at),
@@ -822,7 +841,7 @@ router.get('/conversations', async (req, res) => {
         } else if (filter === 'waiting') {
             // "Needs a person": a person is answering it, and the customer spoke last. On Crewfit,
             // only chats nobody has taken yet — the queue somebody picks up from.
-            where.push(`c.status = 'open' AND c.mode = 'human' AND ${LAST_DIRECTION} = 'in'${req.waLine.brand === 'crewfit' ? ' AND c.assigned_to IS NULL' : ''}`);
+            where.push(`c.status = 'open' AND c.mode = 'human' AND ${LAST_DIRECTION} = 'in'${req.waLine.brand === 'crewfit' ? ` AND (c.assigned_to IS NULL OR ${BACKUP_WAITING})` : ''}`);
         } else if (filter === 'bot') {
             where.push(`c.mode IN ('flow', 'ai')`);
         } else if (filter === 'ticket') {
@@ -903,7 +922,7 @@ router.get('/conversations', async (req, res) => {
                     -- A chat this person muted adds nothing to their badge.
                     COALESCE(SUM(c.unread_count) FILTER (WHERE NOT EXISTS (SELECT 1 FROM wa_conversation_mutes mu
                               WHERE mu.conversation_id = c.id AND mu.username = ${me})), 0) AS unread,
-                    COUNT(*) FILTER (WHERE c.status = 'open' AND c.mode = 'human' AND ${LAST_DIRECTION} = 'in'${req.waLine.brand === 'crewfit' ? ' AND c.assigned_to IS NULL' : ''})::int AS waiting,
+                    COUNT(*) FILTER (WHERE c.status = 'open' AND c.mode = 'human' AND ${LAST_DIRECTION} = 'in'${req.waLine.brand === 'crewfit' ? ` AND (c.assigned_to IS NULL OR ${BACKUP_WAITING})` : ''})::int AS waiting,
                     -- Unread customer messages behind each of Crewfit's chips (muted chats left out).
                     COALESCE(SUM(c.unread_count) FILTER (WHERE c.assigned_to IS NULL AND NOT EXISTS (SELECT 1 FROM wa_conversation_mutes mu
                               WHERE mu.conversation_id = c.id AND mu.username = ${me})), 0)::int AS unread_unassigned,

@@ -1874,6 +1874,10 @@ async function ensureWaLinesSchema() {
             CREATE INDEX IF NOT EXISTS nl_auto_sends_recent_idx ON nl_auto_sends (line_id, created_at DESC);
             -- Replied STOP: no marketing templates (cart reminders, offers); order updates still go.
             ALTER TABLE wa_contacts ADD COLUMN IF NOT EXISTS opted_out_at TIMESTAMPTZ;
+            -- Their WhatsApp profile photo, where one was brought in (the Cloud API does not give them).
+            ALTER TABLE wa_contacts ADD COLUMN IF NOT EXISTS avatar_url TEXT;
+            -- "Who spoke last", by when it was said: the inbox asks it of every chat it lists.
+            CREATE INDEX IF NOT EXISTS wa_messages_thread_time_idx ON wa_messages (conversation_id, (COALESCE(sent_at, created_at)) DESC, id DESC);
             CREATE TABLE IF NOT EXISTS nl_auto_state (
                 line_id INTEGER NOT NULL REFERENCES wa_lines(id),
                 key TEXT NOT NULL,
