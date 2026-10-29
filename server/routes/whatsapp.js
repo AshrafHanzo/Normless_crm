@@ -747,10 +747,16 @@ function lastMessageRange(req, params) {
     if (to) { params.push(to); parts.push(`c.last_message_at < $${params.length}::date + 1`); }
     return parts.length ? parts.join(' AND ') : 'TRUE';
 }
-// How many messages the customer has sent since we last wrote.
+// How many messages the customer has sent since a person last answered — from here or from the
+// phone app. The bot, the assistant and automatic messages are not an answer.
 const UNREPLIED = `(SELECT COUNT(*) FROM wa_messages m WHERE m.conversation_id = c.id AND m.direction = 'in'
-                      AND NOT EXISTS (SELECT 1 FROM wa_messages o WHERE o.conversation_id = c.id AND o.direction = 'out'
-                                        AND (COALESCE(o.sent_at, o.created_at), o.id) > (COALESCE(m.sent_at, m.created_at), m.id)))::int`;
+                      AND (COALESCE(m.sent_at, m.created_at), m.id) > ALL (
+                          SELECT COALESCE(o.sent_at, o.created_at), o.id FROM wa_messages o
+                           WHERE o.conversation_id = c.id AND o.direction = 'out' AND o.sender_type IN ('user', 'phone')
+                           ORDER BY COALESCE(o.sent_at, o.created_at) DESC, o.id DESC LIMIT 1))::int`;
+// A backed-up chat that went quiet more than three days ago is a dead lead: no count on it. Every
+// other chat counts until somebody answers.
+const BACKUP_STALE = `(${LAST_MESSAGE('wamid')} LIKE 'import:%' AND ${LAST_MESSAGE('sent_at')} <= LOCALTIMESTAMP - INTERVAL '3 days')`;
 // The name the customer gave on their last Crewfit order — by the order's link to the lead, or the
 // number it was raised against.
 const ORDER_BILLING_NAME = `(SELECT NULLIF(TRIM(o.billing_name), '') FROM crewfit_orders o
@@ -766,7 +772,8 @@ const LIST_FIELDS = `c.id, c.status, c.mode, c.assigned_to, c.unread_count, c.la
                      k.phone, k.profile_name, k.lead_id, k.customer_id, k.avatar_url,
                      l.name AS lead_name, l.company AS lead_company, l.status AS lead_status,
                      NULLIF(TRIM(l.billing_name), '') AS lead_billing_name, ${ORDER_BILLING_NAME} AS order_billing_name,
-                     CASE WHEN ${BACKUP_WAITING} THEN ${UNREPLIED} ELSE 0 END AS unreplied,
+                     CASE WHEN ${BACKUP_STALE} THEN 0 ELSE ${UNREPLIED} END AS unreplied,
+                     ${BACKUP_WAITING} AS backup_waiting,
                      l.product_interest, l.quantity,
                      NULLIF(TRIM(CONCAT(cu.first_name, ' ', cu.last_name)), '') AS customer_name,
                      ${LAST_DIRECTION} AS last_direction,

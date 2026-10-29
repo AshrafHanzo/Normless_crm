@@ -3823,3 +3823,4 @@ p.wdb-sub { margin: 0; }
 .wmv-prev { left: 8px; }
 .wmv-next { right: 8px; }
 @media (max-width: 720px) { .wmv-backdrop { padding: 8px; } .wmv-nav { width: 38px; height: 38px; } }
+.wa-unread-waiting.wa-unread-muted { background: var(--bg-tertiary); color: var(--text-secondary); }

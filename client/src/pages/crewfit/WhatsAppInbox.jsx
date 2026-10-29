@@ -1274,7 +1274,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                         <span className="wa-thread-line">{c.last_message_preview || 'No messages yet'}</span>
                         <span className="wa-thread-foot">
                           {cf && <span className="wa-pill" style={pillStyle(s.color)}>{s.name}</span>}
-                          {cf && c.unreplied > 0 && <span className="wa-pill" style={pillStyle('#f87171')}>Needs a person</span>}
+                          {cf && c.backup_waiting && <span className="wa-pill" style={pillStyle('#f87171')}>Needs a person</span>}
                           {!cf && (c.status === 'closed'
                             ? <span className="wa-pill" style={pillStyle('#a8b0be')}>Closed</span>
                             : c.mode === 'flow' || c.mode === 'ai'
@@ -1285,9 +1285,11 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                           {!cf && c.open_ticket_ref && <span className="wa-pill" style={pillStyle('#60a5fa')}>{refOf({ ref_no: c.open_ticket_ref })}</span>}
                           <span className="wa-thread-owner">{c.assigned_to ? short(c.assigned_to) : 'Unassigned'}</span>
                           {c.muted && <span className="wa-thread-muted" title="Muted for you"><Icon name="bellOff" size={12} /></span>}
-                          {!!c.unread_count && <span className={`wa-unread${c.muted ? ' wa-unread-muted' : ''}`}>{c.unread_count}</span>}
-                          {/* A backed-up chat's customer is still waiting: their messages since our last reply, until somebody answers. */}
-                          {!c.unread_count && c.unreplied > 0 && <span className="wa-unread wa-unread-waiting" title="Messages waiting for a reply">{c.unreplied}</span>}
+                          {/* Crewfit: the customer's messages since a person last answered, until somebody does (a
+                              backed-up chat only for three days). Otherwise what is unread. */}
+                          {cf && c.unreplied > 0
+                            ? <span className={`wa-unread wa-unread-waiting${c.muted ? ' wa-unread-muted' : ''}`} title="Messages waiting for a reply">{c.unreplied}</span>
+                            : !!c.unread_count && <span className={`wa-unread${c.muted ? ' wa-unread-muted' : ''}`}>{c.unread_count}</span>}
                         </span>
                       </span>
                     </button>
