@@ -141,6 +141,70 @@ async function connect({ code, wabaId, phoneNumberId, businessId, finishType }, 
 }
 
 /**
+ * The other way in, the one Normless uses: a number registered on the Cloud API in the business's
+ * own Meta account, and a permanent System User token for it. No Embedded Signup popup, so no Tech
+ * Provider review — the business is only reaching its own number. The token's app must be the one
+ * whose webhook points here (WA_APP_SECRET checks every delivery).
+ *
+ * `pin`, when given, registers the number for Cloud API messaging (Meta's two-step PIN, six
+ * digits): needed once, after the number is added in WhatsApp Manager and verified by SMS.
+ */
+async function connectWithToken({ phoneNumberId, wabaId, token, pin }, who) {
+    phoneNumberId = String(phoneNumberId || '').trim();
+    wabaId = String(wabaId || '').trim();
+    token = String(token || '').trim();
+    if (!/^\d{6,20}$/.test(phoneNumberId)) throw new ConnectError('Give the phone number ID — the long number under the phone number in WhatsApp Manager or the app’s API Setup page');
+    if (!/^\d{6,20}$/.test(wabaId)) throw new ConnectError('Give the WhatsApp Business Account ID — shown in WhatsApp Manager and on API Setup');
+    if (token.length < 50) throw new ConnectError('Paste the whole System User access token');
+    if (pin != null && pin !== '' && !/^\d{6}$/.test(String(pin))) throw new ConnectError('The PIN is six digits');
+
+    const graph = (p) => `https://graph.facebook.com/${process.env.WA_API_VERSION || 'v21.0'}${p}`;
+    const call = async (url, { method = 'GET', body } = {}) => {
+        const res = await fetch(url, {
+            method,
+            headers: { Authorization: `Bearer ${token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+            body: body ? JSON.stringify(body) : undefined,
+            signal: AbortSignal.timeout(30000),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.error) throw new ConnectError(data?.error?.message || `Meta refused that (${res.status})`, 502);
+        return data;
+    };
+
+    // The token can see the number, and the number is in that account.
+    const phone = await call(graph(`/${phoneNumberId}?fields=display_phone_number,verified_name,is_on_biz_app,platform_type,code_verification_status`));
+    const numbers = await call(graph(`/${wabaId}/phone_numbers?fields=id&limit=100`));
+    if (!(numbers.data || []).some(n => String(n.id) === phoneNumberId)) {
+        throw new ConnectError('That phone number ID is not in that WhatsApp Business Account — check both IDs on the API Setup page');
+    }
+    if (pin) await call(graph(`/${phoneNumberId}/register`), { method: 'POST', body: { messaging_product: 'whatsapp', pin: String(pin) } });
+    // This app hears the account's webhooks.
+    await call(graph(`/${wabaId}/subscribed_apps`), { method: 'POST' });
+
+    const other = Object.keys(lines.BRANDS).map(b => lines.get(b))
+        .find(l => l.brand !== lines.current().brand && l.phoneNumberId && String(l.phoneNumberId) === phoneNumberId);
+    if (other) throw new ConnectError(`That number is already connected to ${other.name}. Use ${lines.current().name}'s number instead.`);
+
+    const connection = {
+        status: 'connected',
+        method: 'token',
+        coexistence: !!phone.is_on_biz_app,
+        platform_type: phone.platform_type || null,
+        waba_id: wabaId,
+        phone_number_id: phoneNumberId,
+        business_id: null,
+        display_phone_number: phone.display_phone_number || null,
+        business_phone: wa.normalisePhone(phone.display_phone_number || ''),
+        verified_name: phone.verified_name || null,
+        connected_at: new Date().toISOString(),
+        connected_by: who || null,
+        token: lines.seal(token),
+    };
+    await putSetting('connection', connection);
+    return { ...connection, token: undefined, registered: !!pin };
+}
+
+/**
  * Ask for one sync again — only meant for a request that failed in the first 24 hours. Meta
  * runs each sync once per connection; a second successful request is refused by Meta.
  */
@@ -181,4 +245,4 @@ async function accountUpdate(value) {
     await putSetting('connection', { ...c, ...patch });
 }
 
-module.exports = { status, connect, requestSync, disconnect, accountUpdate, getSetting, putSetting, ConnectError };
+module.exports = { status, connect, connectWithToken, requestSync, disconnect, accountUpdate, getSetting, putSetting, ConnectError };

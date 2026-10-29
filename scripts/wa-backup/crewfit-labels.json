@@ -21,8 +21,28 @@
     "Lead": "enquiry",
     "Need sample": "enquiry"
   },
-  "order": ["paid", "partially_paid", "important", "followup", "mock_completed", "need_mockup", "qualified", "enquiry"],
-  "open": ["partially_paid", "important", "followup", "mock_completed", "need_mockup", "qualified"],
-  "assign": { "anu": "anu@normless.store", "vimal": "vimal@normless.store" },
-  "leave_out_only": []
+  "order": [
+    "paid",
+    "partially_paid",
+    "important",
+    "followup",
+    "mock_completed",
+    "need_mockup",
+    "qualified",
+    "enquiry"
+  ],
+  "open": [
+    "partially_paid",
+    "important",
+    "followup",
+    "mock_completed",
+    "need_mockup",
+    "qualified"
+  ],
+  "assign": {
+    "anu": "anu@normless.store",
+    "vimal": "vimal@normless.store"
+  },
+  "leave_out_only": [],
+  "default_assign": "anu@normless.store"
 }

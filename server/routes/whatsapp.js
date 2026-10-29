@@ -669,6 +669,19 @@ router.post('/connect', adminOnly, async (req, res) => {
     }
 });
 
+// A number on the Cloud API in the business's own Meta account, with a permanent token: no popup.
+router.post('/connect/token', adminOnly, async (req, res) => {
+    try {
+        const b = req.body || {};
+        const out = await connectSvc.connectWithToken({ phoneNumberId: b.phone_number_id, wabaId: b.waba_id, token: b.token, pin: b.pin }, req.user?.username);
+        res.status(201).json({ connection: out, ...(await connectSvc.status()) });
+    } catch (err) {
+        if (err instanceof connectSvc.ConnectError) return res.status(err.status).json({ error: err.message });
+        console.error('whatsapp token connect error:', err);
+        res.status(500).json({ error: 'Could not connect with that token' });
+    }
+});
+
 router.post('/connect/sync/:type', adminOnly, async (req, res) => {
     try {
         const type = req.params.type === 'contacts' ? 'smb_app_state_sync' : req.params.type === 'history' ? 'history' : null;
@@ -721,8 +734,19 @@ const LAST_MESSAGE = (col) => `(SELECT m.${col} FROM wa_messages m WHERE m.conve
                           ORDER BY COALESCE(m.sent_at, m.created_at) DESC, m.id DESC LIMIT 1)`;
 const LAST_DIRECTION = LAST_MESSAGE('direction');
 // A chat brought in from the phone's backup whose customer is still waiting on us: the last word is
-// theirs and nobody has written from here since. It needs a person whoever it is assigned to.
-const BACKUP_WAITING = `(${LAST_MESSAGE('wamid')} LIKE 'import:%' AND ${LAST_DIRECTION} = 'in')`;
+// theirs, said in the last three days, and nobody has written from here since. It needs a person
+// whoever it is assigned to. Older ones are dead leads: kept, but not flagged.
+const BACKUP_WAITING = `(${LAST_MESSAGE('wamid')} LIKE 'import:%' AND ${LAST_DIRECTION} = 'in'
+                          AND ${LAST_MESSAGE('sent_at')} > LOCALTIMESTAMP - INTERVAL '3 days')`;
+/** The date range picked in the inbox's header, on when each chat last moved. All time when unset. */
+function lastMessageRange(req, params) {
+    const day = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) : null);
+    const from = day(req.query.from), to = day(req.query.to);
+    const parts = [];
+    if (from) { params.push(from); parts.push(`c.last_message_at >= $${params.length}::date`); }
+    if (to) { params.push(to); parts.push(`c.last_message_at < $${params.length}::date + 1`); }
+    return parts.length ? parts.join(' AND ') : 'TRUE';
+}
 // How many messages the customer has sent since we last wrote.
 const UNREPLIED = `(SELECT COUNT(*) FROM wa_messages m WHERE m.conversation_id = c.id AND m.direction = 'in'
                       AND NOT EXISTS (SELECT 1 FROM wa_messages o WHERE o.conversation_id = c.id AND o.direction = 'out'
@@ -830,7 +854,7 @@ router.get('/dashboard/me', async (req, res) => {
 router.get('/conversations', async (req, res) => {
     try {
         const params = [];
-        const where = [visibility(req, params)];
+        const where = [visibility(req, params), lastMessageRange(req, params)];
 
         const filter = String(req.query.filter || 'all');
         if (filter === 'mine') {
@@ -913,7 +937,7 @@ router.get('/conversations', async (req, res) => {
 
         // The counts the filter chips show, over everything this person can see.
         const tallyParams = [];
-        const vis = visibility(req, tallyParams);
+        const vis = `${visibility(req, tallyParams)} AND ${lastMessageRange(req, tallyParams)}`;
         tallyParams.push(String(req.user?.username || '').toLowerCase());
         const me = `$${tallyParams.length}`;
         const tally = await db.query(
@@ -936,7 +960,7 @@ router.get('/conversations', async (req, res) => {
 
         // How many chats are at each lead status (Crewfit), over everything this person can see.
         const statusParams = [];
-        const statusVis = visibility(req, statusParams);
+        const statusVis = `${visibility(req, statusParams)} AND ${lastMessageRange(req, statusParams)}`;
         const byStatus = req.waLine.brand === 'crewfit' ? (await db.query(
             `SELECT COALESCE(l.status, 'none') AS status, COUNT(*)::int AS n ${LIST_FROM} WHERE ${statusVis} GROUP BY 1`, statusParams)).rows : [];
         res.json({

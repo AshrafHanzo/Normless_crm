@@ -2694,7 +2694,8 @@ html, body { max-width: 100%; overflow-x: hidden; }
 }
 .wa-thread-foot { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 11px; color: var(--text-muted); }
 .wa-thread-foot .wa-unread { margin-left: auto; }
-.wa-thread-owner { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wa-thread-owner { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; }
+.wa-thread-foot .wa-pill, .wa-thread-foot .wa-unread { flex: none; }
 .wa-unread {
   min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; display: grid; place-items: center;
   background: var(--primary); color: #fff; font-size: 11px; font-weight: 600;
@@ -3330,6 +3331,9 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .was-facts span { font-size: 11.5px; color: var(--text-muted); }
 .was-facts b { font-size: 13.5px; font-weight: 600; word-break: break-all; }
 .was-sync { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+.was-token-form { display: flex; flex-direction: column; gap: 14px; }
+.was-token-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px 16px; }
+.was-token-wide { grid-column: 1 / -1; }
 .was-sync > div { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 12px; border-radius: var(--radius-md); background: var(--bg-secondary); }
 .was-sync small { font-size: 12px; color: var(--text-secondary); }
 .was-warn-card { border-color: color-mix(in srgb, var(--warning) 50%, var(--border)); }
@@ -3719,8 +3723,6 @@ p.wdb-sub { margin: 0; }
 .wa-bbutton { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 6px; padding: 8px 10px; border-radius: 10px; background: var(--surface-2, rgba(255,255,255,0.06)); color: #53bdeb; font-size: 12.5px; font-weight: 600; text-align: center; }
 .wa-bbutton-list { flex-basis: 100%; font-size: 11px; font-weight: 500; color: var(--text-muted); }
 /* The inbox's status filter (its own class: wa-status-select is the side panel's). */
-.wa-status-filter { display: flex; align-items: center; gap: 8px; flex: none; }
-.wa-status-filter select { flex: 1; min-width: 0; padding: 7px 10px; border-radius: 8px; background: var(--surface); border: 1px solid var(--border); color: var(--text-primary); font: inherit; font-size: 13px; }
 
 /* ---- Import chats ------------------------------------------------------------------------- */
 .wim-steps { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--text-secondary); line-height: 1.5; }
@@ -3740,3 +3742,84 @@ p.wdb-sub { margin: 0; }
 .wa-missing-media { display: inline-flex; align-items: center; gap: 6px; padding: 10px 12px; margin-bottom: 4px; border-radius: 8px; border: 1px dashed var(--border); color: var(--text-muted); font-size: 12px; }
 .wim-label { display: inline-flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text-secondary); }
 .wim-label select { padding: 6px 10px; border-radius: 8px; background: var(--surface); border: 1px solid var(--border); color: var(--text-primary); font: inherit; font-size: 13px; }
+
+/* ---- WhatsApp: the status picker ------------------------------------------------------------ */
+.wsp { position: relative; min-width: 0; }
+.wsp-block, .wa-status-filter.wsp { display: block; width: 100%; }
+.wsp-trigger {
+  display: flex; align-items: center; gap: 8px; width: 100%; min-height: 36px; padding: 6px 10px 6px 12px;
+  border-radius: var(--radius-md); border: 1px solid var(--border); background: var(--surface); color: var(--text-primary);
+  font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; text-align: left; transition: border-color .15s, box-shadow .15s;
+}
+.wsp-trigger:hover { border-color: var(--border-hover); }
+.wsp-trigger:focus-visible, .wsp-open { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-glow); }
+.wsp-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+.wsp-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wsp-count { flex: none; min-width: 22px; padding: 1px 7px; border-radius: 999px; background: var(--bg-tertiary); color: var(--text-secondary); font-size: 11px; font-weight: 600; text-align: center; }
+.wsp-caret { flex: none; color: var(--text-muted); transition: transform .15s; }
+.wsp-open .wsp-caret { transform: rotate(180deg); }
+.wsp-menu {
+  position: absolute; z-index: 60; top: calc(100% + 6px); left: 0; right: 0; min-width: 240px; max-height: 340px; overflow-y: auto;
+  margin: 0; padding: 6px; list-style: none; border-radius: var(--radius-lg); border: 1px solid var(--border);
+  background: var(--bg-secondary); box-shadow: var(--shadow-lg);
+}
+.wsp-row {
+  display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 2px 8px;
+  padding: 7px 8px; border-radius: var(--radius-md); cursor: pointer;
+}
+.wsp-hover { background: var(--surface-hover); }
+.wsp-chip {
+  display: inline-flex; align-items: center; gap: 7px; justify-self: start; padding: 3px 10px 3px 8px; border-radius: 999px;
+  font-size: 12.5px; font-weight: 600; color: var(--text-primary);
+  background: color-mix(in srgb, var(--c, var(--text-muted)) 16%, transparent);
+}
+.wsp-desc { grid-column: 1 / -1; grid-row: 2; padding-left: 4px; font-size: 11px; color: var(--text-muted); line-height: 1.35; }
+.wsp-check { color: var(--primary-light); }
+.wsp-on .wsp-chip { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c, var(--primary)) 60%, transparent); }
+
+/* ---- WhatsApp: files from the customer, and looking at them ---------------------------------- */
+.wa-file-grid { list-style: none; margin: 0 0 14px; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(72px, 1fr)); gap: 8px; }
+.wa-file-tile {
+  position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; width: 100%;
+  aspect-ratio: 1; padding: 0; overflow: hidden; border-radius: var(--radius-md); border: 1px solid var(--border);
+  background: var(--bg-secondary); color: var(--text-secondary); cursor: pointer; transition: border-color .15s, transform .15s;
+}
+.wa-file-tile:hover { border-color: var(--primary); transform: translateY(-1px); }
+.wa-file-tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.wa-file-tile .wa-doc-icon { width: 36px; height: 36px; border-radius: 8px; display: grid; place-items: center; font-size: 10px; }
+.wa-file-cap { max-width: 100%; padding: 0 6px; font-size: 10px; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wa-file-logo { border-color: color-mix(in srgb, var(--primary) 55%, var(--border)); background: #fff; }
+.wa-file-logo img { object-fit: contain; padding: 6px; }
+.wa-file-tag { position: absolute; left: 4px; bottom: 4px; padding: 1px 6px; border-radius: 999px; background: var(--primary); color: #fff; font-size: 10px; font-weight: 700; }
+.wa-media-open { display: block; padding: 0; border: 0; background: none; cursor: zoom-in; }
+.wa-avatar-open { padding: 0; border: 0; background: none; border-radius: 50%; cursor: zoom-in; }
+.wa-avatar-open:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+
+.wmv-backdrop { position: fixed; inset: 0; z-index: 300; display: flex; background: rgba(5, 8, 15, 0.82); backdrop-filter: blur(4px); padding: 16px; }
+.wmv { display: flex; flex-direction: column; width: 100%; max-width: 1100px; margin: auto; height: 100%; max-height: 900px; min-height: 0; }
+.wmv-head { display: flex; align-items: center; gap: 12px; padding: 4px 4px 12px; color: #fff; }
+.wmv-title { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.wmv-title b { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wmv-title small { font-size: 12px; color: rgba(255,255,255,0.65); }
+.wmv-actions { display: flex; gap: 6px; }
+.wmv-actions .btn-icon { color: #fff; background: rgba(255,255,255,0.1); }
+.wmv-actions .btn-icon:hover { background: rgba(255,255,255,0.2); }
+.wmv-stage { position: relative; flex: 1; min-height: 0; display: grid; place-items: center; border-radius: var(--radius-lg); overflow: hidden; }
+.wmv-image img { max-width: 100%; max-height: 100%; min-width: min(320px, 100%); object-fit: contain; border-radius: 8px; cursor: zoom-in; }
+.wmv-image.wmv-full { overflow: auto; place-items: start center; }
+.wmv-image.wmv-full img { max-width: none; max-height: none; cursor: zoom-out; }
+.wmv-pdf { width: 100%; height: 100%; overflow-y: auto; background: var(--bg-secondary); border-radius: var(--radius-lg); }
+.wmv-video video { max-width: 100%; max-height: 100%; border-radius: 8px; background: #000; }
+.wmv-audio audio { width: min(480px, 100%); }
+.wmv-card { display: flex; flex-direction: column; align-items: center; gap: 10px; max-width: 360px; padding: 28px; text-align: center; border-radius: var(--radius-lg); background: var(--bg-secondary); color: var(--text-primary); }
+.wmv-card .wa-doc-icon { width: 56px; height: 56px; border-radius: 12px; display: grid; place-items: center; font-size: 12px; }
+.wmv-card b { word-break: break-word; }
+.wmv-card p { margin: 0; font-size: 13px; color: var(--text-secondary); }
+.wmv-nav {
+  position: absolute; top: 50%; transform: translateY(-50%); width: 44px; height: 44px; border-radius: 50%; border: 0;
+  display: grid; place-items: center; background: rgba(0,0,0,0.55); color: #fff; cursor: pointer;
+}
+.wmv-nav:hover { background: rgba(0,0,0,0.75); }
+.wmv-prev { left: 8px; }
+.wmv-next { right: 8px; }
+@media (max-width: 720px) { .wmv-backdrop { padding: 8px; } .wmv-nav { width: 38px; height: 38px; } }

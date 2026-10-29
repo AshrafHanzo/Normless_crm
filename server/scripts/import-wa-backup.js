@@ -20,6 +20,7 @@
  *     "order":  ["paid", "partially_paid", "important", ...],               which status wins when a chat has several
  *     "open":   ["followup", "important", ...],                             a chat without messages stays open with these
  *     "assign": { "anu": "anu@normless.store" },                            label → who the thread is assigned to
+ *     "default_assign": "anu@normless.store",                               everybody else's chats, if unassigned
  *     "leave_out_only": ["Need to call", "Not picked"]                       chats with only these labels, no messages
  *                                                                            and no notes are not imported
  *   }
@@ -77,7 +78,9 @@ async function main() {
     const rank = (s) => { const i = (map.order || []).indexOf(s.key); return i < 0 ? 1000 - s.sort_order : i; };
     const statusOf = (c) => c.labels.map(statusFor).filter(Boolean).sort((a, b) => rank(a) - rank(b))[0] || null;
     const users = new Set((await db.query('SELECT LOWER(username) AS u FROM admin_users')).rows.map(r => r.u));
-    const assignFor = (c) => c.labels.map(l => map.assign?.[l]).find(u => u && users.has(u.toLowerCase())) || null;
+    // A label naming somebody wins; otherwise whoever the map says takes the backed-up chats.
+    const assignFor = (c) => c.labels.map(l => map.assign?.[l]).find(u => u && users.has(u.toLowerCase()))
+        || (map.default_assign && users.has(map.default_assign.toLowerCase()) ? map.default_assign : null);
     const leaveOut = new Set(map.leave_out_only || []);
     const left = (c) => !c.messages.length && !(c.notes || []).length && c.labels.length && c.labels.every(l => leaveOut.has(l));
 

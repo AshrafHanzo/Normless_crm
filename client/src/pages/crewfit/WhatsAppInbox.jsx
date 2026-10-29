@@ -4,7 +4,11 @@ import { useApi, useAuth, useMainMenu } from '../../App'
 import { useToast } from '../../components/Toast'
 import Icon from '../../components/Icon'
 import CrewfitOrderDrawer from './CrewfitOrderDrawer'
-import { PdfThumb, PdfViewer } from '../../components/PdfPreview'
+import { PdfThumb } from '../../components/PdfPreview'
+import DateRangeFilter from '../../components/DateRangeFilter'
+import WaMediaViewer from './WaMediaViewer'
+import { mediaKind } from './waMedia'
+import WaStatusPicker from './WaStatusPicker'
 import WaQuoteDrawer from './WaQuoteDrawer'
 import { WA_BRANDS } from './waBrand'
 import TicketDrawer from '../support/TicketDrawer'
@@ -282,7 +286,9 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
   const [canQuote, setCanQuote] = useState(false)
   const [quoteOpen, setQuoteOpen] = useState(false)
   const quoteToLink = useRef(null)                      // the quote an order is being made from
-  const [preview, setPreview] = useState(null)          // a document opened from the chat
+  const [preview, setPreview] = useState(null)          // files being looked at: { items, index }
+  // The header's date range, on when each chat last moved. Empty is all time.
+  const [range, setRange] = useState({ from: '', to: '' })
   const [health, setHealth] = useState(null)            // is Meta still accepting our token?
   const [cataloguePdf, setCataloguePdf] = useState(null)
   const [snippetQuery, setSnippetQuery] = useState('')
@@ -346,6 +352,8 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
     const qs = new URLSearchParams({ filter, status: 'open' })
     if (term) qs.set('search', term)
     if (statusFilter) qs.set('lead_status', statusFilter)
+    if (range.from) qs.set('from', range.from)
+    if (range.to) qs.set('to', range.to)
     return qs
   }
   // Which filters the list on screen was loaded for: a refresh with the same ones keeps the pages
@@ -405,7 +413,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
     setLoading(true)
     loadConversations()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filter, term, statusFilter])
+  }, [filter, term, statusFilter, range])
 
   /* ── One conversation ────────────────────────────────────────────────────────────────── */
 
@@ -491,6 +499,12 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
 
   // Everything the customer has sent, newest first: logos, references, payment screenshots.
   const customerFiles = messages.filter(m => m.direction === 'in' && m.media_url).slice().reverse()
+  const asItem = (m) => ({ url: fileUrl(m.media_url), name: m.media_name || fileNameFor(m, ago10(thread?.phone)), mime: m.media_mime, when: `${day(m.sent_at)} ${clock(m.sent_at)}` })
+  // A photo or file in the chat opens with every other one in the chat beside it, in chat order.
+  const openFile = (m) => {
+    const all = messages.filter(x => x.media_url && x.type !== 'call')
+    setPreview({ items: all.map(asItem), index: Math.max(0, all.findIndex(x => x.id === m.id)) })
+  }
   const downloadAll = async () => {
     for (const m of customerFiles) {
       await downloadFile(fileUrl(m.media_url), fileNameFor(m, ago10(thread.phone)))
@@ -881,7 +895,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
   const previewQuote = async (q) => {
     const r = await apiFetch(`/api/crewfit/quotes/${q.id}/pdf`, { responseType: 'blob' })
     if (!r || r.error) return toast.error(r?.error || 'Could not open the quote')
-    setPreview({ url: URL.createObjectURL(r.blob), name: `Quote #${q.id}`, mime: 'application/pdf' })
+    setPreview({ items: [{ url: URL.createObjectURL(r.blob), name: `Quote #${q.id}`, mime: 'application/pdf' }], index: 0 })
   }
 
   /** The order form from an accepted quote: its products and prices, plus the billing details. */
@@ -1039,23 +1053,36 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
   // The customer's files and the team's notes: in Crewfit's Lead tab and Normless's Customer tab.
   const filesAndNotes = (
     <>
-      {!!customerFiles.length && (
+      {(!!customerFiles.length || thread?.logo_url) && (
         <>
           <div className="form-section wa-billing-head">
-            <span>Files from the customer</span>
+            <span>Files from the customer{customerFiles.length ? ` (${customerFiles.length})` : ''}</span>
             {customerFiles.length > 1 && <button type="button" className="mini-btn" onClick={downloadAll}>Download all</button>}
           </div>
-          <ul className="wa-files">
-            {customerFiles.map(m => (
-              <li key={m.id}>
-                {/^image\//.test(m.media_mime || '')
-                  ? <img src={fileUrl(m.media_url)} alt="" loading="lazy" />
-                  : <span className="wa-doc-icon">{extFor(m.media_mime, m.media_url).toUpperCase().slice(0, 4)}</span>}
-                <span className="wa-files-name">{m.media_name || (/^image/.test(m.media_mime || '') ? 'Photo' : 'File')}<small>{day(m.sent_at)} {clock(m.sent_at)}</small></span>
-                <button type="button" className="btn-icon" aria-label="Download" title="Download"
-                  onClick={() => downloadFile(fileUrl(m.media_url), fileNameFor(m, ago10(thread.phone)))}><Icon name="download" size={14} /></button>
+          {/* Newest first, the logo they sent through the menu ahead of everything. A click opens it here. */}
+          <ul className="wa-file-grid">
+            {thread?.logo_url && (
+              <li>
+                <button type="button" className="wa-file-tile wa-file-logo" onClick={() => setPreview({ items: [{ url: fileUrl(thread.logo_url), name: 'Logo they sent', mime: '' }], index: 0 })}>
+                  {mediaKind({ url: thread.logo_url }) === 'image' ? <img src={fileUrl(thread.logo_url)} alt="" loading="lazy" /> : <span className="wa-doc-icon">{extFor('', thread.logo_url).toUpperCase().slice(0, 4)}</span>}
+                  <span className="wa-file-tag">Logo</span>
+                </button>
               </li>
-            ))}
+            )}
+            {customerFiles.map(m => {
+              const kind = mediaKind({ mime: m.media_mime, name: m.media_name, url: m.media_url })
+              return (
+                <li key={m.id}>
+                  <button type="button" className="wa-file-tile" title={`${m.media_name || (kind === 'image' ? 'Photo' : 'File')} · ${day(m.sent_at)}`}
+                    onClick={() => setPreview({ items: customerFiles.map(asItem), index: customerFiles.indexOf(m) })}>
+                    {kind === 'image'
+                      ? <img src={fileUrl(m.media_url)} alt="" loading="lazy" />
+                      : <span className={`wa-doc-icon${kind === 'pdf' ? ' wa-doc-pdf' : ''}`}>{kind === 'audio' ? <Icon name="mic" size={16} /> : kind === 'video' ? <Icon name="play" size={16} /> : extFor(m.media_mime, m.media_name || m.media_url).toUpperCase().slice(0, 4)}</span>}
+                    {kind !== 'image' && <span className="wa-file-cap">{m.media_name || (kind === 'audio' ? 'Voice note' : 'File')}</span>}
+                  </button>
+                </li>
+              )
+            })}
           </ul>
         </>
       )}
@@ -1106,6 +1133,8 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
           <span className="wa-count"><b>{tally.unread}</b> unread</span>
         </div>}
         <div className="wa-topbar-end">
+          <DateRangeFilter startDate={range.from} endDate={range.to}
+            onApply={(from, to) => setRange({ from, to })} onClear={() => setRange({ from: '', to: '' })} />
           {config?.canSettings && menuFlow && (
             <label className="wa-menu-switch" title="Whether a new chat is answered by the menu first. Outside working hours it always is, if that is set in Settings › Working hours.">
               <button type="button" role="switch" aria-checked={!!menuFlow.is_active} className={`toggle${menuFlow.is_active ? ' on' : ''}`}
@@ -1178,18 +1207,8 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
       )}
 
       {preview && (
-        <div className="modal-backdrop" onClick={() => setPreview(null)}>
-          <div className="studio-open wa-preview" onClick={e => e.stopPropagation()}>
-            <div className="studio-result-head">
-              <h3>{preview.name}</h3>
-              <span style={{ display: 'flex', gap: 8 }}>
-                <a className="btn btn-secondary btn-sm" href={preview.url} target="_blank" rel="noreferrer">Open in a new tab</a>
-                <button type="button" className="btn-icon" aria-label="Close" onClick={() => setPreview(null)}><Icon name="close" size={15} /></button>
-              </span>
-            </div>
-            <PdfViewer url={preview.url} />
-          </div>
-        </div>
+        <WaMediaViewer key={`${preview.items[preview.index]?.url}-${preview.index}`} items={preview.items} index={preview.index}
+          onClose={() => setPreview(null)} onDownload={(it) => downloadFile(it.url, it.name)} />
       )}
 
       {newChat && (
@@ -1224,14 +1243,8 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
             ))}
           </div>
           {!!statuses.length && (
-            <label className="wa-status-filter">
-              <span className="wa-dot" style={{ background: statuses.find(x => x.key === statusFilter)?.color || 'var(--text-muted)' }} aria-hidden="true" />
-              <span className="sr-only">Lead status</span>
-              <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} aria-label="Lead status">
-                <option value="">Any status ({Object.values(statusCounts).reduce((n, v) => n + v, 0)})</option>
-                {statuses.map(st => <option key={st.key} value={st.key}>{st.name} ({statusCounts[st.key] || 0})</option>)}
-              </select>
-            </label>
+            <WaStatusPicker className="wa-status-filter" statuses={statuses} value={statusFilter} onChange={setStatusFilter}
+              counts={statusCounts} anyLabel="Any status" label="Show chats at" />
           )}
 
           {loading ? (
@@ -1251,7 +1264,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                     <button type="button"
                       className={`wa-thread${c.id === openId ? ' wa-thread-on' : ''}`}
                       onClick={() => openConversation(c.id)}>
-                      <Avatar who={c} />
+                      <Avatar who={{ ...c, avatar_url: fileUrl(c.avatar_url) }} />
                       <span className="wa-thread-main">
                         <span className="wa-thread-top">
                           <b>{c.display_name}</b>
@@ -1302,7 +1315,12 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
           ) : (
             <>
               <header className="wa-chat-head">
-                <Avatar who={thread} large />
+                {thread.avatar_url
+                  ? <button type="button" className="wa-avatar-open" aria-label="See their profile photo" title="See their profile photo"
+                      onClick={() => setPreview({ items: [{ url: fileUrl(thread.avatar_url), name: `${thread.display_name} — profile photo`, mime: 'image/jpeg' }], index: 0 })}>
+                      <Avatar who={{ ...thread, avatar_url: fileUrl(thread.avatar_url) }} large />
+                    </button>
+                  : <Avatar who={thread} large />}
                 <div className="wa-chat-who">
                   <span className="wa-chat-name">
                     <b>{thread.display_name}</b>
@@ -1423,9 +1441,9 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                       <div className={`wa-bubble${mine ? ' wa-bubble-out' : ''}${m.type === 'call' ? ` wa-bubble-call${/Missed|declined|Declined|no answer|failed/.test(m.body || '') ? ' wa-bubble-call-missed' : ''}` : ''}${(m.sender_type === 'bot' || m.sender_type === 'ai') ? ' wa-bubble-bot' : ''}${m.sender_type === 'auto' ? ' wa-bubble-auto' : ''}${m.status === 'failed' ? ' wa-bubble-bad' : ''}`}>
                         {m.media_url && /^image\//.test(m.media_mime || '') && (
                           <div className="wa-media-wrap">
-                            <a href={fileUrl(m.media_url)} target="_blank" rel="noreferrer">
+                            <button type="button" className="wa-media-open" aria-label="Open this photo" onClick={() => openFile(m)}>
                               <img className="wa-media" src={fileUrl(m.media_url)} alt={m.media_name || 'Photo'} loading="lazy" />
-                            </a>
+                            </button>
                             <button type="button" className="wa-media-dl" aria-label="Download this photo" title="Download"
                               onClick={() => downloadFile(fileUrl(m.media_url), fileNameFor(m, ago10(thread.phone)))}>
                               <Icon name="download" size={14} />
@@ -1441,7 +1459,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                         )}
                         {m.type !== 'call' && (m.media_url || (m.media_name && !/not included/i.test(m.media_name))) && !/^image\//.test(m.media_mime || '') && (
                           <DocCard name={m.media_name} mime={m.media_mime} url={m.media_url ? fileUrl(m.media_url) : null}
-                            onOpen={() => m.media_url && setPreview({ url: fileUrl(m.media_url), name: m.media_name, mime: m.media_mime })} />
+                            onOpen={() => m.media_url && openFile(m)} />
                         )}
                         {m.body && <WaText text={m.body} />}
                         {mine && m.interactive_payload?.kind === 'template' && m.interactive_payload.footer && (
@@ -1877,14 +1895,9 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
             {sideTab === 'lead' && (
               <>
                 <div className="input-group">
-                  <label htmlFor="wa-lead-status">Status</label>
-                  <div className="wa-status-select">
-                    <span className="wa-dot" style={{ background: look.color }} />
-                    <select id="wa-lead-status" value={thread.lead_status || ''} onChange={e => setLeadStatus(e.target.value)}>
-                      {!statusOf[thread.lead_status] && <option value={thread.lead_status || ''}>{look.name}</option>}
-                      {statuses.map(s => <option key={s.key} value={s.key}>{s.name}</option>)}
-                    </select>
-                  </div>
+                  <label>Status</label>
+                  <WaStatusPicker className="wsp-block" statuses={statusOf[thread.lead_status] ? statuses : [{ key: thread.lead_status || '', name: look.name, color: look.color }, ...statuses]}
+                    value={thread.lead_status || ''} onChange={setLeadStatus} label="Lead status" />
                 </div>
 
                 <div className="wa-side-grid">
@@ -1930,12 +1943,6 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                     <div className="wa-paid-bar"><div style={{ width: `${paidPct}%` }} /></div>
                     <span>{money(received)} of {money(quoted)} received{received < quoted ? ` · ${money(quoted - received)} due` : ''}</span>
                   </div>
-                )}
-
-                {thread.logo_url && (
-                  <a className="wa-file" href={fileUrl(thread.logo_url)} target="_blank" rel="noreferrer">
-                    <Icon name="palette" size={14} /> Logo they sent
-                  </a>
                 )}
 
                 <div className="input-group">

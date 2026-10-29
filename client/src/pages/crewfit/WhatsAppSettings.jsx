@@ -718,6 +718,73 @@ function OrderMessagesTab() {
    Connect WhatsApp (Coexistence)
    ════════════════════════════════════════════════════════════════════════════════════════════ */
 
+/**
+ * Connecting without Meta's popup — the way Normless's number is connected: the number registered on
+ * the Cloud API in the business's own Meta account, and a permanent System User token for it. Needs
+ * no Tech Provider review. The token is sent once and kept encrypted on the server.
+ */
+function TokenConnect({ onConnected }) {
+  const apiFetch = useApi()
+  const brand = useWaBrand()
+  const toast = useToast()
+  const [open, setOpen] = useState(false)
+  const [form, setForm] = useState({ phone_number_id: '', waba_id: '', token: '', pin: '' })
+  const [busy, setBusy] = useState(false)
+  const set = (k) => (e) => setForm(f => ({ ...f, [k]: e.target.value.trim() }))
+
+  const submit = async (e) => {
+    e.preventDefault()
+    setBusy(true)
+    const r = await apiFetch(`${brand.api}/connect/token`, { method: 'POST', body: JSON.stringify(form) })
+    setBusy(false)
+    if (!r || r.error) return toast.error(r?.error || 'Could not connect', { duration: 0 })
+    setForm({ phone_number_id: '', waba_id: '', token: '', pin: '' })
+    setOpen(false)
+    toast.success(`Connected ${r.connection?.display_phone_number || 'the number'}${r.connection?.registered ? ' and registered it' : ''}`)
+    onConnected()
+  }
+
+  return (
+    <section className="was-card">
+      <div className="was-card-head">
+        <h3>Connect with a token instead</h3>
+        {!open && <button type="button" className="btn btn-secondary btn-sm" onClick={() => setOpen(true)}>Use a token</button>}
+      </div>
+      <p className="was-hint" style={{ margin: 0 }}>
+        The way Normless’s number is connected, with no Meta review. The number must be on the Cloud API in {brand.name}’s own Meta business
+        account — which takes it off the WhatsApp Business app on the phone: from then on its chats are answered here.
+      </p>
+      {open && (
+        <form className="was-token-form" onSubmit={submit}>
+          <ol className="wim-steps">
+            <li>In <b>WhatsApp Manager › Phone numbers › Add phone number</b>, add the number and verify it by SMS or call. (If it is on the WhatsApp Business app, delete the account in the app first — Settings › Account › Delete account — after the last backup.)</li>
+            <li>In <b>Business Settings › System users</b>, make an admin system user, give it the {brand.name} app and the WhatsApp account, and generate a token that never expires with <i>whatsapp_business_messaging</i> and <i>whatsapp_business_management</i>.</li>
+            <li>Copy the two IDs from the app’s <b>WhatsApp › API Setup</b> page, and pick a six-digit PIN for the number.</li>
+          </ol>
+          <div className="was-token-grid">
+            <label className="input-group"><span>Phone number ID</span>
+              <input required inputMode="numeric" value={form.phone_number_id} onChange={set('phone_number_id')} placeholder="1234567890123456" />
+            </label>
+            <label className="input-group"><span>WhatsApp Business Account ID</span>
+              <input required inputMode="numeric" value={form.waba_id} onChange={set('waba_id')} placeholder="1234567890123456" />
+            </label>
+            <label className="input-group was-token-wide"><span>Permanent access token</span>
+              <input required type="password" autoComplete="off" value={form.token} onChange={set('token')} placeholder="EAAG…" />
+            </label>
+            <label className="input-group"><span>Two-step PIN <small>(first time only)</small></span>
+              <input inputMode="numeric" maxLength={6} value={form.pin} onChange={set('pin')} placeholder="6 digits" />
+            </label>
+          </div>
+          <div className="was-inline">
+            <button type="submit" className="btn btn-primary" disabled={busy}>{busy ? 'Checking with Meta…' : 'Connect'}</button>
+            <button type="button" className="btn btn-secondary" onClick={() => setOpen(false)}>Cancel</button>
+          </div>
+        </form>
+      )}
+    </section>
+  )
+}
+
 /** Meta's JavaScript SDK, loaded once, the first time somebody connects. */
 let fbReady = null
 function loadFacebookSdk(appId, version) {
@@ -908,6 +975,8 @@ function ConnectTab() {
           {conn && <button type="button" className="btn btn-secondary" onClick={disconnect}>Disconnect</button>}
         </div>
       </section>
+
+      <TokenConnect onConnected={load} />
 
       {conn?.coexistence && (
         <section className="was-card">
