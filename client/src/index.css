@@ -2676,6 +2676,7 @@ html, body { max-width: 100%; overflow-x: hidden; }
    makes it grow to fill the sidebar, taking its magnifier down to the middle of the empty space. */
 .wa-search { margin: 0; flex: none; }
 .wa-threads { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1; }
+.wa-threads-more { display: flex; justify-content: center; padding: 10px 0 14px; }
 .wa-thread {
   display: flex; gap: 10px; width: 100%; text-align: left; padding: 10px; border: none; cursor: pointer;
   border-radius: var(--radius-md); background: none; color: inherit; font: inherit;

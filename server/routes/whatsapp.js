@@ -863,12 +863,34 @@ router.get('/conversations', async (req, res) => {
                          OR k.phone LIKE $${i + 1} ${byOrder})`);
         }
 
+        // The next page starts after the last chat of the one before: the list is newest first,
+        // chats with no messages last. The time travels as text so no time zone touches it.
+        const beforeId = parseInt(req.query.before_id, 10);
+        const paging = Number.isFinite(beforeId);
+        if (paging) {
+            const beforeAt = trim(req.query.before_at);
+            params.push(beforeId);
+            const id = `$${params.length}`;
+            if (beforeAt) {
+                params.push(beforeAt);
+                const at = `$${params.length}::timestamp`;
+                where.push(`(c.last_message_at < ${at} OR (c.last_message_at = ${at} AND c.id < ${id}) OR c.last_message_at IS NULL)`);
+            } else {
+                where.push(`(c.last_message_at IS NULL AND c.id < ${id})`);
+            }
+        }
         const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 60, 1), 200);
         const rows = await db.query(
-            `SELECT ${LIST_FIELDS} ${LIST_FROM}
+            `SELECT ${LIST_FIELDS}, c.last_message_at::text AS page_at ${LIST_FROM}
               WHERE ${where.join(' AND ')}
               ORDER BY c.last_message_at DESC NULLS LAST, c.id DESC
               LIMIT ${limit}`, params);
+        const lastRow = rows.rows[rows.rows.length - 1];
+        const next = rows.rows.length === limit ? { before_at: lastRow.page_at || '', before_id: lastRow.id } : null;
+        const muted = await mutedFor(req, rows.rows.map(r => r.id));
+        const shaped = rows.rows.map(({ page_at, ...r }) => ({ ...shapeConversation(r), muted: muted.has(r.id) }));
+        // A further page is only more chats: the counts came with the first.
+        if (paging) return res.json({ conversations: shaped, next });
 
         // The counts the filter chips show, over everything this person can see.
         const tallyParams = [];
@@ -893,14 +915,14 @@ router.get('/conversations', async (req, res) => {
                     COUNT(*) FILTER (WHERE c.status = 'closed')::int AS closed
                ${LIST_FROM} WHERE ${vis}`, tallyParams);
 
-        const muted = await mutedFor(req, rows.rows.map(r => r.id));
         // How many chats are at each lead status (Crewfit), over everything this person can see.
         const statusParams = [];
         const statusVis = visibility(req, statusParams);
         const byStatus = req.waLine.brand === 'crewfit' ? (await db.query(
             `SELECT COALESCE(l.status, 'none') AS status, COUNT(*)::int AS n ${LIST_FROM} WHERE ${statusVis} GROUP BY 1`, statusParams)).rows : [];
         res.json({
-            conversations: rows.rows.map(r => ({ ...shapeConversation(r), muted: muted.has(r.id) })),
+            conversations: shaped,
+            next,
             tally: { ...tally.rows[0], unread: Number(tally.rows[0].unread) || 0 },
             statusCounts: Object.fromEntries(byStatus.map(x => [x.status, x.n])),
         });

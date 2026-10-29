@@ -207,6 +207,13 @@ const LEAD_COLUMN = { lead_company: 'company', lead_notes: 'notes' }
  * three-second poll of a handful of rows is cheaper to run and far cheaper to reason about than
  * the connection handling a push would need; a message lands here within a tick of arriving.
  */
+/** Whether chat a comes after chat b in the list: older last message, chats with none at the end. */
+const olderThan = (a, b) => {
+  const ta = a.last_message_at ? new Date(a.last_message_at).getTime() : -Infinity
+  const tb = b.last_message_at ? new Date(b.last_message_at).getTime() : -Infinity
+  return ta < tb || (ta === tb && a.id < b.id)
+}
+
 export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
   // Crewfit's inbox or Normless's: the same page, each brand's own number and API. Leads,
   // orders, quotes, the catalogue and the menu are Crewfit's alone.
@@ -326,17 +333,63 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
 
   /* ── The thread list ─────────────────────────────────────────────────────────────────── */
 
-  const loadConversations = async () => {
+  const listQuery = () => {
     const qs = new URLSearchParams({ filter, status: 'open' })
     if (term) qs.set('search', term)
     if (statusFilter) qs.set('lead_status', statusFilter)
+    return qs
+  }
+  // Which filters the list on screen was loaded for: a refresh with the same ones keeps the pages
+  // already scrolled through, a change of filter starts the list again.
+  const listKey = useRef('')
+  const conversationsRef = useRef([])
+  conversationsRef.current = conversations
+  const loadConversations = async () => {
+    const qs = listQuery()
+    const key = qs.toString()
     const r = await apiFetch(`${API}/conversations?${qs}`)
     if (r && !r.error) {
-      setConversations(r.conversations || [])
+      const head = r.conversations || []
+      const same = listKey.current === key
+      listKey.current = key
+      if (!same || conversationsRef.current.length <= head.length) {
+        setConversations(head)
+        setNextPage(r.next || null)
+      } else {
+        // The first page, refreshed, then the older chats already loaded below it.
+        const ids = new Set(head.map(c => c.id))
+        const last = head[head.length - 1]
+        setConversations(prev => [...head, ...prev.filter(c => !ids.has(c.id) && (!last || olderThan(c, last)))])
+      }
       setTally(r.tally || { open: 0, unassigned: 0, unread: 0 })
       setStatusCounts(r.statusCounts || {})
     }
     setLoading(false)
+  }
+
+  // The next 60 chats, when the list is scrolled near its end.
+  const [nextPage, setNextPage] = useState(null)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const loadMore = async () => {
+    if (!nextPage || loadingMore) return
+    setLoadingMore(true)
+    const qs = listQuery()
+    qs.set('before_id', String(nextPage.before_id))
+    qs.set('before_at', nextPage.before_at || '')
+    const key = listQuery().toString()
+    const r = await apiFetch(`${API}/conversations?${qs}`)
+    if (r && !r.error && listKey.current === key) {
+      setConversations(prev => {
+        const have = new Set(prev.map(c => c.id))
+        return [...prev, ...(r.conversations || []).filter(c => !have.has(c.id))]
+      })
+      setNextPage(r.next || null)
+    }
+    setLoadingMore(false)
+  }
+  const onListScroll = (e) => {
+    const el = e.currentTarget
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 400) loadMore()
   }
 
   useEffect(() => {
@@ -1181,7 +1234,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                 : 'Nothing here yet. A customer messaging the business number starts a thread.'}
             </p>
           ) : (
-            <ul className="wa-threads">
+            <ul className="wa-threads" onScroll={onListScroll}>
               {conversations.map(c => {
                 const s = statusLook(c.lead_status)
                 return (
@@ -1215,6 +1268,13 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                   </li>
                 )
               })}
+              {nextPage && (
+                <li className="wa-threads-more">
+                  <button type="button" className="mini-btn" disabled={loadingMore} onClick={loadMore}>
+                    {loadingMore ? 'Loading…' : 'Load older chats'}
+                  </button>
+                </li>
+              )}
             </ul>
           )}
         </aside>
