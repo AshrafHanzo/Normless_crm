@@ -125,6 +125,26 @@ async function main() {
     console.log(JSON.stringify({ brand, line: line.id, dry_run: dryRun, ...totals, statuses_after: resulting, assigned, labels }, null, 1));
     if (dryRun) return;
 
+    // --replies-only: just link the replies to the messages they quote, on chats already imported.
+    // The ids are worked out exactly as the import made them, so nothing else is touched.
+    if (args.includes('--replies-only')) {
+        const crypto = require('crypto');
+        let linked = 0;
+        for (const c of picked) {
+            const phone = wa.normalisePhone(c.phone);
+            const id = (m) => `import:${crypto.createHash('sha1').update([line.id, phone, m.at, 'backup', m.key].join('|')).digest('hex').slice(0, 32)}`;
+            const byKey = new Map(c.messages.map(m => [m.key, m]));
+            for (const m of c.messages) {
+                const q = m.reply_key && byKey.get(m.reply_key);
+                if (!q) continue;
+                const r = await db.query('UPDATE wa_messages SET reply_to = $2 WHERE wamid = $1 AND reply_to IS DISTINCT FROM $2', [id(m), id(q)]);
+                linked += r.rowCount;
+            }
+        }
+        console.log(`Linked ${linked} replies.`);
+        return;
+    }
+
     const { importChat, quietThread } = require('../routes/whatsapp');
     // As text in the database's own clock, to compare with created_at (a timestamp without zone).
     const started = (await db.query('SELECT LOCALTIMESTAMP::text AS t')).rows[0].t;
@@ -137,7 +157,7 @@ async function main() {
                     return importChat({
                         phone, name: c.name, actor: 'import', source: 'the WhatsApp Business app',
                         messages: c.messages.map(m => ({
-                            at: m.at, inbound: !m.from_me, text: m.text, key: ['backup', m.key],
+                            at: m.at, inbound: !m.from_me, text: m.text, key: ['backup', m.key], replyKey: m.reply_key ? ['backup', m.reply_key] : null,
                             missing: m.missing ? m.type : null,
                             file: m.file ? { name: m.name, mime: m.mime || chatImport.mimeOf(m.name), read: () => fs.promises.readFile(path.join(bundle, m.file)) } : null,
                         })),

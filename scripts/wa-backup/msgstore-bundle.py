@@ -98,12 +98,13 @@ def main():
     rows = con.execute('''
         SELECT m.chat_row_id, m.from_me, m.key_id, m.timestamp, m.message_type, m.text_data,
                mm.file_path, mm.mime_type, mm.media_name, mm.media_caption, mm.file_size,
-               l.latitude, l.longitude, l.place_name, v.vcard, ad.greeting_message_body, ad.title
+               l.latitude, l.longitude, l.place_name, v.vcard, ad.greeting_message_body, ad.title, mq.key_id
           FROM message m
           LEFT JOIN message_media mm ON mm.message_row_id = m._id
           LEFT JOIN message_location l ON l.message_row_id = m._id
           LEFT JOIN message_vcard v ON v.message_row_id = m._id
           LEFT JOIN message_external_ad_content ad ON ad.message_row_id = m._id
+          LEFT JOIN message_quoted mq ON mq.message_row_id = m._id
          WHERE m.timestamp > 0
          ORDER BY m.chat_row_id, m.timestamp, m._id''')
 
@@ -111,7 +112,7 @@ def main():
     totals = {'messages': 0, 'media': 0, 'media_missing': 0, 'ad_replies': 0}
     skipped = {'not_one_to_one': 0, 'kinds_left_out': 0}
     for (chat_id, from_me, key, ts, kind, text, fpath, mime, mname, caption, size,
-         lat, lng, place, vcard, greeting, ad_title) in rows:
+         lat, lng, place, vcard, greeting, ad_title, quoted_key) in rows:
         phone = chat_phone.get(chat_id)
         if not phone:
             skipped['not_one_to_one'] += 1
@@ -154,6 +155,9 @@ def main():
         if not msg['text'] and not msg.get('file') and not msg.get('missing'):
             skipped['kinds_left_out'] += 1
             continue
+        if quoted_key:
+            msg['reply_key'] = quoted_key          # the message this one replied to, by its WhatsApp id
+            totals['replies'] = totals.get('replies', 0) + 1
         by_phone.setdefault(phone, []).append(msg)
         totals['messages'] += 1
 

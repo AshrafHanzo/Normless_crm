@@ -158,13 +158,15 @@ async function checkToken({ fresh = false } = {}) {
 }
 
 /** Plain text to a customer. Returns the id WhatsApp filed it under. */
-async function sendText(phone, text, { preview = true } = {}) {
+async function sendText(phone, text, { preview = true, replyTo = null } = {}) {
     const data = await graph(`/${PHONE_ID()}/messages`, {
         method: 'POST',
         body: {
             messaging_product: 'whatsapp',
             recipient_type: 'individual',
             to: phone,
+            // Shown on their phone as a reply to that message, the way WhatsApp quotes one.
+            ...(replyTo ? { context: { message_id: replyTo } } : {}),
             type: 'text',
             text: { body: String(text || '').slice(0, 4096), preview_url: preview },
         },
@@ -204,7 +206,7 @@ async function sendImageLink(phone, link, caption = '') {
  * Two steps because Meta will not take a file and a message in one request: the file is uploaded,
  * which gives an id that is good for thirty days, and the message then refers to that id.
  */
-async function sendMedia(phone, { filePath, mime, filename, caption = '' }) {
+async function sendMedia(phone, { filePath, mime, filename, caption = '', replyTo = null }) {
     if (String(mime).startsWith('image/')) ({ filePath, mime, filename } = await whatsappImage(filePath, mime, filename));
     const id = await uploadMedia({ filePath, mime, filename });
     const kind = mime.startsWith('image/') ? 'image'
@@ -215,7 +217,7 @@ async function sendMedia(phone, { filePath, mime, filename, caption = '' }) {
     if (kind === 'document' && filename) payload.filename = filename;
     const data = await graph(`/${PHONE_ID()}/messages`, {
         method: 'POST',
-        body: { messaging_product: 'whatsapp', recipient_type: 'individual', to: phone, type: kind, [kind]: payload },
+        body: { messaging_product: 'whatsapp', recipient_type: 'individual', to: phone, ...(replyTo ? { context: { message_id: replyTo } } : {}), type: kind, [kind]: payload },
     });
     return { wamid: data?.messages?.[0]?.id || null, kind };
 }

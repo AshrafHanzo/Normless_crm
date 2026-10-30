@@ -216,6 +216,8 @@ async function receiveMessage(message, profileName) {
 
     if (!inserted.rows[0]) return;     // Meta sent it twice; the first one is already here
     const messageId = inserted.rows[0].id;
+    // They swiped to reply to one of the messages in the chat.
+    if (message.context?.id) await db.query('UPDATE wa_messages SET reply_to = $2 WHERE id = $1', [messageId, message.context.id]);
     // Was this the opening message? Only then does a menu start; mid-conversation it would be
     // an interruption.
     const isFirst = (await db.query(
@@ -419,6 +421,7 @@ async function receiveEcho(echo) {
          ON CONFLICT (wamid) DO NOTHING RETURNING id`,
         [conv.id, echo.id, echo.type || 'text', body, JSON.stringify(interactivePayload(echo)), tsOf(echo)])).rows[0];
     if (!row) return;
+    if (echo.context?.id) await db.query('UPDATE wa_messages SET reply_to = $2 WHERE id = $1', [row.id, echo.context.id]);
     await touchThread(conv.id, tsOf(echo), body);
     if (MEDIA_TYPES.includes(echo.type) && echo[echo.type]?.id) {
         try {
@@ -736,8 +739,11 @@ const LAST_DIRECTION = LAST_MESSAGE('direction');
 // A chat brought in from the phone's backup whose customer is still waiting on us: the last word is
 // theirs, said in the last three days, and nobody has written from here since. It needs a person
 // whoever it is assigned to. Older ones are dead leads: kept, but not flagged.
+// Somebody said the customer's last word needs no reply ("ok", "thanks"): until they write again,
+// the chat is not waiting.
+const NOT_SETTLED = `(c.settled_msg_id IS NULL OR ${LAST_MESSAGE('id')} <> c.settled_msg_id)`;
 const BACKUP_WAITING = `(${LAST_MESSAGE('wamid')} LIKE 'import:%' AND ${LAST_DIRECTION} = 'in'
-                          AND ${LAST_MESSAGE('sent_at')} > LOCALTIMESTAMP - INTERVAL '3 days')`;
+                          AND ${LAST_MESSAGE('sent_at')} > LOCALTIMESTAMP - INTERVAL '3 days' AND ${NOT_SETTLED})`;
 /** The date range picked in the inbox's header, on when each chat last moved. All time when unset. */
 function lastMessageRange(req, params) {
     const day = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) : null);
@@ -753,7 +759,8 @@ const UNREPLIED = `(SELECT COUNT(*) FROM wa_messages m WHERE m.conversation_id =
                       AND (COALESCE(m.sent_at, m.created_at), m.id) > ALL (
                           SELECT COALESCE(o.sent_at, o.created_at), o.id FROM wa_messages o
                            WHERE o.conversation_id = c.id AND o.direction = 'out' AND o.sender_type IN ('user', 'phone')
-                           ORDER BY COALESCE(o.sent_at, o.created_at) DESC, o.id DESC LIMIT 1))::int`;
+                           ORDER BY COALESCE(o.sent_at, o.created_at) DESC, o.id DESC LIMIT 1)
+                      AND (c.settled_msg_id IS NULL OR (COALESCE(m.sent_at, m.created_at), m.id) > (c.settled_at, c.settled_msg_id)))::int`;
 // A backed-up chat that went quiet more than three days ago is a dead lead: no count on it. Every
 // other chat counts until somebody answers.
 const BACKUP_STALE = `(${LAST_MESSAGE('wamid')} LIKE 'import:%' AND ${LAST_MESSAGE('sent_at')} <= LOCALTIMESTAMP - INTERVAL '3 days')`;
@@ -872,7 +879,7 @@ router.get('/conversations', async (req, res) => {
         } else if (filter === 'waiting') {
             // "Needs a person": a person is answering it, and the customer spoke last. On Crewfit,
             // only chats nobody has taken yet — the queue somebody picks up from.
-            where.push(`c.status = 'open' AND c.mode = 'human' AND ${LAST_DIRECTION} = 'in'${req.waLine.brand === 'crewfit' ? ` AND (c.assigned_to IS NULL OR ${BACKUP_WAITING})` : ''}`);
+            where.push(`c.status = 'open' AND c.mode = 'human' AND ${LAST_DIRECTION} = 'in' AND ${NOT_SETTLED}${req.waLine.brand === 'crewfit' ? ` AND (c.assigned_to IS NULL OR ${BACKUP_WAITING})` : ''}`);
         } else if (filter === 'bot') {
             where.push(`c.mode IN ('flow', 'ai')`);
         } else if (filter === 'ticket') {
@@ -953,7 +960,7 @@ router.get('/conversations', async (req, res) => {
                     -- A chat this person muted adds nothing to their badge.
                     COALESCE(SUM(c.unread_count) FILTER (WHERE NOT EXISTS (SELECT 1 FROM wa_conversation_mutes mu
                               WHERE mu.conversation_id = c.id AND mu.username = ${me})), 0) AS unread,
-                    COUNT(*) FILTER (WHERE c.status = 'open' AND c.mode = 'human' AND ${LAST_DIRECTION} = 'in'${req.waLine.brand === 'crewfit' ? ` AND (c.assigned_to IS NULL OR ${BACKUP_WAITING})` : ''})::int AS waiting,
+                    COUNT(*) FILTER (WHERE c.status = 'open' AND c.mode = 'human' AND ${LAST_DIRECTION} = 'in' AND ${NOT_SETTLED}${req.waLine.brand === 'crewfit' ? ` AND (c.assigned_to IS NULL OR ${BACKUP_WAITING})` : ''})::int AS waiting,
                     -- Unread customer messages behind each of Crewfit's chips (muted chats left out).
                     COALESCE(SUM(c.unread_count) FILTER (WHERE c.assigned_to IS NULL AND NOT EXISTS (SELECT 1 FROM wa_conversation_mutes mu
                               WHERE mu.conversation_id = c.id AND mu.username = ${me})), 0)::int AS unread_unassigned,
@@ -1158,8 +1165,12 @@ async function importChat({ phone, name, messages, actor, source }) {
         `DELETE FROM wa_messages WHERE conversation_id = $1 AND wamid LIKE 'import:%' AND sent_at BETWEEN $2::timestamp AND $3::timestamp`,
         [thread.id, first, last])).rowCount;
     let imported = 0, media = 0, latest = null, missingMedia = 0;
+    const wamidOf = (m) => `import:${crypto.createHash('sha1').update([lineId(), phone, m.at, ...m.key].join('|')).digest('hex').slice(0, 32)}`;
+    // A reply names the message it answered by that message's key; both are in this chat.
+    const byKey = new Map(messages.map(m => [JSON.stringify(m.key), m]));
     for (const m of messages) {
-        const wamid = `import:${crypto.createHash('sha1').update([lineId(), phone, m.at, ...m.key].join('|')).digest('hex').slice(0, 32)}`;
+        const wamid = wamidOf(m);
+        const quoted = m.replyKey && byKey.get(JSON.stringify(m.replyKey));
         let mediaUrl = null, mime = null, mediaName = null, type = 'text';
         if (m.missing) {
             // A file the source left out: shown as a photo (or video…) that isn't here.
@@ -1180,11 +1191,11 @@ async function importChat({ phone, name, messages, actor, source }) {
             }
         }
         const r = await db.query(
-            `INSERT INTO wa_messages (conversation_id, wamid, direction, sender_type, type, body, media_url, media_mime, media_name, status, sent_at, created_at)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11)
+            `INSERT INTO wa_messages (conversation_id, wamid, direction, sender_type, type, body, media_url, media_mime, media_name, status, sent_at, created_at, reply_to)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11,$12)
              ON CONFLICT (wamid) DO NOTHING RETURNING id`,
             [thread.id, wamid, m.inbound ? 'in' : 'out', m.inbound ? 'customer' : 'phone', type, m.text || null,
-                mediaUrl, mediaUrl ? mime : null, mediaName, m.inbound ? 'delivered' : 'read', m.at]);
+                mediaUrl, mediaUrl ? mime : null, mediaName, m.inbound ? 'delivered' : 'read', m.at, quoted ? wamidOf(quoted) : null]);
         if (r.rows[0]) { imported++; if (mediaUrl) media++; }
         latest = m;
         // Crewfit: what the customer sent (logo, quantity, GST, a product) qualifies the lead,
@@ -1255,6 +1266,7 @@ async function loadConversation(req, id) {
     const params = [id];
     const r = await db.query(
         `SELECT ${LIST_FIELDS}, c.flow_id, c.flow_step, c.flow_data, c.created_at,
+                c.settled_msg_id, c.settled_at::text AS settled_at, l.products,
                 l.branding, l.notes AS lead_notes, l.email AS lead_email, l.logo_url,
                 l.billing_name, l.billing_address, l.delivery_address, l.contact_person,
                 l.billing_mobile, l.billing_email, l.gst_number,
@@ -1291,12 +1303,16 @@ router.get('/conversations/:id/messages', async (req, res) => {
         }
         // In the order they were said — imported history arrives after newer messages, so the
         // save order is not the conversation's order. The latest 500; polling asks for new ids.
+        // A reply carries the message it answers, in brief, so the bubble can quote it.
+        const quoted = `(SELECT json_build_object('id', q.id, 'direction', q.direction, 'sender_type', q.sender_type, 'type', q.type,
+                                'body', LEFT(q.body, 300), 'media_name', q.media_name, 'media_mime', q.media_mime, 'media_url', q.media_url)
+                           FROM wa_messages q WHERE q.wamid = wa_messages.reply_to AND q.conversation_id = wa_messages.conversation_id LIMIT 1) AS quoted`;
         const rows = await db.query(Number.isFinite(after)
             ? `SELECT id, wamid, direction, sender_type, sender_user, type, body, media_url,
-                      media_mime, media_name, interactive_payload, status, error, sent_at
+                      media_mime, media_name, interactive_payload, status, error, sent_at, reply_to, ${quoted}
                  FROM wa_messages WHERE ${where} ORDER BY id ASC LIMIT 500`
             : `SELECT * FROM (SELECT id, wamid, direction, sender_type, sender_user, type, body, media_url,
-                      media_mime, media_name, interactive_payload, status, error, sent_at
+                      media_mime, media_name, interactive_payload, status, error, sent_at, reply_to, ${quoted}
                  FROM wa_messages WHERE ${where} ORDER BY COALESCE(sent_at, created_at) DESC, id DESC LIMIT 500) t
                ORDER BY COALESCE(sent_at, '-infinity'::timestamp) ASC, id ASC`, params);
         res.json({
@@ -1350,6 +1366,15 @@ router.post('/conversations/:id/messages', takeFile, async (req, res) => {
         const body = trim(req.body?.body);
         const file = req.file;
         if (!body && !file) return res.status(400).json({ error: 'Nothing to send' });
+        // Answering one particular message: WhatsApp needs that message's own id, so only one
+        // that went through WhatsApp (not one brought in from a backup) can be quoted.
+        let replyTo = null;
+        if (req.body?.reply_to) {
+            const q = (await db.query(`SELECT wamid FROM wa_messages WHERE id = $1 AND conversation_id = $2`,
+                [Number(req.body.reply_to) || 0, conversation.id])).rows[0];
+            if (!q?.wamid || q.wamid.startsWith('import:')) return res.status(400).json({ error: 'That message came from the phone backup — WhatsApp can only quote messages sent through it. Send without the quote.' });
+            replyTo = q.wamid;
+        }
 
         let wamid = null;
         let type = 'text';
@@ -1361,12 +1386,13 @@ router.post('/conversations/:id/messages', takeFile, async (req, res) => {
                     mime: file.mimetype,
                     filename: file.originalname,
                     caption: body || '',
+                    replyTo,
                 });
                 wamid = sent.wamid;
                 type = sent.kind;
                 mediaUrl = `/uploads/whatsapp/outgoing/${path.basename(file.path)}`;
             } else {
-                wamid = await wa.sendText(conversation.phone, body);
+                wamid = await wa.sendText(conversation.phone, body, { replyTo });
             }
         } catch (err) {
             if (err instanceof wa.WhatsAppError) {
@@ -1377,12 +1403,15 @@ router.post('/conversations/:id/messages', takeFile, async (req, res) => {
 
         const row = await db.query(
             `INSERT INTO wa_messages (conversation_id, wamid, direction, sender_type, sender_user,
-                                      type, body, media_url, media_mime, media_name, status)
-             VALUES ($1,$2,'out','user',$3,$4,$5,$6,$7,$8,'sent')
+                                      type, body, media_url, media_mime, media_name, status, reply_to)
+             VALUES ($1,$2,'out','user',$3,$4,$5,$6,$7,$8,'sent',$9)
              RETURNING id, wamid, direction, sender_type, sender_user, type, body, media_url,
-                       media_mime, media_name, status, error, sent_at`,
+                       media_mime, media_name, status, error, sent_at, reply_to,
+                       (SELECT json_build_object('id', q.id, 'direction', q.direction, 'sender_type', q.sender_type, 'type', q.type,
+                               'body', LEFT(q.body, 300), 'media_name', q.media_name, 'media_mime', q.media_mime, 'media_url', q.media_url)
+                          FROM wa_messages q WHERE q.wamid = $9 AND q.conversation_id = $1 LIMIT 1) AS quoted`,
             [conversation.id, wamid, req.user?.username || null, type, body,
-                mediaUrl, file?.mimetype || null, file?.originalname || null]);
+                mediaUrl, file?.mimetype || null, file?.originalname || null, replyTo]);
 
         await db.query(
             `UPDATE wa_conversations
@@ -1399,6 +1428,52 @@ router.post('/conversations/:id/messages', takeFile, async (req, res) => {
     } catch (err) {
         console.error('whatsapp send error:', err);
         res.status(500).json({ error: 'Could not send that message' });
+    }
+});
+
+/**
+ * A short last word — "ok", "thanks", "okay bro", a thumbs-up — that needs no answer. One or two
+ * words, or only emoji; a reaction or a sticker. Anything longer is somebody waiting for a reply.
+ */
+function isAcknowledgement(m) {
+    if (['reaction', 'sticker'].includes(m.type)) return true;
+    if (m.type !== 'text' && m.type !== 'button') return false;
+    const words = String(m.body || '').replace(/\u200d|\ufe0f/g, '').replace(/[\p{P}\p{S}\p{Extended_Pictographic}]/gu, ' ').trim().split(/\s+/).filter(Boolean);
+    return words.length <= 2 && words.join(' ').length <= 20;
+}
+
+/**
+ * "No reply needed": the customer's messages since we last answered were only a thank-you, so the
+ * chat stops counting as waiting — until they write again. Refused for anything longer.
+ */
+router.post('/conversations/:id/settle', async (req, res) => {
+    try {
+        const conversation = await loadConversation(req, req.params.id);
+        if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
+        const waiting = (await db.query(
+            `SELECT m.id, m.type, m.body, COALESCE(m.sent_at, m.created_at) AS at FROM wa_messages m
+              WHERE m.conversation_id = $1 AND m.direction = 'in'
+                AND (COALESCE(m.sent_at, m.created_at), m.id) > ALL (
+                    SELECT COALESCE(o.sent_at, o.created_at), o.id FROM wa_messages o
+                     WHERE o.conversation_id = $1 AND o.direction = 'out' AND o.sender_type IN ('user', 'phone')
+                     ORDER BY COALESCE(o.sent_at, o.created_at) DESC, o.id DESC LIMIT 1)
+                AND ($2::int IS NULL OR (COALESCE(m.sent_at, m.created_at), m.id) > ($3::timestamp, $2::int))
+              ORDER BY COALESCE(m.sent_at, m.created_at), m.id`,
+            [conversation.id, conversation.settled_msg_id || null, conversation.settled_at || null])).rows;
+        if (!waiting.length) return res.status(400).json({ error: 'Nothing is waiting for a reply in this chat' });
+        if (!waiting.every(isAcknowledgement)) {
+            return res.status(400).json({ error: 'Only for a short thank-you like “ok” or “thanks” — the customer said more than that, so answer them instead' });
+        }
+        const last = waiting[waiting.length - 1];
+        await db.query(
+            `UPDATE wa_conversations SET settled_msg_id = $2, settled_at = $3, settled_by = $4, unread_count = 0, updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
+            [conversation.id, last.id, last.at, req.user?.username || null]);
+        await orders.logActivity({ conversationId: conversation.id, kind: 'message', actor: req.user?.username,
+            body: `${String(req.user?.username || 'Someone').split('@')[0]} marked “${String(last.body || last.type).slice(0, 40)}” as needing no reply` });
+        res.json({ conversation: await loadConversation(req, conversation.id) });
+    } catch (err) {
+        console.error('whatsapp settle error:', err);
+        res.status(500).json({ error: 'Could not mark that' });
     }
 });
 
@@ -1894,6 +1969,20 @@ router.patch('/leads/:id', async (req, res) => {
                 params.push(trim(body[key]));
                 sets.push(`${key} = $${params.length}`);
             }
+        }
+        // Every product the enquiry is for. The single product / quantity fields follow them, joined,
+        // for the dashboard, quotes and the assistant, which read those.
+        if ('products' in body) {
+            const items = (Array.isArray(body.products) ? body.products : [])
+                .map(p => ({ product: (trim(p?.product) || '').slice(0, 120), quantity: (trim(p?.quantity) || '').slice(0, 40) }))
+                .filter(p => p.product || p.quantity).slice(0, 30);
+            params.push(items.length ? JSON.stringify(items) : null);
+            sets.push(`products = $${params.length}`);
+            params.push(items.map(p => p.product).filter(Boolean).join(', ') || null);
+            sets.push(`product_interest = $${params.length}`);
+            params.push(items.length === 1 ? items[0].quantity || null
+                : items.map(p => [p.product, p.quantity].filter(Boolean).join(': ')).join(', ') || null);
+            sets.push(`quantity = $${params.length}`);
         }
         for (const key of ['quoted_amount', 'received_amount']) {
             if (key in body) {

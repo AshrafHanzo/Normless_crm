@@ -177,6 +177,27 @@ const fillFrom = (source, thread, me) => {
   }
 }
 
+/** The lead's products: the list saved with it, or the single product it had before there was one. */
+const productsOf = (t) => {
+  try {
+    const list = JSON.parse(t?.products || 'null')
+    if (Array.isArray(list) && list.length) return list.map(p => ({ product: p.product || '', quantity: p.quantity || '' }))
+  } catch { /* an old lead: one product, below */ }
+  return t?.product_interest ? [{ product: t.product_interest, quantity: t.quantity || '' }] : []
+}
+const plainQty = (q) => (/^\s*\d+\s*(pcs|pieces|nos)?\s*$/i.test(String(q || '')) ? parseInt(q, 10) : '')
+
+/**
+ * A customer's short last word — "ok", "thanks", "okay bro", a thumbs-up — that needs no answer:
+ * one or two words or only emoji, a reaction or a sticker. The server checks the same.
+ */
+const isAcknowledgement = (m) => {
+  if (['reaction', 'sticker'].includes(m.type)) return true
+  if (m.type !== 'text' && m.type !== 'button') return false
+  const words = String(m.body || '').replace(/\u200d|\ufe0f/g, '').replace(/[\p{P}\p{S}\p{Extended_Pictographic}]/gu, ' ').trim().split(/\s+/).filter(Boolean)
+  return words.length <= 2 && words.join(' ').length <= 20
+}
+
 const leadFormFrom = (t) => ({
   product_interest: t?.product_interest || '',
   quantity: t?.quantity || '',
@@ -186,6 +207,7 @@ const leadFormFrom = (t) => ({
   received_amount: t?.received_amount ?? '',
   lead_company: t?.lead_company || '',
   lead_notes: t?.lead_notes || '',
+  products: productsOf(t),
 })
 // The panel's names for these, against the lead's own columns.
 const LEAD_COLUMN = { lead_company: 'company', lead_notes: 'notes' }
@@ -211,6 +233,35 @@ const LEAD_COLUMN = { lead_company: 'company', lead_notes: 'notes' }
  * three-second poll of a handful of rows is cheaper to run and far cheaper to reason about than
  * the connection handling a push would need; a message lands here within a tick of arriving.
  */
+/** The message a reply answers, in brief, as WhatsApp shows it above the reply. */
+function QuoteBlock({ q, who }) {
+  if (!q) return <div className="wa-quote wa-quote-gone">Replying to a message that isn’t in this chat</div>
+  const mine = q.direction === 'out'
+  const what = q.body || q.media_name || ({ image: '📷 Photo', video: '🎥 Video', audio: '🎤 Voice note', document: '📄 Document', sticker: 'Sticker' }[q.type] || 'Message')
+  const jump = () => {
+    const el = document.getElementById(`wa-m-${q.id}`)
+    if (!el) return
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    el.classList.add('wa-msg-flash')
+    setTimeout(() => el.classList.remove('wa-msg-flash'), 1400)
+  }
+  return (
+    <button type="button" className={`wa-quote${mine ? ' wa-quote-mine' : ''}`} onClick={jump} title="Show that message">
+      <b>{mine ? (q.sender_type === 'bot' ? 'Menu' : 'You') : who}</b>
+      <span>{what}</span>
+    </button>
+  )
+}
+
+/** A file waiting to be sent: its picture, or its type. */
+function StagedThumb({ file }) {
+  const url = useMemo(() => (/^image\//.test(file.type) ? URL.createObjectURL(file) : null), [file])
+  useEffect(() => () => { if (url) URL.revokeObjectURL(url) }, [url])
+  if (url) return <img className="wa-tray-thumb" src={url} alt="" />
+  const ext = (file.name.split('.').pop() || 'file').slice(0, 4).toUpperCase()
+  return <span className="wa-tray-thumb wa-doc-icon">{/^audio\//.test(file.type) ? '🎤' : /^video\//.test(file.type) ? '🎥' : ext}</span>
+}
+
 /** Their WhatsApp photo where we have one, else their initials. */
 function Avatar({ who, large }) {
   // Which photo failed to load, so a new one is still tried.
@@ -259,6 +310,9 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
   const [agents, setAgents] = useState([])
   const [statuses, setStatuses] = useState([])
   const [draft, setDraft] = useState('')
+  const [staged, setStaged] = useState([])               // files waiting to go with the next send
+  const [replyTo, setReplyTo] = useState(null)           // the message this reply answers
+  const [dragging, setDragging] = useState(false)
   const [quickReplies, setQuickReplies] = useState([])
   const [products, setProducts] = useState([])
   const [pop, setPop] = useState(null)                 // 'snippets' | 'templates' | 'catalogue'
@@ -705,21 +759,73 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
   const dismissPending = (id) => setPending(list => list.filter(x => x.id !== id))
   const busyWith = (key) => pending.some(x => x.retryKey === key && !x.error)
 
-  const send = async (file = null) => {
-    if (!thread) return
-    const body = draft.trim()
-    if (!file && !body) return
+  const sendOne = (body, file, quote) => {
     const form = new FormData()
     if (body) form.append('body', body)
     if (file) form.append('file', file)
-    // The box is cleared at once: what was typed now lives in the pending bubble.
-    setDraft('')
-    await track({
+    if (quote) form.append('reply_to', String(quote.id))
+    return track({
       label: file ? `📎 ${file.name}${body ? ` — ${body}` : ''}` : body,
       stages: file ? [[0, 'Uploading the file…'], [2500, 'Sending to WhatsApp…']] : [[0, 'Sending…']],
       run: () => apiFetch(`${API}/conversations/${thread.id}/messages`, { method: 'POST', body: form }),
       onDone: (r) => appendSent(r.message),
     })
+  }
+  /**
+   * What is typed and every file waiting, in order: one WhatsApp message each. The words go as the
+   * first file's caption (a voice note carries none, so then they go on their own first), and only
+   * the first message carries the reply.
+   */
+  const send = async () => {
+    if (!thread) return
+    const body = draft.trim()
+    const files = staged
+    if (!files.length && !body) return
+    const quote = replyTo
+    // The box is cleared at once: what was typed now lives in the pending bubbles.
+    setDraft(''); setStaged([]); setReplyTo(null)
+    if (!files.length) return sendOne(body, null, quote)
+    const captionable = !/^audio\//.test(files[0].type)
+    if (body && !captionable) await sendOne(body, null, quote)
+    for (const [i, f] of files.entries()) {
+      await sendOne(i === 0 && captionable ? body : '', f, i === 0 && (captionable || !body) ? quote : null)
+    }
+  }
+  const MAX_FILES = 10
+  const stage = (list) => {
+    const files = [...(list || [])].filter(f => f && f.size > 0)
+    if (!files.length) return
+    setStaged(s => {
+      const next = [...s, ...files].slice(0, MAX_FILES)
+      if (s.length + files.length > MAX_FILES) toast.error(`Up to ${MAX_FILES} files at a time`)
+      return next
+    })
+  }
+  // Dropped on the chat, or pasted into the reply box (a screenshot): waits beside the box.
+  const dropProps = thread?.window_open ? {
+    onDragOver: (e) => { if ([...(e.dataTransfer?.types || [])].includes('Files')) { e.preventDefault(); setDragging(true) } },
+    onDragLeave: (e) => { if (!e.currentTarget.contains(e.relatedTarget)) setDragging(false) },
+    onDrop: (e) => { e.preventDefault(); setDragging(false); stage(e.dataTransfer?.files) },
+  } : {}
+
+  // The customer's messages since a person last answered (and since the last "no reply needed"),
+  // when every one of them is only a thank-you: the last of them, for the bar above the reply box.
+  const settleable = (() => {
+    if (!cf || !thread) return null
+    let lastHuman = -1
+    messages.forEach((m, i) => { if (m.direction === 'out' && ['user', 'phone'].includes(m.sender_type)) lastHuman = i })
+    const waiting = messages.slice(lastHuman + 1).filter(m => m.direction === 'in' && (!thread.settled_msg_id || m.id > thread.settled_msg_id))
+    if (!waiting.length || !waiting.every(isAcknowledgement)) return null
+    return waiting[waiting.length - 1]
+  })()
+
+  /** "No reply needed": the customer's last word was a thank-you. */
+  const settle = async () => {
+    const r = await apiFetch(`${API}/conversations/${thread.id}/settle`, { method: 'POST' })
+    if (!r || r.error) return toast.error(r?.error || 'Could not mark that')
+    setThread(r.conversation)
+    toast.success('Marked — no reply needed')
+    loadConversations()
   }
 
   const onKeyDown = (e) => {
@@ -733,6 +839,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
       }
     }
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() }
+    if (e.key === 'Escape' && replyTo) setReplyTo(null)
   }
 
   // "/" at the start of the reply box opens the saved replies, filtered by what follows it.
@@ -868,11 +975,12 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
       so: soName(user?.username),
       contact_person: thread.contact_person || thread.lead_name || thread.profile_name || '',
       wa_lead_id: thread.lead_id,
-      line_items: [{
-        product: thread.product_interest || '', color: '', printing_placement: 'Front',
+      // One line per product on the enquiry.
+      line_items: (productsOf(thread).length ? productsOf(thread) : [{ product: '', quantity: thread.quantity }]).map(p => ({
+        product: p.product || '', color: '', printing_placement: 'Front',
         printing_type: /embroid/i.test(thread.branding || '') ? 'Embroidery' : '',
-        qty, unit_price: '', product_total: '', size_breakdown: '',
-      }],
+        qty: productsOf(thread).length > 1 ? plainQty(p.quantity) : qty, unit_price: '', product_total: '', size_breakdown: '',
+      })),
     })
   }
 
@@ -1029,6 +1137,14 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
   }
 
   // Saved as each field is left, and only if it changed: no save button to forget.
+  // The product list is saved whole, once a change to it is finished.
+  const saveProducts = (_e, list = lead.products) => {
+    const clean = list.filter(p => p.product.trim() || String(p.quantity).trim())
+    setLead(l => ({ ...l, products: list }))
+    if (JSON.stringify(clean) === JSON.stringify(productsOf(thread))) return
+    saveLead({ products: clean })
+  }
+
   const saveField = (key) => {
     const was = leadFormFrom(thread)[key]
     if (String(lead[key] ?? '') === String(was ?? '')) return
@@ -1308,7 +1424,8 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
         </aside>
 
         {/* The conversation */}
-        <section className="wa-chat" aria-label="Conversation">
+        <section className="wa-chat" aria-label="Conversation" {...dropProps}>
+          {dragging && <div className="wa-drop" aria-hidden="true"><Icon name="download" size={22} /> Drop files to add them to your reply</div>}
           {!thread ? (
             <div className="wa-chat-empty">
               <Icon name="mail" size={22} />
@@ -1439,8 +1556,16 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                   return (
                     <div key={m.id}>
                       {newDay && <div className="wa-day">{day(m.sent_at)}</div>}
-                      <div className={`wa-msg${mine ? ' wa-msg-out' : ''}`}>
+                      <div className={`wa-msg${mine ? ' wa-msg-out' : ''}${replyTo?.id === m.id ? ' wa-msg-replying' : ''}`} id={`wa-m-${m.id}`}>
+                      {/* Reply to this one, as WhatsApp does: only a message that went through WhatsApp can be quoted. */}
+                      {thread.window_open && m.wamid && !String(m.wamid).startsWith('import:') && m.type !== 'call' && (
+                        <button type="button" className="wa-reply-btn" aria-label="Reply to this message" title="Reply"
+                          onClick={() => { setReplyTo(m); document.querySelector('.wa-compose-row textarea')?.focus() }}>
+                          <Icon name="reply" size={14} />
+                        </button>
+                      )}
                       <div className={`wa-bubble${mine ? ' wa-bubble-out' : ''}${m.type === 'call' ? ` wa-bubble-call${/Missed|declined|Declined|no answer|failed/.test(m.body || '') ? ' wa-bubble-call-missed' : ''}` : ''}${(m.sender_type === 'bot' || m.sender_type === 'ai') ? ' wa-bubble-bot' : ''}${m.sender_type === 'auto' ? ' wa-bubble-auto' : ''}${m.status === 'failed' ? ' wa-bubble-bad' : ''}`}>
+                        {m.reply_to && <QuoteBlock q={m.quoted} who={thread.display_name} />}
                         {m.media_url && /^image\//.test(m.media_mime || '') && (
                           <div className="wa-media-wrap">
                             <button type="button" className="wa-media-open" aria-label="Open this photo" onClick={() => openFile(m)}>
@@ -1705,18 +1830,49 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                   )}
                 </div>
 
+                {settleable && (
+                  <div className="wa-settle">
+                    <span>The customer said <b>“{settleable.body || '👍'}”</b> — nothing to answer?</span>
+                    <button type="button" className="mini-btn" onClick={settle}><Icon name="check" size={12} /> No reply needed</button>
+                  </div>
+                )}
+                {thread.window_open && (replyTo || staged.length > 0) && (
+                  <div className="wa-tray">
+                    {replyTo && (
+                      <div className="wa-tray-quote">
+                        <QuoteBlock q={replyTo} who={thread.display_name} />
+                        <button type="button" className="btn-icon" aria-label="Stop replying to this message" title="Cancel (Esc)" onClick={() => setReplyTo(null)}><Icon name="close" size={13} /></button>
+                      </div>
+                    )}
+                    {staged.length > 0 && (
+                      <ul className="wa-tray-files">
+                        {staged.map((f, i) => (
+                          <li key={`${f.name}-${f.size}-${i}`}>
+                            <StagedThumb file={f} />
+                            <span className="wa-tray-name" title={f.name}>{f.name}<small>{(f.size / 1024 / 1024).toFixed(f.size > 1048576 ? 1 : 2)} MB</small></span>
+                            <button type="button" className="btn-icon" aria-label={`Remove ${f.name}`} onClick={() => setStaged(s => s.filter((_, j) => j !== i))}><Icon name="close" size={12} /></button>
+                          </li>
+                        ))}
+                        {staged.length < MAX_FILES && (
+                          <li><button type="button" className="wa-tray-add" onClick={() => fileRef.current?.click()}><Icon name="plus" size={16} /> Add</button></li>
+                        )}
+                      </ul>
+                    )}
+                  </div>
+                )}
                 {thread.window_open ? (
                   <div className="wa-compose-row">
-                    <button type="button" className="btn-icon" aria-label="Attach a file" title="Attach a file"
+                    <button type="button" className="btn-icon" aria-label="Attach files" title="Attach files — or drop them on the chat"
                       onClick={() => fileRef.current?.click()}>
                       <Icon name="plus" size={16} />
                     </button>
-                    <input ref={fileRef} type="file" hidden
-                      onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) send(f) }} />
-                    <textarea rows={1} value={draft} aria-label="Reply" placeholder="Write a reply… or type / for saved replies"
-                      onChange={e => onDraftChange(e.target.value)} onKeyDown={onKeyDown} />
-                    <button type="button" className="btn btn-primary" disabled={!draft.trim() || draft.startsWith('/')}
-                      onClick={() => send()}>Send</button>
+                    <input ref={fileRef} type="file" multiple hidden
+                      onChange={e => { stage(e.target.files); e.target.value = '' }} />
+                    <textarea rows={1} value={draft} aria-label="Reply" placeholder={staged.length ? 'Add a caption…' : 'Write a reply… or type / for saved replies'}
+                      onChange={e => onDraftChange(e.target.value)} onKeyDown={onKeyDown}
+                      onPaste={e => { if (e.clipboardData?.files?.length) { e.preventDefault(); stage(e.clipboardData.files) } }} />
+                    <button type="button" className="btn btn-primary" disabled={(!draft.trim() && !staged.length) || draft.startsWith('/')}
+                      onClick={() => send()}>{staged.length > 1 ? `Send ${staged.length}` : 'Send'}</button>
                   </div>
                 ) : (
                   <div className="wa-shut-text">
@@ -1902,17 +2058,31 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                     value={thread.lead_status || ''} onChange={setLeadStatus} label="Lead status" />
                 </div>
 
+                {/* Every product they asked about, each with its quantity. */}
+                <div className="wa-products">
+                  <div className="wa-products-head">
+                    <label>Products</label>
+                    <button type="button" className="mini-btn" onClick={() => setLead(l => ({ ...l, products: [...l.products, { product: '', quantity: '' }] }))}>
+                      <Icon name="plus" size={12} /> Add product
+                    </button>
+                  </div>
+                  {!lead.products.length && <p className="wa-products-empty">No product yet — add what they’re asking about.</p>}
+                  <datalist id="wa-product-names">{products.map(p => <option key={p.id || p.name} value={p.name} />)}</datalist>
+                  {lead.products.map((p, i) => (
+                    <div key={i} className="wa-product-row">
+                      <input list="wa-product-names" aria-label={`Product ${i + 1}`} placeholder="Product" value={p.product}
+                        onChange={e => setLead(l => ({ ...l, products: l.products.map((x, j) => (j === i ? { ...x, product: e.target.value } : x)) }))}
+                        onBlur={saveProducts} />
+                      <input aria-label={`Quantity of product ${i + 1}`} placeholder="Qty" value={p.quantity}
+                        onChange={e => setLead(l => ({ ...l, products: l.products.map((x, j) => (j === i ? { ...x, quantity: e.target.value } : x)) }))}
+                        onBlur={saveProducts} />
+                      <button type="button" className="btn-icon" aria-label={`Remove product ${i + 1}`} title="Remove"
+                        onClick={() => saveProducts(null, lead.products.filter((_, j) => j !== i))}><Icon name="close" size={13} /></button>
+                    </div>
+                  ))}
+                </div>
+
                 <div className="wa-side-grid">
-                  <div className="input-group">
-                    <label htmlFor="wa-lead-product">Product</label>
-                    <input id="wa-lead-product" value={lead.product_interest}
-                      onChange={e => setLead(l => ({ ...l, product_interest: e.target.value }))} onBlur={() => saveField('product_interest')} />
-                  </div>
-                  <div className="input-group">
-                    <label htmlFor="wa-lead-qty">Quantity</label>
-                    <input id="wa-lead-qty" value={lead.quantity}
-                      onChange={e => setLead(l => ({ ...l, quantity: e.target.value }))} onBlur={() => saveField('quantity')} />
-                  </div>
                   <div className="input-group">
                     <label htmlFor="wa-lead-brand">Branding</label>
                     <input id="wa-lead-brand" value={lead.branding} placeholder="Embroidery, print…"

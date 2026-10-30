@@ -1876,6 +1876,17 @@ async function ensureWaLinesSchema() {
             ALTER TABLE wa_contacts ADD COLUMN IF NOT EXISTS opted_out_at TIMESTAMPTZ;
             -- Their WhatsApp profile photo, where one was brought in (the Cloud API does not give them).
             ALTER TABLE wa_contacts ADD COLUMN IF NOT EXISTS avatar_url TEXT;
+            -- The message this one answers, as WhatsApp's own id: a reply the customer made to one of
+            -- ours, or one of ours to one of theirs.
+            ALTER TABLE wa_messages ADD COLUMN IF NOT EXISTS reply_to TEXT;
+            -- "No reply needed": the customer's last word was a thank-you, and somebody said so. The
+            -- chat stops counting as waiting up to that message.
+            ALTER TABLE wa_conversations ADD COLUMN IF NOT EXISTS settled_msg_id INTEGER;
+            ALTER TABLE wa_conversations ADD COLUMN IF NOT EXISTS settled_at TIMESTAMP;
+            ALTER TABLE wa_conversations ADD COLUMN IF NOT EXISTS settled_by TEXT;
+            -- Every product an enquiry is for, with its quantity: [{ product, quantity }]. The single
+            -- product_interest / quantity columns carry them joined, for everything that reads those.
+            ALTER TABLE crewfit_leads ADD COLUMN IF NOT EXISTS products TEXT;
             -- "Who spoke last", by when it was said: the inbox asks it of every chat it lists.
             CREATE INDEX IF NOT EXISTS wa_messages_thread_time_idx ON wa_messages (conversation_id, (COALESCE(sent_at, created_at)) DESC, id DESC);
             CREATE TABLE IF NOT EXISTS nl_auto_state (

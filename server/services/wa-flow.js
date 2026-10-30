@@ -90,7 +90,17 @@ const CREWFIT_FLOW = {
                 { id: '50-200', title: '50 to 200' },
                 { id: '200+', title: 'More than 200' },
             ],
-            next: { '*': 'branding' },
+            next: { '*': 'more' },
+        },
+        // Each product and its quantity go on a list; this asks for the next one.
+        more: {
+            type: 'buttons',
+            text: 'Got it. Do you need another product as well?',
+            buttons: [
+                { id: 'more', title: 'Add another product' },
+                { id: 'done', title: 'That’s all' },
+            ],
+            next: { more: 'product', '*': 'branding' },
         },
         branding: {
             type: 'buttons',
@@ -209,10 +219,30 @@ async function priceFor(productName, band) {
 }
 
 /** The message that closes the menu: what they asked for, and what it costs. */
+const bandText = (q) => (q === '50-200' ? '50 to 200' : q);
+
 async function summaryText(answers) {
+    const items = itemsOf(answers);
+    // Several products: each with its quantity and what that comes to.
+    if (items.length > 1) {
+        const lines = ['Thank you — here is what we have:'];
+        for (const it of items) lines.push(`• ${it.product}${it.quantity ? ` — ${bandText(it.quantity)}` : ''}`);
+        if (answers.branding) lines.push(`• Branding: ${answers.branding}`);
+        if (answers.logo) lines.push('• Logo: received, thank you');
+        const priced = [];
+        for (const it of items) {
+            const price = it.quantity ? await priceFor(it.product, it.quantity) : null;
+            if (price?.low) priced.push(`${price.name}: around ₹${price.low === price.high ? price.low : `${price.high} down to ₹${price.low}`} a piece`);
+            else if (price) priced.push(`${price.name}: quoted individually at that quantity`);
+        }
+        if (priced.length) lines.push('', 'At those quantities:', ...priced.map(p => `• ${p}`), 'That is before GST and branding.');
+        if (answers.branding === 'Embroidery') lines.push('Embroidery also has a one-off ₹800 digitising charge for the logo.');
+        lines.push('', 'This is an estimate, not a confirmed quote — one of our team will go through it with you shortly.');
+        return lines.join('\n');
+    }
     const lines = ['Thank you — here is what we have:'];
     if (answers.product_interest) lines.push(`• Product: ${answers.product_interest}`);
-    if (answers.quantity) lines.push(`• Quantity: ${answers.quantity === '50-200' ? '50 to 200' : answers.quantity}`);
+    if (answers.quantity) lines.push(`• Quantity: ${bandText(answers.quantity)}`);
     if (answers.branding) lines.push(`• Branding: ${answers.branding}`);
     if (answers.logo) lines.push('• Logo: received, thank you');
 
@@ -328,14 +358,36 @@ async function handToHuman(conversation, why) {
     if (why) console.log(`whatsapp flow handed conversation ${conversation.id} to a person: ${why}`);
 }
 
+/**
+ * The products asked for so far. Each answer to a quantity question closes one product — the one
+ * last picked — so a customer who adds another product gets a second line, not an overwrite.
+ */
+function collectItem(answers, step) {
+    if (step.save_as !== 'quantity' || !answers.product_interest) return;
+    answers.items = [...(answers.items || []), { product: answers.product_interest, quantity: answers.quantity }];
+}
+const itemsOf = (answers) => (answers.items?.length ? answers.items
+    : answers.product_interest ? [{ product: answers.product_interest, quantity: answers.quantity }] : []);
+
 /** The end of the menu: everything learned goes onto the enquiry, and a person takes over. */
 async function finish(conversation, answers) {
     const sets = [];
     const params = [];
+    const items = itemsOf(answers);
+    // Every product asked for goes on the enquiry; the single fields carry them joined.
+    const joined = items.length > 1 ? {
+        product_interest: items.map(i => i.product).join(', '),
+        quantity: items.map(i => `${i.product}: ${bandText(i.quantity)}`).join(', '),
+    } : {};
+    if (items.length) {
+        params.push(JSON.stringify(items.map(i => ({ product: i.product, quantity: bandText(i.quantity) }))));
+        sets.push(`products = $${params.length}`);
+    }
     for (const [key, column] of [['product_interest', 'product_interest'], ['quantity', 'quantity'],
         ['branding', 'branding'], ['logo', 'logo_url']]) {
-        if (answers[key]) {
-            params.push(String(answers[key]));
+        const value = joined[key] || answers[key];
+        if (value) {
+            params.push(String(value));
             sets.push(`${column} = $${params.length}`);
         }
     }
@@ -381,6 +433,7 @@ async function handle(conversation, message) {
     if (step.type === 'ask_text') {
         if (!text) return false;
         if (step.save_as) answers[step.save_as] = text;
+        collectItem(answers, step);
         await send(conversation, flow, step.next?.['*'], answers);
         return true;
     }
@@ -388,6 +441,7 @@ async function handle(conversation, message) {
     // A tap on a button or a list row.
     if (tapped) {
         if (step.save_as) answers[step.save_as] = tapped;
+        collectItem(answers, step);
         const nextId = step.next?.[tapped] || step.next?.['*'];
         if (!nextId) {
             await handToHuman(conversation, `no step after ${tapped}`);
