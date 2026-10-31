@@ -128,6 +128,76 @@ router.get('/meta', async (req, res) => {
     }
 });
 
+/** Monday of the week a date falls in, as YYYY-MM-DD. */
+function weekOf(ymd) {
+    const d = new Date(`${ymd}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
+    return d.toISOString().slice(0, 10);
+}
+const PERIOD = { day: (ymd) => ymd, week: weekOf, month: (ymd) => `${ymd.slice(0, 7)}-01` };
+
+// GET /api/crewfit/vendor-orders/analytics?from&to&vendor&group=month|week|day
+// What was ordered from vendors over time, and how much of it is paid. Pieces are counted on every
+// order; money only where the order has rates, and the orders without them are counted so the
+// gap shows rather than reading as nothing owed.
+router.get('/analytics', async (req, res) => {
+    try {
+        const { from, to, vendor } = req.query;
+        const group = PERIOD[req.query.group] ? req.query.group : 'month';
+        const where = [], vals = [];
+        if (/^\d{4}-\d{2}-\d{2}$/.test(from || '')) { vals.push(from); where.push(`order_date >= $${vals.length}`); }
+        if (/^\d{4}-\d{2}-\d{2}$/.test(to || '')) { vals.push(to); where.push(`order_date <= $${vals.length}`); }
+        if (vendor) { vals.push(vendor); where.push(`vendor = $${vals.length}`); }
+        const rows = (await db.query(
+            `SELECT TO_CHAR(order_date, 'YYYY-MM-DD') AS order_date, vendor, status, payment_status,
+                    items, total_qty, total_amount
+             FROM crewfit_vendor_orders ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+             ORDER BY order_date`, vals
+        )).rows;
+
+        const blank = () => ({ orders: 0, pieces: 0, value: 0, paid_value: 0, pending_value: 0,
+            paid_orders: 0, pending_orders: 0, paid_pieces: 0, pending_pieces: 0, unpriced: 0, received: 0 });
+        const add = (acc, o) => {
+            const pieces = Number(o.total_qty) || 0;
+            const value = Number(o.total_amount) || 0;
+            const paid = o.payment_status === 'Paid';
+            acc.orders++; acc.pieces += pieces; acc.value += value;
+            if (paid) { acc.paid_orders++; acc.paid_pieces += pieces; acc.paid_value += value; }
+            else { acc.pending_orders++; acc.pending_pieces += pieces; acc.pending_value += value; }
+            if (!value) acc.unpriced++;
+            if (o.status === 'Consignment Received') acc.received++;
+        };
+
+        const totals = blank();
+        const periods = new Map(), vendors = new Map(), products = new Map();
+        for (const o of rows) {
+            add(totals, o);
+            const p = PERIOD[group](o.order_date);
+            if (!periods.has(p)) periods.set(p, { period: p, ...blank() });
+            add(periods.get(p), o);
+            if (!vendors.has(o.vendor)) vendors.set(o.vendor, { vendor: o.vendor, last_order: null, ...blank() });
+            const v = vendors.get(o.vendor);
+            add(v, o); v.last_order = o.order_date;
+            for (const item of parseItems(o.items)) {
+                const name = item.product_type || 'Other';
+                const qty = (item.colors || []).reduce((s, c) => s + Object.values(c.sizes || {}).reduce((a, n) => a + (Number(n) || 0), 0), 0);
+                products.set(name, (products.get(name) || 0) + qty);
+            }
+        }
+
+        res.json({
+            group,
+            totals,
+            series: [...periods.values()],
+            vendors: [...vendors.values()].sort((a, b) => b.pieces - a.pieces),
+            products: [...products.entries()].map(([name, pieces]) => ({ name, pieces })).sort((a, b) => b.pieces - a.pieces),
+        });
+    } catch (err) {
+        console.error('Error loading vendor analytics:', err);
+        res.status(500).json({ error: 'Failed to load vendor analytics' });
+    }
+});
+
 // GET /api/crewfit/vendor-orders
 router.get('/', async (req, res) => {
     try {

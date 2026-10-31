@@ -1,0 +1,267 @@
+<title>Marketing Scaling System</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap">
+<style>
+/* Normless marketing scaling system — the PDF of 24 Oct 2026, laid out as a field guide: the rule
+   first as a ROAS scale, the numbers, the campaign flow drawn in HTML, roles, bundles, the creative
+   split and the product register. No scripts: the CRM shows guides in a sandboxed frame. */
+:root {
+  --paper: #f6f4f0; --sheet: #ffffff; --ink: #1b1a17; --muted: #6a655c; --line: #e3ded4;
+  --accent: #1f3a5f; --accent-soft: #e5ebf3;
+  --stop: #b42318; --stop-soft: #fbe9e7; --hold: #a15c07; --hold-soft: #fdf0dc; --win: #157f3b; --win-soft: #e4f4e9;
+  --display: "Fraunces", Georgia, serif; --body: "Inter", "Segoe UI", Roboto, sans-serif; --mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+  --radius: 12px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #121110; --sheet: #1b1a18; --ink: #ece8e1; --muted: #a39d92; --line: #302d29;
+    --accent: #8fb1dc; --accent-soft: #1d2735;
+    --stop: #f0796c; --stop-soft: #3a1c19; --hold: #f1b25c; --hold-soft: #392a14; --win: #62cf8b; --win-soft: #16301f; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #121110; --sheet: #1b1a18; --ink: #ece8e1; --muted: #a39d92; --line: #302d29;
+  --accent: #8fb1dc; --accent-soft: #1d2735;
+  --stop: #f0796c; --stop-soft: #3a1c19; --hold: #f1b25c; --hold-soft: #392a14; --win: #62cf8b; --win-soft: #16301f; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--paper); color: var(--ink); font-family: var(--body); font-size: 15px; line-height: 1.6; margin: 0; }
+.wrap { max-width: 880px; margin: 0 auto; padding: 40px max(16px, env(safe-area-inset-left, 0px)) 72px; display: flex; flex-direction: column; gap: 48px; }
+h1, h2, h3 { font-family: var(--display); line-height: 1.15; margin: 0; text-wrap: balance; }
+h1 { font-size: clamp(30px, 6vw, 46px); font-weight: 700; letter-spacing: -0.01em; }
+h2 { font-size: 25px; font-weight: 600; }
+h3 { font-family: var(--body); font-size: 15px; font-weight: 600; }
+p { margin: 0; }
+section { display: flex; flex-direction: column; gap: 16px; }
+.eyebrow { font-family: var(--mono); font-size: 11.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+.lede { font-size: 17px; color: var(--muted); max-width: 62ch; }
+.intro { color: var(--muted); max-width: 66ch; }
+.meta { display: flex; gap: 8px; flex-wrap: wrap; }
+.tag { font-size: 12px; padding: 2px 10px; border-radius: 999px; background: var(--sheet); border: 1px solid var(--line); color: var(--muted); }
+.step-no { font-family: var(--mono); font-size: 12px; color: var(--accent); }
+.card { background: var(--sheet); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; display: flex; flex-direction: column; gap: 8px; }
+
+/* The ROAS scale */
+.scale { display: grid; grid-template-columns: 2.5fr 1fr 1.5fr; border-radius: var(--radius); overflow: hidden; border: 1px solid var(--line); }
+.zone { padding: 14px 16px; display: flex; flex-direction: column; gap: 4px; }
+.zone b { font-family: var(--display); font-size: 20px; }
+.zone span { font-size: 13.5px; }
+.z-stop { background: var(--stop-soft); color: var(--stop); }
+.z-hold { background: var(--hold-soft); color: var(--hold); border-left: 2px dashed currentColor; }
+.z-win { background: var(--win-soft); color: var(--win); border-left: 2px dashed currentColor; }
+.ticks { display: grid; grid-template-columns: 2.5fr 1fr 1.5fr; font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.ticks span:nth-child(2), .ticks span:nth-child(3) { margin-left: -14px; }
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+.fact b { font-family: var(--display); font-size: 26px; color: var(--accent); line-height: 1.1; }
+.fact span { font-size: 13.5px; color: var(--muted); }
+.callout { border-left: 3px solid var(--hold); background: var(--sheet); border-radius: 0 var(--radius) var(--radius) 0; padding: 12px 16px; font-size: 14.5px; }
+
+/* Tables */
+.table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--sheet); }
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-family: var(--mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-weight: 500; white-space: nowrap; }
+tr:last-child td { border-bottom: 0; }
+td.num { font-family: var(--mono); font-size: 13px; white-space: nowrap; }
+.wide { min-width: 640px; }
+.examples { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+.ex dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; margin: 0; font-size: 14px; }
+.ex dt { color: var(--muted); } .ex dd { margin: 0; font-family: var(--mono); font-size: 13px; }
+.ex .verdict { font-size: 13.5px; color: var(--muted); }
+
+/* The flow */
+.flow { display: flex; flex-direction: column; align-items: center; }
+.node { width: min(100%, 520px); background: var(--sheet); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 16px; text-align: center; display: flex; flex-direction: column; gap: 3px; }
+.node b { font-size: 15px; }
+.node span { font-size: 13px; color: var(--muted); }
+.node.key { border: 2px solid var(--accent); background: var(--accent-soft); }
+.arrow { width: 2px; height: 22px; background: var(--line); position: relative; }
+.arrow::after { content: ""; position: absolute; bottom: -1px; left: -4px; border: 5px solid transparent; border-top-color: var(--muted); border-bottom: 0; }
+.arrow-label { font-size: 12px; color: var(--muted); font-family: var(--mono); padding: 2px 0; }
+.decide { width: min(100%, 720px); display: grid; grid-template-columns: 1fr 1.2fr 1fr; gap: 10px; align-items: stretch; }
+.q { background: var(--sheet); border: 1px dashed var(--muted); border-radius: var(--radius); padding: 10px 12px; text-align: center; display: flex; flex-direction: column; justify-content: center; gap: 2px; }
+.q b { font-size: 14px; } .q span { font-size: 12.5px; color: var(--muted); }
+.out { border-radius: var(--radius); padding: 10px 12px; display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+.out b { font-size: 14px; }
+.out small { font-family: var(--mono); font-size: 11px; opacity: .85; }
+.o-stop { background: var(--stop-soft); color: var(--stop); }
+.o-hold { background: var(--hold-soft); color: var(--hold); }
+.o-win { background: var(--win-soft); color: var(--win); }
+.loop { font-size: 12.5px; color: var(--muted); text-align: center; margin-top: 6px; }
+
+/* Roles, bundles, split */
+.roles { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.role-name { display: inline-flex; align-self: flex-start; font-size: 12px; font-weight: 600; padding: 2px 10px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); }
+.card ul, .card ol { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
+.split { display: flex; height: 44px; border-radius: var(--radius); overflow: hidden; border: 1px solid var(--line); font-size: 13px; font-weight: 600; }
+.split div { display: flex; align-items: center; justify-content: center; }
+.s-hero { flex: 6; background: var(--accent); color: var(--sheet); }
+.s-sup { flex: 3; background: var(--accent-soft); color: var(--accent); }
+.s-exp { flex: 1; background: var(--hold-soft); color: var(--hold); }
+.pill { display: inline-block; font-size: 12px; font-weight: 600; padding: 1px 9px; border-radius: 999px; }
+.p-hero { background: var(--accent); color: var(--sheet); } .p-sup { background: var(--accent-soft); color: var(--accent); }
+.todo { color: var(--hold); font-size: 12.5px; }
+.steps { list-style: none; margin: 0; padding: 0; counter-reset: s; display: flex; flex-direction: column; gap: 8px; }
+.steps li { counter-increment: s; display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 12px; background: var(--sheet); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; }
+.steps li::before { content: counter(s); font-family: var(--display); font-weight: 700; font-size: 20px; color: var(--accent); line-height: 1.2; }
+footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line); padding-top: 16px; }
+@media (max-width: 620px) {
+  .decide { grid-template-columns: 1fr; }
+  .scale, .ticks { grid-template-columns: 1fr 1fr 1fr; }
+}
+</style>
+
+<div class="wrap">
+  <header style="display:flex;flex-direction:column;gap:12px">
+    <span class="eyebrow">Normless · Marketing</span>
+    <h1>Scaling system for any product</h1>
+    <p class="lede">The playbook the marketing team follows for every product: work out its numbers, test it, judge it on ROAS, scale the winners and stop the rest.</p>
+    <div class="meta"><span class="tag">24 Oct 2026</span><span class="tag">@normless</span></div>
+  </header>
+
+  <section aria-labelledby="rule">
+    <span class="eyebrow">The rule</span>
+    <h2 id="rule">Two ROAS lines decide every test</h2>
+    <div>
+      <div class="scale" role="img" aria-label="ROAS below 2.5 stops, 2.5 to 3.5 extends once, 3.5 or more scales">
+        <div class="zone z-stop"><b>Stop</b><span>Below the cut line</span></div>
+        <div class="zone z-hold"><b>Extend once</b><span>Between the lines</span></div>
+        <div class="zone z-win"><b>Scale</b><span>At or above the winner line</span></div>
+      </div>
+      <div class="ticks"><span>ROAS 0</span><span>2.5 cut</span><span>3.5 winner</span></div>
+    </div>
+    <div class="facts">
+      <div class="card fact"><b>₹1,000</b><span>Test budget for every creative, so results compare fairly.</span></div>
+      <div class="card fact"><b>₹3,000–4,000</b><span>Spend before a creative is judged. Earlier is guessing: a few orders either way swing ROAS too much.</span></div>
+      <div class="card fact"><b>2.5 · 3.5</b><span>Default cut and winner lines, used by most products.</span></div>
+    </div>
+    <p class="callout"><b>Thin margins:</b> if a product’s own break-even ROAS is above 2.5, its own break-even becomes the cut line and 1.33 × that the winner line. Winning at 3.5 would otherwise lose money on it.</p>
+  </section>
+
+  <section aria-labelledby="numbers">
+    <span class="step-no">Step 1</span>
+    <h2 id="numbers">Work out the numbers for a product</h2>
+    <p class="intro">Once per product, before any ad runs. Record them in the product register at the end. Most products simply use the defaults.</p>
+    <div class="table-wrap">
+      <table class="wide">
+        <thead><tr><th scope="col">Number</th><th scope="col">Default</th><th scope="col">When to change it</th></tr></thead>
+        <tbody>
+          <tr><td><b>Price</b></td><td>Selling price, or average order value</td><td>Use average order value if customers buy several pieces</td></tr>
+          <tr><td><b>Kept per order</b></td><td>Price − making cost − shipping − tech/ops cost</td><td>Always work this out per product</td></tr>
+          <tr><td><b>Own break-even ROAS</b></td><td>Price ÷ kept per order</td><td>Check it against the default cut line</td></tr>
+          <tr><td><b>Cut line</b></td><td class="num">2.5</td><td>Use own break-even ROAS if it is higher than 2.5</td></tr>
+          <tr><td><b>Winner line</b></td><td class="num">3.5</td><td>Use 1.33 × own break-even ROAS if that is higher than 3.5</td></tr>
+          <tr><td><b>Target CPA</b></td><td>Price ÷ winner line</td><td>Recalculate when the price changes</td></tr>
+          <tr><td><b>Test budget per creative</b></td><td class="num">₹1,000</td><td>Keep the same for every creative</td></tr>
+          <tr><td><b>Judge spend</b></td><td class="num">₹3,000–4,000</td><td>Never judge before ₹3,000</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="examples">
+      <div class="card ex"><h3>Oversized tees — defaults apply</h3>
+        <dl><dt>Price</dt><dd>₹833</dd><dt>Kept per order</dt><dd>₹431</dd><dt>Own break-even</dt><dd>1.93</dd><dt>Cut · winner</dt><dd>2.5 · 3.5</dd><dt>Target CPA</dt><dd>≈ ₹238</dd></dl>
+        <p class="verdict">1.93 is below 2.5, so the default lines stand.</p></div>
+      <div class="card ex"><h3>Doom hoodie — its own lines</h3>
+        <dl><dt>Price</dt><dd>₹2,999</dd><dt>Kept per order</dt><dd>₹799</dd><dt>Own break-even</dt><dd>3.75</dd><dt>Cut · winner</dt><dd>3.75 · 5.0</dd><dt>Target CPA</dt><dd>₹600</dd></dl>
+        <p class="verdict">3.75 is above 2.5, so the product’s own numbers set both lines.</p></div>
+    </div>
+  </section>
+
+  <section aria-labelledby="flow">
+    <span class="step-no">Step 2</span>
+    <h2 id="flow">Follow the flow</h2>
+    <p class="intro">Every product runs the same three campaigns, and ROAS decides each step. Read it top to bottom.</p>
+    <div class="flow">
+      <div class="node"><b>Work out the numbers</b><span>Cut line 2.5, winner line 3.5 by default</span></div>
+      <div class="arrow"></div>
+      <div class="node"><b>Creative engine</b><span>New hooks, offers and formats; refresh tired ones</span></div>
+      <div class="arrow"></div>
+      <div class="node"><b>Testing campaign</b><span>₹1,000 test budget per creative (ABO) · broad audience first, other audiences as extra ad sets · judge only after ₹3,000–4,000 spend</span></div>
+      <div class="arrow"></div>
+      <div class="decide">
+        <div class="out o-stop"><small>below cut</small><b>Stop and log why</b>Next creative from the engine, with a new angle.</div>
+        <div class="q"><b>ROAS at ₹3k–4k spend?</b><span>cut 2.5 · win 3.5</span></div>
+        <div class="out o-hold"><small>between the lines</small><b>Extend once</b>Run on to ₹4,000, then judge again.</div>
+      </div>
+      <div class="arrow-label">3.5 or more ↓</div>
+      <div class="node key"><b>Scaling campaign</b><span>Campaign budget (CBO) with the proven ad sets · copy each winning ad into a broad ad set · raise budget 20–30% every 48–72 hours</span></div>
+      <div class="arrow"></div>
+      <div class="decide">
+        <div class="out o-stop"><small>below winner 2 days</small><b>Go back a step</b>Pause it if it falls below the cut line.</div>
+        <div class="q"><b>ROAS holds at its winner line?</b><span>checked every 48–72 h</span></div>
+        <div class="out o-win"><small>holds</small><b>Take the next step</b>Raise the budget 20–30%.</div>
+      </div>
+      <div class="arrow-label">visitors feed ↓</div>
+      <div class="node"><b>Retargeting campaign — shared by all products</b><span>Visitors, add-to-carts and past buyers · cross-sell a related product, never the one just bought · bundles and free shipping lift order value</span></div>
+      <div class="arrow"></div>
+      <div class="node"><b>Weekly scoreboard</b><span>ROAS by product and campaign against its lines</span></div>
+      <p class="loop">↺ The scoreboard updates each product’s numbers, and the cycle starts again.</p>
+    </div>
+  </section>
+
+  <section aria-labelledby="roles">
+    <span class="step-no">Step 3</span>
+    <h2 id="roles">Campaigns by role</h2>
+    <p class="intro">Each product gets a role, and the role sets its campaigns. A product never shares a budget with one that has a different break-even. In every testing campaign one creative is one ad set with a ₹1,000 budget.</p>
+    <div class="roles">
+      <div class="card"><span class="role-name">Hero</span><h3>The proven winner, or the product with the most revenue</h3>
+        <ul><li>One testing and one scaling campaign.</li><li>Judged at ₹3,000–4,000 spend per creative.</li><li>Scale 20–30% every 48–72 h while ROAS holds; step back if it stays under the winner line for 2 days.</li></ul></div>
+      <div class="card"><span class="role-name">Supporting</span><h3>Every other product</h3>
+        <ul><li>One testing campaign per product.</li><li>A scaling campaign only after a win.</li><li>Same rule as the hero.</li></ul></div>
+      <div class="card"><span class="role-name">Retargeting</span><h3>All products, shared</h3>
+        <ul><li>One campaign for visitors, carts and past buyers.</li><li>Judged on weekly ROAS: keep it at the winner line or better.</li><li>Cross-sell a related product, never the one just bought.</li></ul></div>
+    </div>
+    <p class="intro">A supporting product becomes a hero once it holds ROAS at or above its winner line at a budget worth scaling — it then gets its own scaling campaign.</p>
+  </section>
+
+  <section aria-labelledby="bundles">
+    <h2 id="bundles">Lift order value with bundles</h2>
+    <p class="intro">A product that keeps little per order can’t carry ad cost alone. Raising the value of the first order is cheaper than finding more buyers.</p>
+    <div class="card"><ul>
+      <li>Bundle products that go together, so one ad click sells a bigger order.</li>
+      <li>Offer a multi-piece price on low-priced products.</li>
+      <li>Set a free-shipping threshold above today’s average order value, then test it.</li>
+      <li>Show the bundle on the product page and in the cart, not only in the ad.</li>
+    </ul></div>
+    <p class="callout">Set every bundle price and threshold from the Step 1 numbers, so an offer never drops below break-even.</p>
+  </section>
+
+  <section aria-labelledby="split">
+    <h2 id="split">Creative split</h2>
+    <p class="intro">Creative effort follows the roles. Of every ten new ads, about six go to the hero, three to supporting products and one to an experiment — a new format or audience. A starting rule, adjusted with results.</p>
+    <div class="split" role="img" aria-label="60% hero, 30% supporting, 10% experiments">
+      <div class="s-hero">Hero 60%</div><div class="s-sup">Supporting 30%</div><div class="s-exp">10%</div>
+    </div>
+  </section>
+
+  <section aria-labelledby="register">
+    <h2 id="register">Product register</h2>
+    <p class="intro">One row per product group. Fill in the numbers before its first test.</p>
+    <div class="table-wrap">
+      <table class="wide">
+        <thead><tr><th scope="col">Product group</th><th scope="col">Price (₹)</th><th scope="col">Kept / order (₹)</th><th scope="col">Own break-even</th><th scope="col">Cut</th><th scope="col">Winner</th><th scope="col">Role</th></tr></thead>
+        <tbody>
+          <tr><td><b>Doom hoodie</b></td><td class="num">2,999</td><td class="num">799</td><td class="num">3.75</td><td class="num">3.75</td><td class="num">5.0</td><td><span class="pill p-hero">Hero</span></td></tr>
+          <tr><td><b>Oversized tees</b></td><td class="num">833 <small>avg order</small></td><td class="num">431</td><td class="num">1.93</td><td class="num">2.5</td><td class="num">3.5</td><td><span class="pill p-sup">Supporting</span></td></tr>
+          <tr><td><b>Tank tops</b></td><td class="num">699–899 <small>list</small></td><td class="todo">needs cost</td><td class="todo">needs cost</td><td class="num">2.5*</td><td class="num">3.5*</td><td><span class="pill p-sup">Supporting</span></td></tr>
+          <tr><td><b>Tracks and joggers</b></td><td class="num">1,399–1,799 <small>list</small></td><td class="todo">needs cost</td><td class="todo">needs cost</td><td class="num">2.5*</td><td class="num">3.5*</td><td><span class="pill p-sup">Supporting</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="intro" style="font-size:13px">* Defaults until the product’s cost is known.</p>
+  </section>
+
+  <section aria-labelledby="new">
+    <h2 id="new">Adding a new product</h2>
+    <ol class="steps">
+      <li><div>Get its price and costs, work out the Step 1 numbers and add a register row.</div></li>
+      <li><div>Create one testing campaign with a ₹1,000 ad set for each creative.</div></li>
+      <li><div>Let each creative spend ₹3,000–4,000, then apply the rule: scale, run on once, or stop.</div></li>
+      <li><div>Record the result and the creative angle in the register.</div></li>
+      <li><div>Move a winner into its own scaling campaign and add the product to the shared retargeting campaign.</div></li>
+    </ol>
+  </section>
+
+  <footer>Normless · Marketing scaling system · Questions: ask the marketing lead.</footer>
+</div>

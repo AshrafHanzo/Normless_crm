@@ -17,6 +17,7 @@ import TicketDrawer from '../support/TicketDrawer'
 import { refOf } from '../support/ticket'
 import { useWaCalls, WaCallDock } from './WaCalls'
 import WaNewChat from './WaNewChat'
+import TeamGuide from '../../components/TeamGuide'
 import { WaText, Ticks, BubbleButtons } from './WaBubble'
 
 // Crewfit's queues, in the order a salesperson works them. `hint` says what each one is.
@@ -335,6 +336,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
   }
   const [dragging, setDragging] = useState(false)
   const [samplesOpen, setSamplesOpen] = useState(false)
+  const [guideOpen, setGuideOpen] = useState(false)
   const [quickReplies, setQuickReplies] = useState([])
   const [products, setProducts] = useState([])
   const [pop, setPop] = useState(null)                 // 'snippets' | 'templates' | 'catalogue'
@@ -1283,6 +1285,12 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
           <span className="wa-count"><b>{tally.unread}</b> unread</span>
         </div>}
         <div className="wa-topbar-end">
+          {cf && (
+            <button type="button" className="btn btn-secondary btn-sm" title="How a lead moves to a paid order, which chat to open first, and the day's routine"
+              onClick={() => setGuideOpen(true)}>
+              <Icon name="info" size={14} /> Sales playbook
+            </button>
+          )}
           <DateRangeFilter startDate={range.from} endDate={range.to}
             onApply={(from, to) => setRange({ from, to })} onClear={() => setRange({ from: '', to: '' })} />
           {config?.canSettings && menuFlow && (
@@ -1356,6 +1364,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
         </div>
       )}
 
+      {guideOpen && <TeamGuide guideKey="crewfit-sales" onClose={() => setGuideOpen(false)} />}
       {samplesOpen && thread && (
         <WaSamplesPicker API={API} apiFetch={apiFetch} toast={toast} fileUrl={fileUrl} conversationId={thread.id}
           onClose={() => setSamplesOpen(false)} onSent={(msgs) => { setSamplesOpen(false); msgs.forEach(appendSent) }} />

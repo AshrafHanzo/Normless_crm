@@ -8,6 +8,7 @@ import useDirtyGuard from '../../hooks/useDirtyGuard'
 import useServerTable from '../../hooks/useServerTable'
 import SortTh from '../../components/SortTh'
 import Pagination from '../../components/Pagination'
+import VendorOrderAnalytics from './VendorOrderAnalytics'
 import { cleanMobile, mobileError, isValidMobile, mobileInputProps } from '../../utils/phone'
 
 const fmt = (v) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(Number(v) || 0)
@@ -272,6 +273,9 @@ export default function CrewfitVendorOrders() {
   const [term, setTerm] = useState('')
   const [search, setSearch] = useState('')
   const isAdmin = user?.role === 'owner' || user?.role === 'admin'
+  // Remembered per browser: someone who only raises orders can keep the figures folded away.
+  const [showStats, setShowStats] = useState(() => { try { return localStorage.getItem('cf_vendor_stats') !== 'off' } catch { return true } })
+  const toggleStats = () => setShowStats(v => { try { localStorage.setItem('cf_vendor_stats', v ? 'off' : 'on') } catch { /* private window */ } return !v })
   // Server-side sort + page: a header click reorders every matching order, not this page's 25.
   const t = useServerTable({ sort: 'order_date', dir: 'desc' })
 
@@ -362,9 +366,16 @@ export default function CrewfitVendorOrders() {
           </p>
         </div>
         <div style={{ display: 'flex', gap: 10 }}>
+          <button className="btn btn-secondary" aria-pressed={showStats} onClick={toggleStats}>
+            <Icon name="trending" size={14} /> {showStats ? 'Hide analytics' : 'Analytics'}
+          </button>
           <button className="btn btn-primary" onClick={() => setTarget('new')}>+ New Vendor Order</button>
         </div>
       </div>
+
+      {/* Follows the vendor filter below, and reloads whenever the list does — a status changed
+          from a row moves the paid and pending figures straight away. */}
+      {showStats && <VendorOrderAnalytics apiFetch={apiFetch} vendor={vendor} refreshKey={orders} />}
 
       {/* Search bar, then filter selects, then the table — the same three-row layout as Bulk
           Orders and Payments, so the controls sit where they do on every other list. */}

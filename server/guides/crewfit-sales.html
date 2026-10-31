@@ -1,0 +1,286 @@
+<title>Crewfit Sales Playbook</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap">
+<style>
+/* Layout: a field guide — one narrow reading column, the journey drawn as a tall lane of steps with
+   who-does-it chips, then reference blocks (tabs, priorities, the shift, statuses, tools). */
+:root {
+  --paper: #f5f7f4;
+  --sheet: #ffffff;
+  --ink: #17201c;
+  --muted: #5a675f;
+  --line: #dbe2dc;
+  --thread: #0e6b58;          /* Crewfit's accent: a deep stitch green */
+  --thread-soft: #e1efe9;
+  --warn: #b45309; --warn-soft: #fdf1e2;
+  --hot: #c2410c; --hot-soft: #fde8de;
+  --ok: #15803d; --ok-soft: #e3f4e8;
+  --violet: #6d5bd0; --violet-soft: #ece9fb;
+  --grey-soft: #eceff0;
+  --display: "Familjen Grotesk", "Helvetica Neue", Arial, sans-serif;
+  --body: "IBM Plex Sans", "Segoe UI", Roboto, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  --radius: 10px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #0f1412; --sheet: #161d1a; --ink: #e6ece8; --muted: #9aa8a0; --line: #2a3530;
+    --thread: #4fc3a1; --thread-soft: #17322a;
+    --warn: #f0a24a; --warn-soft: #3a2a14; --hot: #f28b5b; --hot-soft: #3d2016; --ok: #5bd28a; --ok-soft: #15301f;
+    --violet: #a99cf2; --violet-soft: #2a2545; --grey-soft: #222b27; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #0f1412; --sheet: #161d1a; --ink: #e6ece8; --muted: #9aa8a0; --line: #2a3530;
+  --thread: #4fc3a1; --thread-soft: #17322a;
+  --warn: #f0a24a; --warn-soft: #3a2a14; --hot: #f28b5b; --hot-soft: #3d2016; --ok: #5bd28a; --ok-soft: #15301f;
+  --violet: #a99cf2; --violet-soft: #2a2545; --grey-soft: #222b27; color-scheme: dark;
+}
+body { background: var(--paper); color: var(--ink); font-family: var(--body); font-size: 15px; line-height: 1.6; }
+.wrap { max-width: 860px; margin: 0 auto; padding-block: 40px 72px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: flex; flex-direction: column; gap: 44px; }
+h1, h2, h3 { font-family: var(--display); line-height: 1.15; text-wrap: balance; margin: 0; }
+h1 { font-size: clamp(30px, 6vw, 44px); font-weight: 700; letter-spacing: -0.01em; }
+h2 { font-size: 23px; font-weight: 700; }
+h3 { font-size: 16px; font-weight: 600; }
+p { margin: 0; }
+.eyebrow { font-family: var(--mono); font-size: 11.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--thread); }
+.lede { font-size: 17px; color: var(--muted); max-width: 62ch; }
+section { display: flex; flex-direction: column; gap: 16px; }
+.section-intro { color: var(--muted); max-width: 64ch; }
+.who { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.who::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.who-customer { background: var(--grey-soft); color: var(--muted); }
+.who-bot { background: var(--violet-soft); color: var(--violet); }
+.who-sales { background: var(--thread-soft); color: var(--thread); }
+.who-design { background: var(--warn-soft); color: var(--warn); }
+.who-crm { background: var(--ok-soft); color: var(--ok); }
+
+/* The journey: a lane down the left, each step a block beside it. */
+.journey { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.step { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 14px; }
+.rail { display: flex; flex-direction: column; align-items: center; }
+.dot { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; font-family: var(--mono); font-size: 13px; background: var(--sheet); border: 2px solid var(--thread); color: var(--thread); flex: none; }
+.line { flex: 1; width: 2px; background: var(--line); margin: 4px 0; min-height: 18px; }
+.step:last-child .line { display: none; }
+.card { background: var(--sheet); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; margin-bottom: 14px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.card-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+.card ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 3px; }
+.auto { font-size: 13px; color: var(--muted); }
+.auto b { color: var(--ink); font-weight: 600; }
+.branch { border-left: 3px solid var(--warn); padding-left: 10px; font-size: 13.5px; color: var(--muted); }
+
+/* Tabs */
+.tabs { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+.tab { background: var(--sheet); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; display: flex; flex-direction: column; gap: 6px; }
+.tab-name { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.chip { font-family: var(--body); font-size: 13px; font-weight: 600; padding: 3px 11px; border-radius: 999px; border: 1px solid var(--line); background: var(--paper); }
+.chip-hot { background: var(--thread); color: var(--sheet); border-color: var(--thread); }
+.rank { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+
+/* Priorities */
+.prio { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; counter-reset: p; }
+.prio li { counter-increment: p; display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 12px; align-items: start; background: var(--sheet); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; }
+.prio li::before { content: counter(p); font-family: var(--display); font-weight: 700; font-size: 20px; color: var(--thread); line-height: 1.2; }
+.prio b { font-weight: 600; }
+
+/* The shift */
+.shift { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+.slot { background: var(--sheet); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; display: flex; flex-direction: column; gap: 8px; }
+.slot time { font-family: var(--mono); font-size: 12px; color: var(--thread); }
+.slot ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 3px; font-size: 14px; }
+
+/* Statuses */
+.table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--sheet); }
+table { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 620px; }
+th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-family: var(--mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-weight: 500; }
+tr:last-child td { border-bottom: 0; }
+.pill { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 12.5px; font-weight: 600; white-space: nowrap; }
+.p-new { background: #dbe8fd; color: #1d4ed8; } .p-enq { background: var(--grey-soft); color: var(--muted); }
+.p-qual { background: var(--violet-soft); color: var(--violet); } .p-imp { background: var(--hot-soft); color: var(--hot); }
+.p-fu { background: var(--warn-soft); color: var(--warn); } .p-mock { background: var(--warn-soft); color: var(--warn); }
+.p-done { background: var(--thread-soft); color: var(--thread); } .p-part { background: var(--hot-soft); color: var(--hot); }
+.p-paid { background: var(--ok-soft); color: var(--ok); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .p-new { background: #1c2a45; color: #8fb3f5; } }
+:root[data-theme="dark"] .p-new { background: #1c2a45; color: #8fb3f5; }
+
+/* The window */
+.window { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.note { background: var(--sheet); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; display: flex; flex-direction: column; gap: 6px; }
+.timer { font-family: var(--mono); font-size: 13px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--line); align-self: flex-start; }
+.t-open { color: var(--thread); } .t-low { color: var(--warn); border-color: var(--warn); } .t-shut { color: var(--hot); border-color: var(--hot); } .t-free { color: var(--ok); border-color: var(--ok); }
+
+/* Tools */
+.tools { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+.tool { background: var(--sheet); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; display: flex; flex-direction: column; gap: 4px; }
+.tool b { font-family: var(--display); font-size: 15px; font-weight: 600; }
+.tool span { font-size: 13.5px; color: var(--muted); }
+.kbd { font-family: var(--mono); font-size: 12px; padding: 0 5px; border: 1px solid var(--line); border-radius: 4px; background: var(--paper); }
+
+.rules { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
+.rules li { border-top: 3px solid var(--thread); background: var(--sheet); border-radius: 0 0 var(--radius) var(--radius); padding: 12px 14px; font-size: 14px; }
+.rules b { display: block; font-family: var(--display); font-size: 15px; margin-bottom: 2px; }
+footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line); padding-top: 16px; }
+@media (max-width: 520px) { .step { grid-template-columns: 34px minmax(0, 1fr); gap: 10px; } .dot { width: 28px; height: 28px; font-size: 12px; } }
+</style>
+
+<div class="wrap">
+  <header style="display:flex;flex-direction:column;gap:12px">
+    <span class="eyebrow">Crewfit · WhatsApp CRM</span>
+    <h1>From first message to a paid order</h1>
+    <p class="lede">How a lead moves through the CRM, what the bot already did before you see it, which chat to open first, and what to do at each step of your 9-hour shift.</p>
+    <div style="display:flex;flex-wrap:wrap;gap:6px" aria-label="Who does what">
+      <span class="who who-customer">Customer</span><span class="who who-bot">Bot</span><span class="who who-sales">You (sales)</span><span class="who who-design">Designer</span><span class="who who-crm">CRM, automatically</span>
+    </div>
+  </header>
+
+  <section aria-labelledby="journey">
+    <h2 id="journey">The journey of a lead</h2>
+    <p class="section-intro">Every lead follows these steps. Steps marked Bot and CRM happen on their own — you pick up from step 3.</p>
+    <ol class="journey">
+      <li class="step"><div class="rail"><span class="dot">1</span><span class="line"></span></div>
+        <div class="card"><div class="card-head"><h3>The customer writes</h3><span class="who who-customer">Customer</span></div>
+          <p>From a Facebook or Instagram ad (“Came in from an ad” shows on the chat), or straight to +91 73387 23696.</p>
+        </div></li>
+      <li class="step"><div class="rail"><span class="dot">2</span><span class="line"></span></div>
+        <div class="card"><div class="card-head"><h3>The menu takes the enquiry</h3><span class="who who-bot">Bot</span></div>
+          <ul>
+            <li>Product (with its photo, colours and prices) → colour → how many pieces → another product?</li>
+            <li>Printing or embroidery → the logo → a summary with the price per piece.</li>
+            <li>On the way it sends the catalogue PDF, size charts, photos of our work and the price list when asked, and answers common questions (MOQ, sample piece, payment terms, address).</li>
+          </ul>
+          <p class="auto">Sets the status by itself: <b>Qualified</b> once they share details · <b>Important</b> when it’s more than 50 pieces · <b>Need mockup</b> when product, colour, quantity and logo are all in.</p>
+        </div></li>
+      <li class="step"><div class="rail"><span class="dot">3</span><span class="line"></span></div>
+        <div class="card"><div class="card-head"><h3>You take the chat from “Reply now”</h3><span class="who who-sales">You</span></div>
+          <ul>
+            <li>Open the chat and reply — it becomes yours. Read the Lead tab first: products, colours, quantities and the logo are already filled in.</li>
+            <li>Call if they asked, or if the order is big. Send <b>Samples</b>, the catalogue or a quote from the tools under the chat.</li>
+            <li>Fill in anything missing on the Lead tab: exact quantity per product, colour, billing name and GST.</li>
+          </ul>
+        </div></li>
+      <li class="step"><div class="rail"><span class="dot">4</span><span class="line"></span></div>
+        <div class="card"><div class="card-head"><h3>The designer makes the mockup</h3><span class="who who-design">Designer</span></div>
+          <p>Leads at <span class="pill p-mock">Need mockup</span> go to the design team. The designer uploads the mockup in the chat (Lead tab › Mockups) and taps <b>Send for approval</b>. The customer gets it with two buttons: <b>✅ Confirm mockup</b> and <b>✏️ Need changes</b>.</p>
+          <p class="branch">✏️ Need changes → the lead goes back to Need mockup and the bot asks what to change. The designer updates it and sends again.</p>
+        </div></li>
+      <li class="step"><div class="rail"><span class="dot">5</span><span class="line"></span></div>
+        <div class="card"><div class="card-head"><h3>The customer confirms — the order is created</h3><span class="who who-crm">CRM, automatically</span></div>
+          <p>On ✅ Confirm the CRM raises the order from the lead (each product, colour, quantity, the catalogue price for that quantity, ₹800 digitising for embroidery, 5% GST) and sends the customer the order summary with the <b>50% advance payment link</b>.</p>
+          <p class="branch">If a quantity is a range or a price is “on request”, nothing is guessed: the customer is thanked and the chat waits for you, with a note saying what’s missing. Create the order from the chat.</p>
+        </div></li>
+      <li class="step"><div class="rail"><span class="dot">6</span><span class="line"></span></div>
+        <div class="card"><div class="card-head"><h3>Advance paid → production</h3><span class="who who-crm">CRM</span><span class="who who-sales">You</span></div>
+          <p>The Razorpay payment updates the order and the lead to <span class="pill p-part">Partially paid</span>. Confirm sizes with the customer if they’re not yet on the order.</p>
+        </div></li>
+      <li class="step"><div class="rail"><span class="dot">7</span><span class="line"></span></div>
+        <div class="card"><div class="card-head"><h3>Balance and dispatch</h3><span class="who who-sales">You</span></div>
+          <p>When production is done, send the balance link from the order messages in the chat. Once fully paid (<span class="pill p-paid">Paid</span>), the order is dispatched and the tracking goes to the customer.</p>
+        </div></li>
+    </ol>
+  </section>
+
+  <section aria-labelledby="tabs">
+    <h2 id="tabs">Where to look in the inbox</h2>
+    <p class="section-intro">Four lists at the top left. Work them left to right.</p>
+    <div class="tabs">
+      <div class="tab"><div class="tab-name"><span class="chip chip-hot">Reply now</span><span class="rank">first</span></div>
+        <p>Customers waiting for a reply — your chats and new ones nobody has taken. The red number on a chat is how many messages are waiting. <b>Keep this list at zero.</b></p></div>
+      <div class="tab"><div class="tab-name"><span class="chip">My chats</span><span class="rank">second</span></div>
+        <p>Every open chat assigned to you. Use it for follow-ups and for checking where each of your leads stands.</p></div>
+      <div class="tab"><div class="tab-name"><span class="chip">New leads</span><span class="rank">when Reply now is clear</span></div>
+        <p>Chats nobody has taken yet. Open one and reply — it becomes yours.</p></div>
+      <div class="tab"><div class="tab-name"><span class="chip">All chats</span><span class="rank">reference</span></div>
+        <p>Everything open, whoever has it. For managers, or to find a customer.</p></div>
+    </div>
+    <p class="section-intro">The status picker under the lists filters any of them — choose <span class="pill p-imp">Important</span> to see the big orders, or <span class="pill p-fu">Follow-up</span> for the ones to chase. The date filter at the top narrows everything to a period.</p>
+  </section>
+
+  <section aria-labelledby="priority">
+    <h2 id="priority">Which chat first</h2>
+    <ol class="prio">
+      <li><div><b>Reply now, with a red number.</b> A customer is waiting. Reply within 5 minutes during working hours.</div></li>
+      <li><div><b>Important (more than 50 pieces).</b> Reply and call. These are the biggest orders.</div></li>
+      <li><div><b>Mock completed with no answer from the customer.</b> Nudge them to tap Confirm, or ask what to change.</div></li>
+      <li><div><b>Follow-up.</b> Chase quotes and payments promised for today.</div></li>
+      <li><div><b>Reply windows running out.</b> A chat showing <span class="timer t-low">2h 10m to reply</span> needs a message before it closes.</div></li>
+      <li><div><b>New leads.</b> Take the newest first — they’re still on their phones.</div></li>
+    </ol>
+  </section>
+
+  <section aria-labelledby="shift">
+    <h2 id="shift">Your 9-hour shift</h2>
+    <div class="shift">
+      <div class="slot"><time>First 30 minutes</time><h3>Clear the night</h3>
+        <ul><li>Reply now: answer everyone who wrote overnight.</li><li>Important: call the big ones.</li><li>Follow-up: list who to chase today.</li></ul></div>
+      <div class="slot"><time>Every hour</time><h3>Back to zero</h3>
+        <ul><li>Reply now back to zero.</li><li>Check timers under 3 hours.</li><li>Return missed calls.</li></ul></div>
+      <div class="slot"><time>In between</time><h3>Move leads forward</h3>
+        <ul><li>Fill in quantities, colours and billing on the Lead tab.</li><li>Send samples and quotes.</li><li>Chase confirmations and advances.</li></ul></div>
+      <div class="slot"><time>Last 30 minutes</time><h3>Hand over cleanly</h3>
+        <ul><li>Nobody left in Reply now.</li><li>Set statuses right (Follow-up for anything pending).</li><li>Write a note on any chat the next person needs to know about.</li></ul></div>
+    </div>
+  </section>
+
+  <section aria-labelledby="statuses">
+    <h2 id="statuses">What each status means</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th scope="col">Status</th><th scope="col">Means</th><th scope="col">Set by</th><th scope="col">Your next move</th></tr></thead>
+        <tbody>
+          <tr><td><span class="pill p-new">New</span></td><td>First message in, nobody has replied.</td><td>CRM</td><td>Reply.</td></tr>
+          <tr><td><span class="pill p-enq">Enquiry</span></td><td>Asking about products or prices.</td><td>CRM / you</td><td>Find out product, colour, quantity.</td></tr>
+          <tr><td><span class="pill p-qual">Qualified</span></td><td>Real order details: product, quantity or logo.</td><td>Bot / you</td><td>Get the logo and exact quantities.</td></tr>
+          <tr><td><span class="pill p-imp">Important</span></td><td>More than 50 pieces.</td><td>Bot</td><td>Reply and call first.</td></tr>
+          <tr><td><span class="pill p-mock">Need mockup</span></td><td>Product, colour, quantity and logo are in.</td><td>Bot / you</td><td>Designer makes and sends the mockup.</td></tr>
+          <tr><td><span class="pill p-done">Mock completed</span></td><td>Mockup sent, waiting for the customer.</td><td>CRM</td><td>Nudge them to Confirm.</td></tr>
+          <tr><td><span class="pill p-fu">Follow-up</span></td><td>Something promised — a quote, a payment, a reply.</td><td>You</td><td>Chase on the day.</td></tr>
+          <tr><td><span class="pill p-part">Partially paid</span></td><td>Advance received, in production.</td><td>CRM</td><td>Confirm sizes; balance before dispatch.</td></tr>
+          <tr><td><span class="pill p-paid">Paid</span></td><td>Fully paid.</td><td>CRM</td><td>Dispatch and tracking.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section aria-labelledby="window">
+    <h2 id="window">WhatsApp’s 24-hour reply window</h2>
+    <p class="section-intro">WhatsApp lets you type freely for 24 hours after the customer’s last message. After that you can only send an approved template until they write again. The timer at the top of every chat shows where you are.</p>
+    <div class="window">
+      <div class="note"><span class="timer t-open">18h 20m to reply</span><p>Type anything: text, photos, files, samples.</p></div>
+      <div class="note"><span class="timer t-low">2h 10m to reply</span><p>Under 3 hours: send what you need to now — a question that gets them to reply keeps the window open.</p></div>
+      <div class="note"><span class="timer t-shut">Window closed — template only</span><p>Use <b>Template</b> under the chat (follow-up, payment request, mockup ready). When they reply, the window opens again.</p></div>
+      <div class="note"><span class="timer t-free">Free until 4 Nov, 11:30 am</span><p>Leads from ads: Meta charges nothing for messages for 72 hours — templates included — as long as we reply within 24 hours. Answer ad leads fast.</p></div>
+    </div>
+  </section>
+
+  <section aria-labelledby="tools">
+    <h2 id="tools">Tools in a chat</h2>
+    <div class="tools">
+      <div class="tool"><b>Reply to a message</b><span>Hover a message, tap the arrow: your answer quotes it on the customer’s phone. <span class="kbd">Esc</span> cancels.</span></div>
+      <div class="tool"><b>Several files at once</b><span>Drag them onto the chat, paste a screenshot, or tap +. They wait in a tray; the text goes as the first file’s caption.</span></div>
+      <div class="tool"><b>Samples</b><span>Photos of our work by product and colour — up to 30, a mix of colours ticked for you.</span></div>
+      <div class="tool"><b>Catalogue</b><span>The catalogue PDF, or one product’s photo and prices.</span></div>
+      <div class="tool"><b>Template</b><span>For chats past the 24-hour window.</span></div>
+      <div class="tool"><b>Payment</b><span>Payment link or QR for an order.</span></div>
+      <div class="tool"><b>Saved replies</b><span>Type <span class="kbd">/</span> in the reply box for the team’s ready answers.</span></div>
+      <div class="tool"><b>No reply needed</b><span>When all the customer said was “ok”, “thanks” or 👍, clear the count with this — it comes back if they write again.</span></div>
+      <div class="tool"><b>Calls</b><span>WhatsApp calling switches on once Meta approves the “Crewfit” display name. Until then, call from your phone and note the call on the Lead tab. Once it’s on, calls ring in the CRM, and a missed call shows in the chat — call back within 15 minutes.</span></div>
+      <div class="tool"><b>Emoji and voice notes</b><span>😊 next to the reply box. Voice notes play right in the chat.</span></div>
+    </div>
+  </section>
+
+  <section aria-labelledby="rules">
+    <h2 id="rules">Five rules</h2>
+    <ul class="rules">
+      <li><b>Reply now stays at zero.</b>A red number is a customer waiting.</li>
+      <li><b>Reply within 5 minutes.</b>Most leads choose whoever answers first.</li>
+      <li><b>Exact numbers on the Lead tab.</b>“50 to 200” can’t become an order; “120 pcs” can.</li>
+      <li><b>Never promise a delivery date</b> unless production has confirmed it.</li>
+      <li><b>Leave a note</b> on any chat the next person needs to understand.</li>
+    </ul>
+  </section>
+
+  <footer>Crewfit · WhatsApp CRM sales playbook · Questions about the CRM: ask your manager.</footer>
+</div>

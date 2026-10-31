@@ -20,6 +20,8 @@ app.use(cors({ exposedHeaders: ['Content-Disposition'] }));
 // mounted ahead of express.json below because it brings its own, larger body limit — the app-wide
 // parser would otherwise refuse a report over 100kb before the route ever saw it.
 app.use('/api/marketing/reports/ingest', require('./routes/marketing-reports').ingest);
+// Team guides bring their own parser too: a replaced guide is a whole HTML page.
+app.use('/api/guides', require('./middleware/auth'), require('./routes/guides'));
 // Stash the raw bytes alongside the parsed body — the Razorpay webhook needs to HMAC-verify
 // the exact raw payload against its signature header, which is lost once JSON.parse runs.
 app.use(express.json({ verify: (req, res, buf) => { req.rawBody = buf; } }));
@@ -1034,6 +1036,15 @@ async function ensureCrewfitSchema() {
                 PRIMARY KEY (username, minute)
             );
             CREATE INDEX IF NOT EXISTS wa_user_minutes_day_idx ON wa_user_minutes (minute);
+            -- A team guide an admin replaced with their own HTML file (routes/guides.js); without a
+            -- row the guide shipped in server/guides is shown.
+            CREATE TABLE IF NOT EXISTS team_guides (
+                key TEXT PRIMARY KEY,
+                html TEXT NOT NULL,
+                file_name TEXT,
+                updated_by TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
             ALTER TABLE crewfit_products ADD COLUMN IF NOT EXISTS chart_url TEXT;
 
             -- Whether a product can be sent from a chat. Hiding one keeps it in the catalog
