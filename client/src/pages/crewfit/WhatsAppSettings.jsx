@@ -25,6 +25,7 @@ import { NlTemplateLibrary } from './NlSettings'
 
 const TABS = [
   { key: 'menu', label: 'Menu list', icon: 'note' },
+  { key: 'answers', label: 'Bot answers', icon: 'spark' },
   { key: 'templates', label: 'Templates', icon: 'mail' },
   { key: 'orders', label: 'Order messages', icon: 'card' },
   { key: 'catalogue', label: 'Catalogue', icon: 'box' },
@@ -67,7 +68,7 @@ export default function WhatsAppSettings({ brand: brandKey = 'crewfit' }) {
   const Pane = brand.key !== 'crewfit' ? {
     bot: NlBotTab, knowledge: NlKnowledgeTab, products: NlProductsTab, handoff: NlHandoffTab, menu: NlMenuTab,
     replies: NlRepliesTab, team: NlTeamTab, assignment: NlAssignmentTab, hours: NlHoursTab, templates: NlTemplatesTab, calls: WaCallsTab, import: WaImportTab, connect: ConnectTab,
-  }[tab] : { connect: ConnectTab, calls: WaCallsTab, import: WaImportTab, menu: MenuTab, templates: TemplatesTab, orders: OrderMessagesTab, hours: HoursTab, catalogue: CatalogueTab, team: TeamTab, assignment: AssignmentTab, statuses: StatusesTab }[tab]
+  }[tab] : { connect: ConnectTab, calls: WaCallsTab, import: WaImportTab, menu: MenuTab, answers: BotAnswersTab, templates: TemplatesTab, orders: OrderMessagesTab, hours: HoursTab, catalogue: CatalogueTab, team: TeamTab, assignment: AssignmentTab, statuses: StatusesTab }[tab]
 
   return (
     <WaBrandContext.Provider value={brand}>
@@ -104,6 +105,63 @@ export default function WhatsAppSettings({ brand: brandKey = 'crewfit' }) {
 
 
 /* ════════════════════════════════════════════════════════════════════════════════════════════
+   Bot answers
+   ════════════════════════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * The team's answers to the questions that keep coming. When a customer's message has one of the
+ * keywords and nobody on the team has written in the chat for two hours, the bot replies with it.
+ */
+function BotAnswersTab() {
+  const apiFetch = useApi()
+  const toast = useToast()
+  const [answers, setAnswers] = useState(null)
+  const [saved, setSaved] = useState('')
+  const [saving, setSaving] = useState(false)
+  const shown = (list) => list.map(a => ({ ...a, keywords: a.keywords.join(', ') }))
+  const load = (list) => { const s = shown(list); setAnswers(s); setSaved(JSON.stringify(s)) }
+  useEffect(() => {
+    apiFetch('/api/whatsapp/admin/bot-answers').then(r => (r && !r.error ? load(r.answers) : toast.error(r?.error || 'Could not load the answers')))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  if (!answers) return <Loading />
+  const set = (i, patch) => setAnswers(list => list.map((a, j) => (j === i ? { ...a, ...patch } : a)))
+  const save = async () => {
+    setSaving(true)
+    const r = await apiFetch('/api/whatsapp/admin/bot-answers', { method: 'PUT', body: JSON.stringify({ answers }) })
+    setSaving(false)
+    if (!r || r.error) return toast.error(r?.error || 'Could not save')
+    load(r.answers)
+    toast.success('Bot answers saved')
+  }
+  return (
+    <>
+      <Head title="Bot answers" actions={<SaveButton dirty={JSON.stringify(answers) !== saved} saving={saving} onClick={save} />}>
+        The bot already answers from the Catalogue — products, prices, colours, size charts, photos of your work and the catalogue PDF.
+        These are for everything else customers keep asking. When a message has one of the keywords and nobody on the team has written in that chat for two hours, the bot sends the answer.
+      </Head>
+      <div className="was-answers">
+        {answers.map((a, i) => (
+          <section key={i} className={`was-card was-answer${a.on ? '' : ' was-answer-off'}`}>
+            <div className="was-answer-head">
+              <Toggle on={a.on} onChange={v => set(i, { on: v })} label={`Answer ${i + 1} on`} />
+              <input className="was-answer-keys" aria-label="Keywords" value={a.keywords} placeholder="Keywords, separated by commas — e.g. moq, minimum order"
+                onChange={e => set(i, { keywords: e.target.value })} />
+              <button type="button" className="btn-icon" aria-label="Delete this answer" title="Delete" onClick={() => setAnswers(list => list.filter((_, j) => j !== i))}><Icon name="trash" size={14} /></button>
+            </div>
+            <textarea rows={3} aria-label="Answer" value={a.answer} maxLength={1000} placeholder="What the bot replies"
+              onChange={e => set(i, { answer: e.target.value })} />
+          </section>
+        ))}
+      </div>
+      <button type="button" className="btn btn-secondary btn-sm" onClick={() => setAnswers(list => [...list, { on: true, keywords: '', answer: '' }])}>
+        <Icon name="plus" size={14} /> Add an answer
+      </button>
+    </>
+  )
+}
+
+/* ════════════════════════════════════════════════════════════════════════════════════════════
    Menu list
    ════════════════════════════════════════════════════════════════════════════════════════════ */
 
@@ -115,7 +173,23 @@ const STEP_KINDS = {
   ask_media: 'Ask for a file',
   summary: 'Summary and price',
   send_catalogue: 'Send the catalogue PDF',
+  catalogue_pick: 'Pick a product (from the Catalogue)',
+  color_pick: 'Pick a colour (of that product)',
+  ask_number: 'Ask how many (a number)',
+  send_size_chart: 'Send the size chart',
+  send_samples: 'Send photos of our work',
+  send_prices: 'Send the price list',
 }
+// What the catalogue-driven steps do, shown under them in the editor.
+const STEP_HINT = {
+  catalogue_pick: 'Lists the products switched on in Settings › Catalogue, by category; the customer taps one. With “show the product card”, its photo, colours and prices are sent too. {product} in later messages is the one picked.',
+  color_pick: 'Lists the colours of the product just picked (from the Catalogue). {color} in later messages is the one picked.',
+  ask_number: 'The customer types a number. Each answer closes one product (product, colour, quantity) on the enquiry.',
+  send_size_chart: 'Sends the size chart of the product picked (Settings › Catalogue), or the catalogue PDF if it has none, then carries on.',
+  send_samples: 'Sends up to 30 production photos of the product picked, one colour after another, then carries on.',
+  send_prices: 'Sends every product with its starting price, then carries on.',
+}
+const NO_TEXT = ['summary', 'send_size_chart', 'send_samples', 'send_prices']
 const CAP = { buttons: 3, buttonTitle: 20, rows: 10, rowTitle: 24, rowDesc: 72 }
 const slugId = (t) => String(t || '').trim().replace(/\s+/g, ' ').slice(0, 60)
 
@@ -346,6 +420,13 @@ function MenuTab() {
                 </div>
               )}
             </div>
+            {STEP_HINT[step.type] && <p className="was-hint" style={{ margin: '0 0 10px' }}>{STEP_HINT[step.type]}</p>}
+            {step.type === 'catalogue_pick' && (
+              <label className="page-check" style={{ margin: '0 0 10px' }}>
+                <input type="checkbox" checked={!!step.card} onChange={e => setStep(selected, { card: e.target.checked })} />
+                Show the product card (photo, colours, prices) when one is picked
+              </label>
+            )}
             {step.type === 'send_catalogue' ? (
               <div className="input-group">
                 <label htmlFor="wa-step-text">Caption on the PDF</label>
@@ -353,7 +434,7 @@ function MenuTab() {
                   onChange={e => setStep(selected, { text: e.target.value })} />
                 <span className="was-hint">Sends the current catalogue from the Catalog page, then carries on.</span>
               </div>
-            ) : step.type !== 'summary' ? (
+            ) : !NO_TEXT.includes(step.type) ? (
               <div className="input-group">
                 <label htmlFor="wa-step-text">Message</label>
                 <textarea id="wa-step-text" rows={4} value={step.text || ''} maxLength={1024}
@@ -449,7 +530,12 @@ function PhonePreview({ step }) {
       <div className="was-phone-screen">
         <div className="was-phone-msg">
           {step.type === 'send_catalogue' && <div className="was-phone-doc"><span>PDF</span> Crewfit catalogue.pdf</div>}
-          <div className="was-phone-text">{step.type === 'summary' ? 'Thank you — here is what we have: …' : step.text || (step.type === 'send_catalogue' ? 'Here is our latest Crewfit catalogue 📘' : '')}</div>
+          <div className="was-phone-text">{step.type === 'summary' ? 'Thank you — here is what we have: …'
+            : step.type === 'send_size_chart' ? '📏 Size chart of the product picked'
+              : step.type === 'send_samples' ? '📷 Up to 30 photos of the product picked'
+                : step.type === 'send_prices' ? 'Here’s our range (price per piece, printing included, from): …'
+                  : step.text || (step.type === 'send_catalogue' ? 'Here is our latest Crewfit catalogue 📘' : '')}</div>
+          {['catalogue_pick', 'color_pick'].includes(step.type) && <div className="was-phone-list">☰ {step.type === 'catalogue_pick' ? 'See products' : 'Choose colour'}</div>}
           {step.type === 'buttons' && (step.buttons || []).map((b, i) => <div key={i} className="was-phone-btn">{b.title}</div>)}
           {step.type === 'list' && <div className="was-phone-btn">{step.button || 'Choose'}</div>}
         </div>
@@ -1178,20 +1264,21 @@ function CatalogueTab() {
     }
   }
 
-  const upload = async (p, file) => {
+  // The product's photo, or its size chart (kind 'chart'): the picture the bot sends on request.
+  const upload = async (p, file, kind = 'photo') => {
     if (!file) return
-    setUploading(p.id)
+    setUploading(`${kind}:${p.id}`)
     const fd = new FormData()
     fd.append('photo', file)
-    const r = await apiFetch(`/api/whatsapp/admin/catalogue/${p.id}/photo`, { method: 'POST', body: fd })
+    const r = await apiFetch(`/api/whatsapp/admin/catalogue/${p.id}/${kind}`, { method: 'POST', body: fd })
     setUploading(null)
-    if (!r || r.error) return toast.error(r?.error || 'Could not upload that photo')
-    setProducts(list => list.map(x => (x.id === p.id ? { ...x, image_url: r.image_url } : x)))
+    if (!r || r.error) return toast.error(r?.error || 'Could not upload that picture')
+    setProducts(list => list.map(x => (x.id === p.id ? { ...x, ...r } : x)))
   }
-  const removePhoto = async (p) => {
-    const r = await apiFetch(`/api/whatsapp/admin/catalogue/${p.id}/photo`, { method: 'DELETE' })
-    if (!r || r.error) return toast.error(r?.error || 'Could not remove that photo')
-    setProducts(list => list.map(x => (x.id === p.id ? { ...x, image_url: null } : x)))
+  const removePhoto = async (p, kind = 'photo') => {
+    const r = await apiFetch(`/api/whatsapp/admin/catalogue/${p.id}/${kind}`, { method: 'DELETE' })
+    if (!r || r.error) return toast.error(r?.error || 'Could not remove that picture')
+    setProducts(list => list.map(x => (x.id === p.id ? { ...x, ...r } : x)))
   }
 
   if (!products) return <Loading />
@@ -1232,7 +1319,7 @@ function CatalogueTab() {
                 {p.image_url ? <img src={`${API_URL}${p.image_url}`} alt={p.name} loading="lazy" /> : <span><Icon name="shirt" size={22} /> No photo yet</span>}
                 <div className="was-product-photo-actions">
                   <label className="mini-btn">
-                    {uploading === p.id ? 'Uploading…' : p.image_url ? 'Change photo' : 'Add photo'}
+                    {uploading === `photo:${p.id}` ? 'Uploading…' : p.image_url ? 'Change photo' : 'Add photo'}
                     <input type="file" accept="image/jpeg,image/png,image/webp" hidden onChange={e => { upload(p, e.target.files?.[0]); e.target.value = '' }} />
                   </label>
                   {p.image_url && <button type="button" className="mini-btn" onClick={() => removePhoto(p)}>Remove</button>}
@@ -1252,6 +1339,19 @@ function CatalogueTab() {
                   ))}
                 </ul>
               ) : p.from_price ? <p className="was-hint">From ₹{Number(p.from_price)}</p> : <p className="was-hint">No prices set</p>}
+              {/* Sent when a customer asks for sizes: the catalogue page with the size chart, colours and prices. */}
+              <div className="was-product-chart">
+                {p.chart_url
+                  ? <a href={`${API_URL}${p.chart_url}`} target="_blank" rel="noreferrer"><img src={`${API_URL}${p.chart_url}`} alt={`${p.name} size chart`} loading="lazy" /></a>
+                  : <span className="was-hint">No size chart — the bot will offer the catalogue PDF instead.</span>}
+                <div className="was-inline">
+                  <label className="mini-btn">
+                    {uploading === `chart:${p.id}` ? 'Uploading…' : p.chart_url ? 'Change size chart' : 'Add size chart'}
+                    <input type="file" accept="image/jpeg,image/png,image/webp" hidden onChange={e => { upload(p, e.target.files?.[0], 'chart'); e.target.value = '' }} />
+                  </label>
+                  {p.chart_url && <button type="button" className="mini-btn" onClick={() => removePhoto(p, 'chart')}>Remove</button>}
+                </div>
+              </div>
               <label className="was-product-foot">
                 <Toggle on={p.wa_visible} onChange={v => flip(p, v)} label={`Send ${p.name} from WhatsApp`} disabled={!p.active} />
                 <span>{p.wa_visible && p.active ? 'Reps can send it' : p.active ? 'Hidden from chats' : 'Inactive in the catalog'}</span>

@@ -7,10 +7,21 @@
  * number or a billing address), or a product from the catalogue. What was found is written onto the
  * lead (quantity, product, GST number, logo) where it is still empty, and noted on the chat.
  *
- * Answering: a customer asking about a product ("polo price?", "do you have hoodies") gets its photo,
- * material, colours and price tiers from Settings › Catalogue; a general ask ("price list",
- * "catalogue") gets the range with prices. Asking for a person gets a line saying someone will reply,
- * and the chat waits in "Needs a person". Nothing is sent once a person has the chat.
+ * Answering, from the catalogue and the team's saved answers, whenever no person has written in
+ * the chat for two hours (so it never talks over a salesperson):
+ *   - a product ("polo price?", "do you have hoodies"): its photo, material, colours and price tiers;
+ *   - "catalogue", "brochure", "pdf": the catalogue PDF;
+ *   - "size chart", "sizes", "measurements": the product's catalogue page with its size chart;
+ *   - "samples", "photos of your work": up to 30 production photos of the product, one colour after
+ *     another;
+ *   - "what colours": the product's colours;
+ *   - "price list", "rates": the range with prices;
+ *   - anything in Settings › Bot answers (MOQ, address, payment terms…);
+ *   - asking for a person: a line saying someone will reply.
+ * When it can't tell which product is meant, it asks with a list, and the tap is answered here too.
+ *
+ * Then the lead rules (cf-lead-rules): more than 50 pieces is Important; product, colour, quantity
+ * and logo all in is Need mockup.
  */
 
 const db = require('../db/connection');
@@ -22,12 +33,17 @@ const safeJson = (v, f) => { try { return typeof v === 'string' ? (JSON.parse(v 
 const GSTIN = /\b\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]\b/i;
 const QTY = /(?:\b(?:qty|quantity)\s*[:\-=]?\s*(\d{1,5})\b)|(?:\b(\d{1,5})\s*(?:pcs|pc|pieces?|nos|numbers|units|qty|t-?shirts?|tees|shirts?|polos?|hoodies?|jerseys?|caps?|uniforms?)\b)/i;
 const ASK_PERSON = /\b(talk|speak|connect|call)\b.*\b(team|person|someone|human|agent|executive|you)\b|\bcall me\b|\bhuman\b/i;
-const ASK_RANGE = /\b(catalog(ue)?|price ?list|rate ?card|rates|all products|what (do )?you (have|sell|make))\b/i;
+const ASK_RANGE = /\b(price ?list|rate ?card|rates|all products|what (do )?you (have|sell|make))\b/i;
+const ASK_CATALOGUE = /\b(catalog(ue)?s?|brochure|pdf|product list)\b/i;
+const ASK_SIZE = /\b(size ?chart|sizes?|measurements?|chest|length|xxl|xl)\b/i;
+const ASK_SAMPLES = /\b(samples?|photos?|pics?|pictures?|images?|previous (work|orders?)|your work|real (photos?|pics?))\b/i;
+const ASK_COLOUR = /\b(colou?rs?|shades?)\b/i;
+const QUIET_HOURS = 2;          // the bot stays out of a chat a person wrote in this recently
 const ASK_PRICE = /\b(price|cost|rate|how much|quote|moq|minimum)\b/i;
 
 async function products() {
     const rows = (await db.query(
-        `SELECT id, name, category, fit, gsm, material, from_price, blurb, colors, tiers, image_url
+        `SELECT id, name, category, fit, gsm, material, from_price, blurb, colors, tiers, image_url, chart_url
            FROM crewfit_products WHERE active AND COALESCE(wa_visible, true) ORDER BY sort_order, id`)).rows;
     return rows.map(p => ({ ...p, colors: safeJson(p.colors, []), tiers: safeJson(p.tiers, []) }));
 }
@@ -78,7 +94,7 @@ async function saidRecently(conversationId, needle) {
  */
 async function qualify(conversationId, message, { text = '', mediaUrl = null } = {}) {
     const row = (await db.query(
-        `SELECT l.id, l.status, l.quantity, l.product_interest, l.gst_number, l.logo_url, l.billing_address
+        `SELECT l.id, l.status, l.quantity, l.product_interest, l.products, l.gst_number, l.logo_url, l.billing_address
            FROM wa_conversations c JOIN wa_contacts k ON k.id = c.contact_id JOIN crewfit_leads l ON l.id = k.lead_id
           WHERE c.id = $1`, [conversationId])).rows[0];
     if (!row) return [];
@@ -87,7 +103,7 @@ async function qualify(conversationId, message, { text = '', mediaUrl = null } =
     const type = message?.type;
     if ((type === 'image' || type === 'document') && mediaUrl) {
         found.push('a logo or design');
-        if (!row.logo_url && type === 'image') set.logo_url = mediaUrl;
+        if (!row.logo_url) set.logo_url = mediaUrl;
     }
     const q = String(text).match(QTY);
     const qty = q && Number(q[1] || q[2]);
@@ -98,12 +114,23 @@ async function qualify(conversationId, message, { text = '', mediaUrl = null } =
     const gst = String(text).match(GSTIN);
     if (gst) { found.push('a GST number'); if (!row.gst_number) set.gst_number = gst[0].toUpperCase(); }
     else if (/\bbilling\b|\bgst\b|\bcompany name\b|\binvoice (to|address)\b/i.test(text) && String(text).length > 25) found.push('billing details');
-    const hits = matchProducts(text, await products());
+    const list = await products();
+    const hits = matchProducts(text, list);
     if (hits.length) {
         found.push(`interest in ${hits[0].name}`);
         if (!row.product_interest) set.product_interest = hits[0].name;
     }
+    // A colour of the product they're asking about, named in the message.
+    const product = list.find(p => p.name === (set.product_interest || row.product_interest));
+    const colour = product && product.colors.find(c => new RegExp(`\\b${c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(text));
+    if (colour) found.push(`the colour ${colour}`);
     if (!found.length) return [];
+    // The product list follows: one product picked here, its colour and quantity when given.
+    const items = require('./cf-lead-rules').itemsOf({ ...row, ...set });
+    if ((set.product_interest || colour || set.quantity) && items.length <= 1) {
+        const it = { product: set.product_interest || row.product_interest || items[0]?.product || '', color: colour || items[0]?.color || '', quantity: set.quantity || row.quantity || items[0]?.quantity || '' };
+        if (it.product) set.products = JSON.stringify([it]);
+    }
 
     const keys = Object.keys(set);
     if (keys.length) {
@@ -118,55 +145,184 @@ async function qualify(conversationId, message, { text = '', mediaUrl = null } =
                 [conversationId, `Marked Qualified automatically — the customer sent ${found.join(', ')}`]);
         }
     }
+    // Then on to Important or Need mockup, if what we now know says so.
+    await require('./cf-lead-rules').apply(row.id, conversationId);
     return found;
 }
 
 /* ── Answering from the catalogue ─────────────────────────────────────────────────────────── */
 
+const link = (url) => (/^https?:\/\//.test(url) ? url : `${PUBLIC_BASE()}${url}`);
+
+/** A product's photo with its details, as one message (or the details alone, without a photo). */
+async function sendProductCard(conversation, p) {
+    const cap = caption(p);
+    if (p.image_url) await record(conversation.id, await wa.sendImageLink(conversation.phone, link(p.image_url), cap), cap, 'image', p.image_url);
+    else await record(conversation.id, await wa.sendText(conversation.phone, cap), cap);
+}
+
+/** The product's size chart (its catalogue page), or the catalogue PDF when it has none. */
+async function sendSizeChart(conversation, p) {
+    if (p?.chart_url) {
+        const cap = `${p.name} — size chart, colours and prices`;
+        await record(conversation.id, await wa.sendImageLink(conversation.phone, link(p.chart_url), cap), cap, 'image', p.chart_url);
+        return true;
+    }
+    await require('./wa-extras').sendCatalogue(conversation, { senderType: 'bot', caption: `Size charts for every product are in our catalogue 📘` });
+    return true;
+}
+
+async function sendPriceList(conversation, list) {
+    const body = `Here’s our range (price per piece, printing included, from):\n\n${list.map(p => `• ${p.name}${p.from_price ? ` — ${rupees(p.from_price)}` : ''}`).join('\n')}\n\nTell us which one you like and we’ll send photos, sizes and the full price list.`;
+    await record(conversation.id, await wa.sendText(conversation.phone, body), body);
+}
+
+/** Up to 30 production photos of the product, one colour after another. False if we have none. */
+async function sendSamples(conversation, p) {
+    const samples = require('./cf-samples');
+    const photos = await samples.pick({ product: p.name });
+    if (!photos.length) return false;
+    const colours = [...new Set(photos.map(x => x.color).filter(Boolean))];
+    await samples.send(conversation, photos, { senderType: 'bot',
+        intro: `Here are ${photos.length} photos of ${p.name} we've made for other customers${colours.length > 1 ? `, in ${colours.length} colours` : ''} 👇` });
+    return true;
+}
+
+/** "Which product?" as a list; the tap comes back with the id `${kind}:${productId}`. */
+async function askWhichProduct(conversation, kind, question) {
+    const list = await products();
+    const rows = list.slice(0, 10).map(p => ({ id: `${kind}:${p.id}`, title: p.name.slice(0, 24), description: [p.category, p.from_price ? `from ${rupees(p.from_price)}` : null].filter(Boolean).join(' · ').slice(0, 72) }));
+    const wamid = await wa.sendList(conversation.phone, question, { button: 'Choose product', sections: [{ title: 'Our products', rows }] });
+    await record(conversation.id, wamid, question, 'interactive');
+}
+
+/** The team's saved answers (Settings › Bot answers): [{ keywords: [...], answer, on }]. */
+async function savedAnswers() {
+    const r = (await db.query(`SELECT value FROM wa_settings WHERE key = 'cf_bot_answers'`)).rows[0];
+    return safeJson(r?.value, null) || DEFAULT_ANSWERS;
+}
+const DEFAULT_ANSWERS = [
+    { on: true, keywords: ['moq', 'minimum order', 'minimum quantity', 'min order'], answer: 'Our minimum order is just 5 pieces per design. The price per piece drops as the quantity goes up — tell us how many you need and we\'ll share the exact rate.' },
+    { on: true, keywords: ['sample', 'trial piece', 'one piece'], answer: 'Yes, we can make a sample before the bulk order — it costs ₹250 more than the per-piece price, with your logo printed.' },
+    { on: true, keywords: ['printing charge', 'print charge', 'printing cost', 'including printing'], answer: 'Our prices include printing your logo. Embroidery has a one-off ₹800 digitising charge for the logo.' },
+    { on: true, keywords: ['embroidery', 'embroidered'], answer: 'We do both printing and embroidery. Embroidery has a one-off ₹800 digitising charge for your logo; printing is included in the price.' },
+    { on: true, keywords: ['advance', 'payment terms', 'how to pay', 'payment method'], answer: 'We start production after a 50% advance. The balance is paid before dispatch. We send a secure payment link — UPI, cards and net banking all work.' },
+    { on: true, keywords: ['address', 'location', 'where are you', 'office', 'visit'], answer: 'We\'re at Plot no 2, 2nd Floor, Dhanalakshmi Nagar, Moulivakkam, Iyyappanthangal, Chennai, Tamil Nadu 600125.' },
+    { on: true, keywords: ['email', 'mail id'], answer: 'You can email us at crewfitfashion@gmail.com.' },
+    { on: false, keywords: ['delivery time', 'how many days', 'when will i get', 'dispatch'], answer: '(Write how long production and delivery usually take, then switch this on.)' },
+];
+
+/** Has a person written in this chat recently? Then the bot keeps out of it. */
+async function personActive(conversationId) {
+    return !!(await db.query(
+        `SELECT 1 FROM wa_messages WHERE conversation_id = $1 AND direction = 'out' AND sender_type IN ('user','phone')
+            AND COALESCE(sent_at, created_at) > LOCALTIMESTAMP - make_interval(hours => $2) LIMIT 1`, [conversationId, QUIET_HOURS])).rows[0];
+}
+
+/** The product the chat is about: named in the message, else the one on the lead. */
+async function productInChat(conversation, text, list) {
+    const hit = matchProducts(text, list)[0];
+    if (hit) return hit;
+    const lead = (await db.query(
+        `SELECT l.product_interest FROM wa_conversations c JOIN wa_contacts k ON k.id = c.contact_id JOIN crewfit_leads l ON l.id = k.lead_id WHERE c.id = $1`,
+        [conversation.id])).rows[0];
+    return list.find(p => p.name === lead?.product_interest) || null;
+}
+
 /**
- * Answer a product question while nobody has the chat. Returns true when it replied.
- * `conversation` needs id, phone, mode, assigned_to, status.
+ * Answer what the bot can, unless a person is in the chat. Returns true when it replied.
+ * `conversation` needs id, phone, mode, status. `tapped` is a list reply's id, if any.
  */
-async function answer(conversation, text) {
-    if (!text || conversation.assigned_to || conversation.mode !== 'human' || conversation.status === 'closed') return false;
-    const phone = conversation.phone;
+async function answer(conversation, text, tapped = null) {
+    if (conversation.mode !== 'human' || conversation.status === 'closed') return false;
+    if (await personActive(conversation.id)) return false;
+    const list = await products();
+
+    // A tap on one of the bot's own "which product?" lists.
+    const m = String(tapped || '').match(/^(chart|samples|colours):(\d+)$/);
+    if (m) {
+        const p = list.find(x => String(x.id) === m[2]);
+        if (!p) return false;
+        if (m[1] === 'chart') return sendSizeChart(conversation, p);
+        if (m[1] === 'colours') return sendColours(conversation, p);
+        if (!(await sendSamples(conversation, p))) await sendProductCard(conversation, p);
+        return true;
+    }
+    if (!text) return false;
 
     if (ASK_PERSON.test(text)) {
         if (await saidRecently(conversation.id, 'someone from our team')) return true;
         const body = 'Sure — someone from our team will reply to you here shortly.';
-        await record(conversation.id, await wa.sendText(phone, body), body);
+        await record(conversation.id, await wa.sendText(conversation.phone, body), body);
+        return true;
+    }
+    if (ASK_CATALOGUE.test(text)) {
+        if (await saidRecently(conversation.id, 'catalogue')) return true;
+        await require('./wa-extras').sendCatalogue(conversation, { senderType: 'bot' });
+        return true;
+    }
+    if (!list.length) return false;
+    if (ASK_SIZE.test(text)) {
+        const p = await productInChat(conversation, text, list);
+        if (p) return sendSizeChart(conversation, p);
+        await askWhichProduct(conversation, 'chart', 'Which product would you like the size chart for?');
+        return true;
+    }
+    // "Sample" can also mean a trial piece ("sample piece price") — that's a saved answer, not photos.
+    const trialPiece = /\bsamples?\s*(piece|price|cost|charges?|order|rate)\b|\b(trial|one piece)\b/i.test(text);
+    if (ASK_SAMPLES.test(text) && !trialPiece && !/\b(logo|design)\b/i.test(text)) {
+        const p = await productInChat(conversation, text, list);
+        if (p) {
+            if (await sendSamples(conversation, p)) return true;
+            await sendProductCard(conversation, p);
+            return true;
+        }
+        await askWhichProduct(conversation, 'samples', 'Happy to share photos of our work! Which product would you like to see?');
+        return true;
+    }
+    if (ASK_COLOUR.test(text)) {
+        const p = await productInChat(conversation, text, list);
+        if (p) return sendColours(conversation, p);
+        await askWhichProduct(conversation, 'colours', 'Which product would you like the colours for?');
         return true;
     }
 
-    const list = await products();
-    if (!list.length) return false;
     const hits = matchProducts(text, list);
     if (hits.length) {
         let sent = 0;
         for (const p of hits.slice(0, 3)) {
             if (await saidRecently(conversation.id, `*${p.name}*`)) continue;
-            const cap = caption(p);
-            if (p.image_url) {
-                const link = /^https?:\/\//.test(p.image_url) ? p.image_url : `${PUBLIC_BASE()}${p.image_url}`;
-                await record(conversation.id, await wa.sendImageLink(phone, link, cap), cap, 'image', p.image_url);
-            } else {
-                await record(conversation.id, await wa.sendText(phone, cap), cap);
-            }
+            await sendProductCard(conversation, p);
             sent++;
         }
         if (sent) {
-            const next = 'Prices are for the garment. Reply with the quantity, sizes and your logo, and we’ll send you a quote.';
-            if (!(await saidRecently(conversation.id, 'send you a quote'))) await record(conversation.id, await wa.sendText(phone, next), next);
+            const next = 'Prices include printing. Tell us the colour, how many pieces, and send your logo — we’ll prepare a mockup and quote.';
+            if (!(await saidRecently(conversation.id, 'prepare a mockup'))) await record(conversation.id, await wa.sendText(conversation.phone, next), next);
         }
-        return sent > 0 || hits.length > 0;
+        return true;
     }
     if (ASK_RANGE.test(text) || (ASK_PRICE.test(text) && String(text).length < 80)) {
         if (await saidRecently(conversation.id, 'Here’s our range')) return true;
-        const body = `Here’s our range (price per piece, from):\n\n${list.map(p => `• ${p.name}${p.from_price ? ` — ${rupees(p.from_price)}` : ''}`).join('\n')}\n\nTell us which one you like and we’ll send photos and the full price list.`;
-        await record(conversation.id, await wa.sendText(phone, body), body);
+        await sendPriceList(conversation, list);
+        return true;
+    }
+    // The team's own answers, by keyword.
+    const lower = String(text).toLowerCase();
+    const saved = (await savedAnswers()).find(a => a.on && (a.keywords || []).some(k => k && lower.includes(String(k).toLowerCase())));
+    if (saved) {
+        if (await saidRecently(conversation.id, saved.answer.slice(0, 40))) return true;
+        await record(conversation.id, await wa.sendText(conversation.phone, saved.answer), saved.answer);
         return true;
     }
     return false;
+}
+
+async function sendColours(conversation, p) {
+    const body = p.colors.length
+        ? `*${p.name}* comes in ${p.colors.length} colours: ${p.colors.join(', ')}.\n\nWhich colour would you like?`
+        : `For *${p.name}*, tell us the colour you need and we'll confirm it.`;
+    await record(conversation.id, await wa.sendText(conversation.phone, body), body);
+    return true;
 }
 
 /** Both, for one Crewfit message. Never throws: the message is already saved. */
@@ -176,10 +332,12 @@ async function onInbound(conversationId, message, { text, mediaUrl }) {
         const c = (await db.query(
             `SELECT c.id, c.mode, c.assigned_to, c.status, k.phone FROM wa_conversations c JOIN wa_contacts k ON k.id = c.contact_id WHERE c.id = $1`,
             [conversationId])).rows[0];
-        if (c && lines.current()?.brand === 'crewfit' && wa.configured()) await answer(c, text);
+        const tapped = message?.interactive?.list_reply?.id || message?.interactive?.button_reply?.id || null;
+        if (c && lines.current()?.brand === 'crewfit' && wa.configured()) await answer(c, text, tapped);
     } catch (err) {
         console.error('crewfit assist error:', err.message);
     }
 }
 
-module.exports = { qualify, answer, onInbound, matchProducts, caption, products, QTY, GSTIN };
+module.exports = { qualify, answer, onInbound, matchProducts, caption, products, QTY, GSTIN,
+    sendProductCard, sendSizeChart, sendSamples, sendPriceList, sendColours, savedAnswers, DEFAULT_ANSWERS };

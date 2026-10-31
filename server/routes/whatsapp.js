@@ -167,6 +167,8 @@ function describe(message) {
         case 'audio': return '🎤 Voice message';
         case 'video': return message.video?.caption || '🎬 Video';
         case 'sticker': return 'Sticker';
+        // The emoji itself; an empty one is a reaction taken back.
+        case 'reaction': return message.reaction?.emoji || '';
         case 'location': return `📍 ${message.location?.name || 'Location'}`;
         case 'contacts': return '👤 Contact card';
         default: return message.type;
@@ -216,8 +218,15 @@ async function receiveMessage(message, profileName) {
 
     if (!inserted.rows[0]) return;     // Meta sent it twice; the first one is already here
     const messageId = inserted.rows[0].id;
-    // They swiped to reply to one of the messages in the chat.
-    if (message.context?.id) await db.query('UPDATE wa_messages SET reply_to = $2 WHERE id = $1', [messageId, message.context.id]);
+    // They swiped to reply to one of the messages in the chat — or reacted to one.
+    const answers = message.context?.id || (message.type === 'reaction' ? message.reaction?.message_id : null);
+    if (answers) await db.query('UPDATE wa_messages SET reply_to = $2 WHERE id = $1', [messageId, answers]);
+    // A reaction is not something to answer: it shows on the message it reacts to, and leaves the
+    // chat where it was (no unread count, no menu, no "needs a person").
+    if (message.type === 'reaction') {
+        await db.query('UPDATE wa_conversations SET last_inbound_at = CURRENT_TIMESTAMP WHERE id = $1', [conversation.id]);
+        return;
+    }
     // Was this the opening message? Only then does a menu start; mid-conversation it would be
     // an interruption.
     const isFirst = (await db.query(
@@ -273,6 +282,11 @@ async function receiveMessage(message, profileName) {
         catch (err) { console.error('normless bot error:', err.message); }
         return;
     }
+
+    // ✅ Confirm mockup / ✏️ Need changes, from the approval message or its template.
+    try {
+        if (await require('../services/cf-mockup').onReply(conversation.id, interactivePayload(message)?.id)) return;
+    } catch (err) { console.error('crewfit mockup reply error:', err.message); }
 
     // The menu, if one is switched on. It answers the opening questions and hands over when it
     // stops being useful; a conversation a person has taken is never interrupted by it.
@@ -609,7 +623,7 @@ router.use(async (req, res, next) => {
  */
 const CREWFIT_ONLY = [
     /^\/leads\//, /^\/statuses$/, /^\/catalogue(-pdf)?$/, /^\/orders\//, /^\/flows/, /^\/admin(\/|$)/,
-    /^\/settings$/, /^\/conversations\/\d+\/(product|orders|catalogue-pdf|billing|payment-qr|quotes|mockups)(\/|$)/,
+    /^\/settings$/, /^\/conversations\/\d+\/(product|orders|catalogue-pdf|billing|payment-qr|quotes|mockups|samples)(\/|$)/,
 ];
 router.use((req, res, next) => {
     if (req.waLine?.brand !== 'crewfit' && CREWFIT_ONLY.some(rx => rx.test(req.path))) {
@@ -733,7 +747,7 @@ router.get('/config', (req, res) => {
 
 // Who spoke last: a chat whose last word is the customer's is one waiting for an answer. By when
 // it was said, not when it was saved — imported history is saved after newer messages.
-const LAST_MESSAGE = (col) => `(SELECT m.${col} FROM wa_messages m WHERE m.conversation_id = c.id
+const LAST_MESSAGE = (col) => `(SELECT m.${col} FROM wa_messages m WHERE m.conversation_id = c.id AND m.type <> 'reaction'
                           ORDER BY COALESCE(m.sent_at, m.created_at) DESC, m.id DESC LIMIT 1)`;
 const LAST_DIRECTION = LAST_MESSAGE('direction');
 // A chat brought in from the phone's backup whose customer is still waiting on us: the last word is
@@ -755,7 +769,7 @@ function lastMessageRange(req, params) {
 }
 // How many messages the customer has sent since a person last answered — from here or from the
 // phone app. The bot, the assistant and automatic messages are not an answer.
-const UNREPLIED = `(SELECT COUNT(*) FROM wa_messages m WHERE m.conversation_id = c.id AND m.direction = 'in'
+const UNREPLIED = `(SELECT COUNT(*) FROM wa_messages m WHERE m.conversation_id = c.id AND m.direction = 'in' AND m.type <> 'reaction'
                       AND (COALESCE(m.sent_at, m.created_at), m.id) > ALL (
                           SELECT COALESCE(o.sent_at, o.created_at), o.id FROM wa_messages o
                            WHERE o.conversation_id = c.id AND o.direction = 'out' AND o.sender_type IN ('user', 'phone')
@@ -853,6 +867,30 @@ router.get('/dashboard/messages', async (req, res) => {
     }
 });
 
+/** The team's day, person by person (managers). ?day=YYYY-MM-DD, default today. */
+router.get('/dashboard/team-day', async (req, res) => {
+    try {
+        if (!req.waDashboard) return res.status(403).json({ error: 'Only managers can see the team' });
+        res.json(await dashboard.teamDay(req.waLine.id, req.query));
+    } catch (err) {
+        console.error('whatsapp team day error:', err);
+        res.status(500).json({ error: 'Could not work out the team’s day' });
+    }
+});
+
+/** "I'm here": a minute of somebody using the CRM. The app sends it once a minute while in use. */
+router.post('/presence', async (req, res) => {
+    try {
+        if (req.user?.username) {
+            await db.query(`INSERT INTO wa_user_minutes (username, minute) VALUES ($1, date_trunc('minute', LOCALTIMESTAMP)) ON CONFLICT DO NOTHING`,
+                [String(req.user.username).toLowerCase()]);
+        }
+        res.json({ ok: true });
+    } catch (err) {
+        res.status(500).json({ error: 'Could not note that' });
+    }
+});
+
 router.get('/dashboard/me', async (req, res) => {
     try {
         if (req.waLine.brand !== 'crewfit') return res.status(404).json({ error: 'Not part of this inbox' });
@@ -879,7 +917,11 @@ router.get('/conversations', async (req, res) => {
         } else if (filter === 'waiting') {
             // "Needs a person": a person is answering it, and the customer spoke last. On Crewfit,
             // only chats nobody has taken yet — the queue somebody picks up from.
-            where.push(`c.status = 'open' AND c.mode = 'human' AND ${LAST_DIRECTION} = 'in' AND ${NOT_SETTLED}${req.waLine.brand === 'crewfit' ? ` AND (c.assigned_to IS NULL OR ${BACKUP_WAITING})` : ''}`);
+            // Crewfit: "Reply now" is this person's queue — chats waiting on a reply that are theirs
+            // or nobody's (a backed-up chat only for its first three days).
+            if (req.waLine.brand === 'crewfit') params.push(String(req.user?.username || '').toLowerCase());
+            where.push(`c.status = 'open' AND c.mode = 'human' AND ${LAST_DIRECTION} = 'in' AND ${NOT_SETTLED}${req.waLine.brand === 'crewfit'
+                ? ` AND (c.assigned_to IS NULL OR LOWER(c.assigned_to) = $${params.length}) AND (${LAST_MESSAGE('wamid')} NOT LIKE 'import:%' OR ${BACKUP_WAITING})` : ''}`);
         } else if (filter === 'bot') {
             where.push(`c.mode IN ('flow', 'ai')`);
         } else if (filter === 'ticket') {
@@ -960,7 +1002,8 @@ router.get('/conversations', async (req, res) => {
                     -- A chat this person muted adds nothing to their badge.
                     COALESCE(SUM(c.unread_count) FILTER (WHERE NOT EXISTS (SELECT 1 FROM wa_conversation_mutes mu
                               WHERE mu.conversation_id = c.id AND mu.username = ${me})), 0) AS unread,
-                    COUNT(*) FILTER (WHERE c.status = 'open' AND c.mode = 'human' AND ${LAST_DIRECTION} = 'in' AND ${NOT_SETTLED}${req.waLine.brand === 'crewfit' ? ` AND (c.assigned_to IS NULL OR ${BACKUP_WAITING})` : ''})::int AS waiting,
+                    COUNT(*) FILTER (WHERE c.status = 'open' AND c.mode = 'human' AND ${LAST_DIRECTION} = 'in' AND ${NOT_SETTLED}${req.waLine.brand === 'crewfit'
+                        ? ` AND (c.assigned_to IS NULL OR LOWER(c.assigned_to) = ${me}) AND (${LAST_MESSAGE('wamid')} NOT LIKE 'import:%' OR ${BACKUP_WAITING})` : ''})::int AS waiting,
                     -- Unread customer messages behind each of Crewfit's chips (muted chats left out).
                     COALESCE(SUM(c.unread_count) FILTER (WHERE c.assigned_to IS NULL AND NOT EXISTS (SELECT 1 FROM wa_conversation_mutes mu
                               WHERE mu.conversation_id = c.id AND mu.username = ${me})), 0)::int AS unread_unassigned,
@@ -1974,7 +2017,7 @@ router.patch('/leads/:id', async (req, res) => {
         // for the dashboard, quotes and the assistant, which read those.
         if ('products' in body) {
             const items = (Array.isArray(body.products) ? body.products : [])
-                .map(p => ({ product: (trim(p?.product) || '').slice(0, 120), quantity: (trim(p?.quantity) || '').slice(0, 40) }))
+                .map(p => ({ product: (trim(p?.product) || '').slice(0, 120), color: (trim(p?.color) || '').slice(0, 60), quantity: (trim(p?.quantity) || '').slice(0, 40) }))
                 .filter(p => p.product || p.quantity).slice(0, 30);
             params.push(items.length ? JSON.stringify(items) : null);
             sets.push(`products = $${params.length}`);
@@ -1997,6 +2040,8 @@ router.patch('/leads/:id', async (req, res) => {
             `UPDATE crewfit_leads SET ${sets.join(', ')}, updated_at = CURRENT_TIMESTAMP
               WHERE id = $1 RETURNING *`, params);
         if (!r.rows[0]) return res.status(404).json({ error: 'Lead not found' });
+        // What was just filled in may make it Important (50+ pieces) or ready for a mockup.
+        if (!('status' in body)) await require('../services/cf-lead-rules').apply(r.rows[0].id, conversationId);
 
         if ('status' in body) {
             const name = (await db.query('SELECT name FROM wa_lead_statuses WHERE key = $1', [body.status])).rows[0]?.name;
@@ -2040,7 +2085,7 @@ const productText = (p) => {
 router.get('/catalogue', async (req, res) => {
     try {
         const r = await db.query(
-            `SELECT id, name, category, fit, gsm, material, from_price, blurb, tiers, image_url
+            `SELECT id, name, category, fit, gsm, material, from_price, blurb, tiers, image_url, chart_url, colors
                FROM crewfit_products
               WHERE COALESCE(active, true) AND COALESCE(wa_visible, true)
               ORDER BY sort_order, name`);
@@ -2357,6 +2402,57 @@ router.get('/orders/:orderId/conversation', async (req, res) => {
     }
 });
 
+/* ── Sample photos ─────────────────────────────────────────────────────────────────────────────
+   Photos of our own work, by product and colour (services/cf-samples): production photos on
+   orders and samples uploaded to the library. The rep picks a product, the colours, and up to 30
+   photos; each goes as its own WhatsApp image with the product and colour as its caption. */
+
+router.get('/conversations/:id/samples', async (req, res) => {
+    try {
+        const conversation = await loadConversation(req, req.params.id);
+        if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
+        const samples = require('../services/cf-samples');
+        const { libraryImages } = require('./crewfit-catalog');
+        const all = (await libraryImages()).filter(i => i.url && /\.(jpe?g|png|webp)$/i.test(i.url));
+        const products = [...all.reduce((m, i) => m.set(i.product || 'Not named', (m.get(i.product || 'Not named') || 0) + 1), new Map())]
+            .map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count);
+        const product = trim(req.query.product) || conversation.product_interest?.split(',')[0]?.trim() || products[0]?.name || '';
+        const photos = all.filter(i => (i.product || 'Not named') === product)
+            .map(i => ({ url: i.url, color: i.color || null, product: i.product, source: i.source, order_no: i.order_no || null }));
+        const suggested = (await samples.pick({ product })).map(p => p.url);
+        res.json({ product, products, colors: await samples.colorsFor(product), photos, suggested, max: samples.MAX });
+    } catch (err) {
+        console.error('whatsapp samples error:', err);
+        res.status(500).json({ error: 'Could not load the sample photos' });
+    }
+});
+
+router.post('/conversations/:id/samples/send', async (req, res) => {
+    try {
+        const conversation = await loadConversation(req, req.params.id);
+        if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
+        if (!wa.windowOpen(conversation.last_inbound_at)) {
+            return res.status(409).json({ error: 'This chat is past WhatsApp’s 24-hour window — photos can only go once the customer writes again.', window_closed: true });
+        }
+        const samples = require('../services/cf-samples');
+        const { libraryImages } = require('./crewfit-catalog');
+        const want = new Set((Array.isArray(req.body?.urls) ? req.body.urls : []).map(String));
+        if (!want.size) return res.status(400).json({ error: 'Pick the photos to send' });
+        if (want.size > samples.MAX) return res.status(400).json({ error: `Up to ${samples.MAX} photos at a time` });
+        // Only photos the library holds: an address from anywhere else is not ours to send.
+        const photos = (await libraryImages()).filter(i => want.has(i.url));
+        if (!photos.length) return res.status(400).json({ error: 'Those photos are no longer in the library' });
+        const sent = await samples.send(conversation, photos, { senderType: 'user', user: req.user?.username || null });
+        await orders.logActivity({ conversationId: conversation.id, kind: 'message', actor: req.user?.username,
+            body: `Sent ${sent.length} sample photo${sent.length === 1 ? '' : 's'} of ${photos[0].product || 'our work'}` });
+        res.status(201).json({ messages: sent });
+    } catch (err) {
+        if (err instanceof wa.WhatsAppError) return res.status(502).json({ error: err.message });
+        console.error('whatsapp samples send error:', err);
+        res.status(500).json({ error: 'Could not send the photos' });
+    }
+});
+
 /* ── Design mockups ───────────────────────────────────────────────────────────────────────────
    A designer uploads the mockup against the enquiry and sends it from the lead panel, with a
    request to approve it. Images go as images; a PDF mockup as a document. */
@@ -2438,17 +2534,28 @@ router.post('/conversations/:id/mockups/send', async (req, res) => {
         if (!wa.configured()) return res.status(503).json({ error: 'WhatsApp is not configured on this server' });
         const conversation = await loadConversation(req, req.params.id);
         if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
-        if (!wa.windowOpen(conversation.last_inbound_at)) {
-            return res.status(409).json({ error: 'This chat is past WhatsApp’s 24-hour window — send the “Design mockups” template from the order, or wait for the customer to write.' });
-        }
         const ids = (Array.isArray(req.body?.ids) ? req.body.ids : []).map(Number).filter(Boolean);
         const rows = (await mockupRows(conversation.id)).filter(m => !ids.length || ids.includes(m.id));
         if (!rows.length) return res.status(400).json({ error: 'Upload a mockup first' });
+        const mockup = require('../services/cf-mockup');
+
+        // Past the 24-hour window only a template can go: the approved crewfit_mockup_confirm, with
+        // the first mockup as its picture and the Confirm / Need changes buttons.
+        if (!wa.windowOpen(conversation.last_inbound_at)) {
+            try {
+                await mockup.askForApproval(conversation, { mockupUrl: rows[0].url, user: req.user?.username });
+            } catch (err) {
+                if (err instanceof wa.WhatsAppError) return res.status(502).json({ error: `${err.message} — the “${mockup.TEMPLATE}” template has to be approved by Meta first.` });
+                throw err;
+            }
+            await db.query('UPDATE wa_mockups SET sent_at = CURRENT_TIMESTAMP, sent_by = $2 WHERE id = $1', [rows[0].id, req.user?.username || null]);
+            await orders.logActivity({ conversationId: conversation.id, kind: 'message', actor: req.user?.username,
+                body: 'Sent the mockup for approval with the template (outside the 24-hour window)', detail: 'mockups' });
+            return res.status(201).json({ messages: [], mockups: await mockupRows(conversation.id) });
+        }
 
         const first = String(conversation.lead_name || conversation.profile_name || '').trim().split(/\s+/)[0] || 'there';
-        const ask = [`Hi ${first}! 🎨`, '',
-            `Here is the design mockup for your order. Please check the placement, colours and spelling.`, '',
-            'Reply *OK* to approve it, or tell us what you would like changed. Production starts once it is approved. 🙌'].join('\n');
+        const ask = `Hi ${first}! 🎨 Here is the design mockup for your order.`;
         const sent = [];
         try {
             for (const [i, m] of rows.entries()) {
@@ -2466,8 +2573,8 @@ router.post('/conversations/:id/mockups/send', async (req, res) => {
             if (err instanceof wa.WhatsAppError) return res.status(502).json({ error: err.message, messages: sent });
             throw err;
         }
-        await db.query(`UPDATE wa_conversations SET last_message_at = CURRENT_TIMESTAMP, last_message_preview = 'Sent the design mockup',
-                               updated_at = CURRENT_TIMESTAMP WHERE id = $1`, [conversation.id]);
+        // Then the question with the ✅ Confirm / ✏️ Need changes buttons; Confirm raises the order.
+        await mockup.askForApproval(conversation, { user: req.user?.username });
         await orders.logActivity({ conversationId: conversation.id, kind: 'message', actor: req.user?.username,
             body: `Sent ${rows.length} mockup${rows.length > 1 ? 's' : ''} for approval`, detail: 'mockups' });
         res.status(201).json({ messages: sent, mockups: await mockupRows(conversation.id) });

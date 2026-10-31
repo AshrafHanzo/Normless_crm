@@ -514,4 +514,61 @@ async function messageLog(lineId, q) {
     };
 }
 
-module.exports = { normless, crewfit, myPerformance, messageLog, range, userForSo, shortName, median };
+/**
+ * One day of the team, person by person: how long each was active in the CRM, when they started
+ * and stopped, the chats they replied in, how quickly, the leads they moved, their calls and
+ * orders — and who is waiting on them right now. Active time is counted in minutes the CRM was
+ * open in front of them and used (clicks or typing in the last three minutes), from the presence
+ * pings the app sends.
+ */
+async function teamDay(lineId, q = {}) {
+    const r = range({ from: q.day, to: q.day }, 1);
+    const people = (await users()).filter(u => u.active && (u.can_view_whatsapp || ['owner', 'admin'].includes(u.role)));
+    const [waits, callBy] = await Promise.all([replyWaits(lineId, r), callsByUser(lineId, r)]);
+    const active = new Map((await db.query(
+        `SELECT LOWER(username) AS who, COUNT(*)::int AS minutes, MIN(minute) AS first_at, MAX(minute) AS last_at,
+                ARRAY_AGG(DISTINCT EXTRACT(HOUR FROM minute)::int) AS hours
+           FROM wa_user_minutes WHERE minute >= $1 AND minute < $2 GROUP BY 1`, [r.start, r.end])).rows.map(x => [x.who, x]));
+    const sent = new Map((await db.query(
+        `SELECT LOWER(m.sender_user) AS who, COUNT(DISTINCT m.conversation_id)::int AS chats, COUNT(*)::int AS messages,
+                MIN(m.created_at) AS first_at, MAX(m.created_at) AS last_at
+           FROM wa_messages m JOIN wa_conversations c ON c.id = m.conversation_id
+          WHERE c.line_id = $1 AND m.sender_type = 'user' AND m.sender_user IS NOT NULL AND m.created_at >= $2 AND m.created_at < $3 GROUP BY 1`,
+        [lineId, r.start, r.end])).rows.map(x => [x.who, x]));
+    const moved = new Map((await db.query(
+        `SELECT LOWER(x.actor) AS who, COUNT(*)::int AS n FROM wa_activity x JOIN wa_conversations c ON c.id = x.conversation_id
+          WHERE c.line_id = $1 AND x.kind = 'status' AND x.actor IS NOT NULL AND x.created_at >= $2 AND x.created_at < $3 GROUP BY 1`,
+        [lineId, r.start, r.end])).rows.map(x => [x.who, x.n]));
+    const orders = (await db.query(
+        `SELECT COALESCE(NULLIF(TRIM(o.so), ''), '') AS so, COUNT(*)::int AS n, COALESCE(SUM(o.grand_total), 0)::numeric AS value
+           FROM crewfit_orders o WHERE o.order_date = $1::date AND ${ORDER_OK} GROUP BY 1`, [r.from])).rows;
+    // Customers waiting on each person now: open chats assigned to them whose last word is the customer's.
+    const waiting = new Map((await db.query(
+        `SELECT LOWER(c.assigned_to) AS who, COUNT(*)::int AS n, MIN(c.last_inbound_at) AS oldest
+           FROM wa_conversations c WHERE c.line_id = $1 AND c.status = 'open' AND c.assigned_to IS NOT NULL
+            AND ${LAST_DIRECTION} = 'in' AND c.last_inbound_at > NOW() - INTERVAL '3 days'
+            AND (c.settled_msg_id IS NULL OR c.settled_msg_id < (SELECT MAX(i.id) FROM wa_messages i WHERE i.conversation_id = c.id AND i.direction = 'in'))
+          GROUP BY 1`, [lineId])).rows.map(x => [x.who, x]));
+
+    const rows = people.map(u => {
+        const who = String(u.username).toLowerCase();
+        const a = active.get(who); const m = sent.get(who); const w = waiting.get(who);
+        const name = shortName(u);
+        const o = orders.find(x => x.so && userForSo(x.so, [u]));
+        return {
+            username: u.username, name,
+            active_minutes: a?.minutes || 0,
+            first_at: a?.first_at || m?.first_at || null, last_at: a?.last_at || m?.last_at || null,
+            hours: (a?.hours || []).sort((x, y) => x - y),
+            chats_replied: m?.chats || 0, messages_sent: m?.messages || 0,
+            first_reply_secs: waits.byUser.get(who) ?? null,
+            leads_moved: moved.get(who) || 0, calls: callBy.get(who) || 0,
+            orders: o?.n || 0, order_value: n(o?.value),
+            waiting_now: w?.n || 0, oldest_waiting: w?.oldest || null,
+        };
+    }).filter(x => x.active_minutes || x.messages_sent || x.calls || x.waiting_now || x.orders)
+        .sort((a, b) => b.active_minutes - a.active_minutes || b.messages_sent - a.messages_sent);
+    return { day: r.from, rows };
+}
+
+module.exports = { normless, crewfit, myPerformance, messageLog, teamDay, range, userForSo, shortName, median };

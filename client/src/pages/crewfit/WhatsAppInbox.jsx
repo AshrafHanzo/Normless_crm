@@ -9,6 +9,8 @@ import DateRangeFilter from '../../components/DateRangeFilter'
 import WaMediaViewer from './WaMediaViewer'
 import { mediaKind } from './waMedia'
 import WaStatusPicker from './WaStatusPicker'
+import WaEmojiPicker from './WaEmojiPicker'
+import WaSamplesPicker from './WaSamplesPicker'
 import WaQuoteDrawer from './WaQuoteDrawer'
 import { WA_BRANDS } from './waBrand'
 import TicketDrawer from '../support/TicketDrawer'
@@ -17,11 +19,12 @@ import { useWaCalls, WaCallDock } from './WaCalls'
 import WaNewChat from './WaNewChat'
 import { WaText, Ticks, BubbleButtons } from './WaBubble'
 
+// Crewfit's queues, in the order a salesperson works them. `hint` says what each one is.
 const FILTERS = [
-  { key: 'waiting', label: 'Needs a person', hot: true },
-  { key: 'mine', label: 'Mine', badge: 'unread_mine' },
-  { key: 'unassigned', label: 'Unassigned', badge: 'unread_unassigned' },
-  { key: 'all', label: 'All', badge: 'unread' },
+  { key: 'waiting', label: 'Reply now', hot: true, hint: 'Customers waiting for a reply — your chats and new ones nobody has taken yet. Work this list first, oldest at the bottom.' },
+  { key: 'mine', label: 'My chats', badge: 'unread_mine', hint: 'Every open chat assigned to you, newest first.' },
+  { key: 'unassigned', label: 'New leads', badge: 'unread_unassigned', hint: 'Chats nobody has taken yet. Open one and reply — it becomes yours.' },
+  { key: 'all', label: 'All chats', badge: 'unread', hint: 'Every open chat, whoever has it.' },
 ]
 
 // Normless's queues, as the design lays them out: who needs a person first.
@@ -51,9 +54,17 @@ const ago = (v) => {
 /** How long is left to reply freely, in the words somebody would use out loud. */
 const windowLabel = (ms) => {
   const hrs = Math.floor(ms / 3600000)
-  if (hrs >= 1) return `${hrs}h left to reply`
-  const mins = Math.max(1, Math.round(ms / 60000))
-  return `${mins}m left to reply`
+  const mins = Math.max(hrs ? 0 : 1, Math.round((ms % 3600000) / 60000))
+  return hrs >= 1 ? `${hrs}h ${String(mins).padStart(2, '0')}m to reply` : `${mins}m to reply`
+}
+// A lead from a click-to-WhatsApp ad: Meta charges nothing for 72 hours from their first message
+// (as long as it was answered within 24), templates included. Free-form replies still need the
+// 24-hour window.
+const FREE_ENTRY_MS = 72 * 3600 * 1000
+const freeUntil = (t) => {
+  if (!t?.ad_referral || !t.created_at) return null
+  const end = new Date(t.created_at).getTime() + FREE_ENTRY_MS
+  return end > Date.now() ? end : null
 }
 
 const initials = (name) => String(name || '?').replace(/[^\p{L}\p{N} ]/gu, '').trim().split(/\s+/)
@@ -181,9 +192,9 @@ const fillFrom = (source, thread, me) => {
 const productsOf = (t) => {
   try {
     const list = JSON.parse(t?.products || 'null')
-    if (Array.isArray(list) && list.length) return list.map(p => ({ product: p.product || '', quantity: p.quantity || '' }))
+    if (Array.isArray(list) && list.length) return list.map(p => ({ product: p.product || '', color: p.color || '', quantity: p.quantity || '' }))
   } catch { /* an old lead: one product, below */ }
-  return t?.product_interest ? [{ product: t.product_interest, quantity: t.quantity || '' }] : []
+  return t?.product_interest ? [{ product: t.product_interest, color: '', quantity: t.quantity || '' }] : []
 }
 const plainQty = (q) => (/^\s*\d+\s*(pcs|pieces|nos)?\s*$/i.test(String(q || '')) ? parseInt(q, 10) : '')
 
@@ -312,7 +323,18 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
   const [draft, setDraft] = useState('')
   const [staged, setStaged] = useState([])               // files waiting to go with the next send
   const [replyTo, setReplyTo] = useState(null)           // the message this reply answers
+  const draftRef = useRef(null)
+  // An emoji goes where the cursor is, and the cursor stays just after it.
+  const insertEmoji = (e) => {
+    const el = draftRef.current
+    const at = el ? el.selectionStart ?? draft.length : draft.length
+    const end = el ? el.selectionEnd ?? at : at
+    const next = draft.slice(0, at) + e + draft.slice(end)
+    setDraft(next)
+    requestAnimationFrame(() => { if (el) { el.focus(); el.setSelectionRange(at + e.length, at + e.length) } })
+  }
   const [dragging, setDragging] = useState(false)
+  const [samplesOpen, setSamplesOpen] = useState(false)
   const [quickReplies, setQuickReplies] = useState([])
   const [products, setProducts] = useState([])
   const [pop, setPop] = useState(null)                 // 'snippets' | 'templates' | 'catalogue'
@@ -553,6 +575,12 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
 
   // Everything the customer has sent, newest first: logos, references, payment screenshots.
   const customerFiles = messages.filter(m => m.direction === 'in' && m.media_url).slice().reverse()
+  // Each message's reaction, by its WhatsApp id: the latest one wins, an empty one takes it back.
+  const reactions = useMemo(() => {
+    const out = {}
+    for (const m of messages) if (m.type === 'reaction' && m.reply_to) out[m.reply_to] = m.body || undefined
+    return out
+  }, [messages])
   const asItem = (m) => ({ url: fileUrl(m.media_url), name: m.media_name || fileNameFor(m, ago10(thread?.phone)), mime: m.media_mime, when: `${day(m.sent_at)} ${clock(m.sent_at)}` })
   // A photo or file in the chat opens with every other one in the chat beside it, in chat order.
   const openFile = (m) => {
@@ -1137,9 +1165,15 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
   }
 
   // Saved as each field is left, and only if it changed: no save button to forget.
+  // The colours the catalogue lists for a product, offered as you type.
+  const coloursOf = (name) => {
+    const p = products.find(x => x.name === name)
+    try { return Array.isArray(p?.colors) ? p.colors : JSON.parse(p?.colors || '[]') } catch { return [] }
+  }
   // The product list is saved whole, once a change to it is finished.
   const saveProducts = (_e, list = lead.products) => {
     const clean = list.filter(p => p.product.trim() || String(p.quantity).trim())
+      .map(p => ({ product: p.product.trim(), color: (p.color || '').trim(), quantity: String(p.quantity).trim() }))
     setLead(l => ({ ...l, products: list }))
     if (JSON.stringify(clean) === JSON.stringify(productsOf(thread))) return
     saveLead({ products: clean })
@@ -1322,6 +1356,11 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
         </div>
       )}
 
+      {samplesOpen && thread && (
+        <WaSamplesPicker API={API} apiFetch={apiFetch} toast={toast} fileUrl={fileUrl} conversationId={thread.id}
+          onClose={() => setSamplesOpen(false)} onSent={(msgs) => { setSamplesOpen(false); msgs.forEach(appendSent) }} />
+      )}
+
       {preview && (
         <WaMediaViewer key={`${preview.items[preview.index]?.url}-${preview.index}`} items={preview.items} index={preview.index}
           onClose={() => setPreview(null)} onDownload={(it) => downloadFile(it.url, it.name)} />
@@ -1349,15 +1388,16 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
           <div className="wa-filters" role="group" aria-label={cf ? 'Whose' : 'Queue'}>
             {(cf ? FILTERS : NL_FILTERS).map(f => (
               <button key={f.key} type="button" aria-pressed={filter === f.key}
-                className={`chip${filter === f.key ? ' chip-on' : ''}`}
+                className={`chip${filter === f.key ? ' chip-on' : ''}`} title={f.hint}
                 onClick={() => setFilter(f.key)}>{f.label}
                 {!cf && f.key !== 'all' && <span className={`wa-q-count${f.hot && tally[f.key] ? ' hot' : ''}`}>{tally[f.key] ?? 0}</span>}
                 {/* Crewfit: chats waiting for somebody, and unread customer messages behind each chip. */}
-                {cf && f.key === 'waiting' && <span className={`wa-q-count${tally.waiting ? ' hot' : ''}`} title="Chats waiting for somebody to pick up">{tally.waiting ?? 0}</span>}
+                {cf && f.key === 'waiting' && <span className={`wa-q-count${tally.waiting ? ' hot' : ''}`} title="Customers waiting for a reply">{tally.waiting ?? 0}</span>}
                 {cf && f.badge && tally[f.badge] > 0 && <span className="wa-q-count wa-q-unread" title="Unread messages from customers">{tally[f.badge]}</span>}
               </button>
             ))}
           </div>
+          {cf && <p className="wa-filter-hint">{FILTERS.find(f => f.key === filter)?.hint}</p>}
           {!!statuses.length && (
             <WaStatusPicker className="wa-status-filter" statuses={statuses} value={statusFilter} onChange={setStatusFilter}
               counts={statusCounts} anyLabel="Any status" label="Show chats at" />
@@ -1390,7 +1430,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                         <span className="wa-thread-line">{c.last_message_preview || 'No messages yet'}</span>
                         <span className="wa-thread-foot">
                           {cf && <span className="wa-pill" style={pillStyle(s.color)}>{s.name}</span>}
-                          {cf && c.backup_waiting && <span className="wa-pill" style={pillStyle('#f87171')}>Needs a person</span>}
+                          {cf && c.backup_waiting && <span className="wa-pill" style={pillStyle('#f87171')}>Waiting for reply</span>}
                           {!cf && (c.status === 'closed'
                             ? <span className="wa-pill" style={pillStyle('#a8b0be')}>Closed</span>
                             : c.mode === 'flow' || c.mode === 'ai'
@@ -1455,6 +1495,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                   </span>
                   <span className="wa-chat-since" title={new Date(thread.created_at).toLocaleString('en-IN')}>
                     {cf ? 'Lead since' : 'First message'} {day(thread.created_at)}, {clock(thread.created_at)}{thread.ad_referral ? ' · from an ad' : ''}
+                    {thread.last_inbound_at && <> · last wrote {ago(thread.last_inbound_at)}</>}
                   </span>
                 </div>
                 {/* The order this chat is about, at a glance: which one, and where it stands. */}
@@ -1485,12 +1526,21 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                     aria-label={thread.muted ? 'Unmute chat' : 'Mute chat'}>
                     <Icon name={thread.muted ? 'bellOff' : 'bell'} size={16} />
                   </button>
+                  {/* Always on show: how long a free-form reply can still go. */}
                   {thread.window_open ? (
-                    thread.window_left_ms < 6 * 3600 * 1000 && (
-                      <span className="wa-window-chip"><Icon name="clock" size={13} /> {windowLabel(thread.window_left_ms)}</span>
-                    )
+                    <span className={`wa-window-chip${thread.window_left_ms < 3 * 3600 * 1000 ? ' wa-window-low' : ''}`}
+                      title="WhatsApp lets you reply freely for 24 hours after the customer's last message. After that, only an approved template.">
+                      <Icon name="clock" size={13} /> {windowLabel(thread.window_left_ms)}
+                    </span>
                   ) : (
-                    <span className="wa-window-chip wa-window-shut"><Icon name="clock" size={13} /> Window closed</span>
+                    <span className="wa-window-chip wa-window-shut" title="More than 24 hours since the customer's last message — only an approved template can be sent until they write again.">
+                      <Icon name="clock" size={13} /> Window closed — template only
+                    </span>
+                  )}
+                  {freeUntil(thread) && (
+                    <span className="wa-window-chip wa-window-free" title="This lead came from a click-to-WhatsApp ad: Meta doesn't charge for messages for 72 hours, templates included.">
+                      Free until {day(freeUntil(thread))}, {clock(freeUntil(thread))}
+                    </span>
                   )}
                   {config?.canManage ? (
                     <select aria-label="Assigned to" value={thread.assigned_to || ''} onChange={e => assign(e.target.value)}>
@@ -1550,6 +1600,8 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                   <div className="wa-sys">Came in from an ad{thread.ad_referral.headline ? `: ${thread.ad_referral.headline}` : ''}</div>
                 )}
                 {messages.map((m, i) => {
+                  // A reaction shows on the message it reacts to, not as a message of its own.
+                  if (m.type === 'reaction') return null
                   const mine = m.direction === 'out'
                   const prev = messages[i - 1]
                   const newDay = !prev || day(prev.sent_at) !== day(m.sent_at)
@@ -1584,7 +1636,11 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                         {!m.media_url && m.media_name && ['image', 'video', 'audio', 'document'].includes(m.type) && /not included/i.test(m.media_name) && (
                           <div className="wa-missing-media"><Icon name={m.type === 'image' ? 'eye' : 'note'} size={14} /> {m.media_name}</div>
                         )}
-                        {m.type !== 'call' && (m.media_url || (m.media_name && !/not included/i.test(m.media_name))) && !/^image\//.test(m.media_mime || '') && (
+                        {/* A voice note or audio file plays right here. */}
+                        {m.type !== 'call' && m.media_url && /^audio\//.test(m.media_mime || '') && (
+                          <audio className="wa-voice" controls preload="metadata" src={fileUrl(m.media_url)} aria-label="Voice message" />
+                        )}
+                        {m.type !== 'call' && (m.media_url || (m.media_name && !/not included/i.test(m.media_name))) && !/^(image|audio)\//.test(m.media_mime || '') && (
                           <DocCard name={m.media_name} mime={m.media_mime} url={m.media_url ? fileUrl(m.media_url) : null}
                             onOpen={() => m.media_url && openFile(m)} />
                         )}
@@ -1605,6 +1661,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                         </div>
                         {m.error && <div className="wa-error">{m.error}</div>}
                       </div>
+                      {reactions[m.wamid] && <span className="wa-react" title="Reaction">{reactions[m.wamid]}</span>}
                       {/* The buttons under it, as the customer's phone shows them. */}
                       {mine && <BubbleButtons payload={m.interactive_payload} />}
                       </div>
@@ -1738,6 +1795,11 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                   )}
                   {thread.window_open && (
                     <>
+                      {cf && (
+                        <button type="button" className="wa-tool" onClick={() => setSamplesOpen(true)} title="Send photos of our work, by product and colour">
+                          <Icon name="eye" size={14} /> Samples
+                        </button>
+                      )}
                       {cf && <div className="wa-pop-anchor">
                         <button type="button" className={`wa-tool${pop === 'catalogue' ? ' wa-tool-on' : ''}`}
                           onClick={() => setPop(p => (p === 'catalogue' ? null : 'catalogue'))}>
@@ -1868,7 +1930,8 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                     </button>
                     <input ref={fileRef} type="file" multiple hidden
                       onChange={e => { stage(e.target.files); e.target.value = '' }} />
-                    <textarea rows={1} value={draft} aria-label="Reply" placeholder={staged.length ? 'Add a caption…' : 'Write a reply… or type / for saved replies'}
+                    <WaEmojiPicker onPick={insertEmoji} />
+                    <textarea ref={draftRef} rows={1} value={draft} aria-label="Reply" placeholder={staged.length ? 'Add a caption…' : 'Write a reply… or type / for saved replies'}
                       onChange={e => onDraftChange(e.target.value)} onKeyDown={onKeyDown}
                       onPaste={e => { if (e.clipboardData?.files?.length) { e.preventDefault(); stage(e.clipboardData.files) } }} />
                     <button type="button" className="btn btn-primary" disabled={(!draft.trim() && !staged.length) || draft.startsWith('/')}
@@ -2062,7 +2125,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                 <div className="wa-products">
                   <div className="wa-products-head">
                     <label>Products</label>
-                    <button type="button" className="mini-btn" onClick={() => setLead(l => ({ ...l, products: [...l.products, { product: '', quantity: '' }] }))}>
+                    <button type="button" className="mini-btn" onClick={() => setLead(l => ({ ...l, products: [...l.products, { product: '', color: '', quantity: '' }] }))}>
                       <Icon name="plus" size={12} /> Add product
                     </button>
                   </div>
@@ -2073,6 +2136,10 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                       <input list="wa-product-names" aria-label={`Product ${i + 1}`} placeholder="Product" value={p.product}
                         onChange={e => setLead(l => ({ ...l, products: l.products.map((x, j) => (j === i ? { ...x, product: e.target.value } : x)) }))}
                         onBlur={saveProducts} />
+                      <input list={`wa-colours-${i}`} aria-label={`Colour of product ${i + 1}`} placeholder="Colour" value={p.color}
+                        onChange={e => setLead(l => ({ ...l, products: l.products.map((x, j) => (j === i ? { ...x, color: e.target.value } : x)) }))}
+                        onBlur={saveProducts} />
+                      <datalist id={`wa-colours-${i}`}>{coloursOf(p.product).map(c => <option key={c} value={c} />)}</datalist>
                       <input aria-label={`Quantity of product ${i + 1}`} placeholder="Qty" value={p.quantity}
                         onChange={e => setLead(l => ({ ...l, products: l.products.map((x, j) => (j === i ? { ...x, quantity: e.target.value } : x)) }))}
                         onBlur={saveProducts} />

@@ -470,7 +470,7 @@ router.post('/templates', async (req, res) => {
 router.get('/catalogue', async (req, res) => {
     try {
         const r = await db.query(
-            `SELECT id, name, category, fit, gsm, material, from_price, tiers, image_url,
+            `SELECT id, name, category, fit, gsm, material, from_price, tiers, image_url, chart_url,
                     COALESCE(active, true) AS active, COALESCE(wa_visible, true) AS wa_visible
                FROM crewfit_products ORDER BY sort_order, name`);
         const pdf = await extras.currentCatalogue();
@@ -520,33 +520,70 @@ const removePhoto = (url) => {
     fs.promises.unlink(file).catch(() => {});
 };
 
-router.post('/catalogue/:id/photo', (req, res, next) => photoUpload.single('photo')(req, res, (err) => {
+// The photo (image_url), or the size chart (chart_url): the catalogue page with its sizes,
+// colours and prices, which the bot sends when a customer asks for sizes.
+const PICTURE_COLUMN = { photo: 'image_url', chart: 'chart_url' };
+
+router.post('/catalogue/:id/:kind(photo|chart)', (req, res, next) => photoUpload.single('photo')(req, res, (err) => {
     if (!err) return next();
-    res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? 'Photos must be under 5MB' : err.message });
+    res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? 'Pictures must be under 5MB' : err.message });
 }), async (req, res) => {
     try {
-        if (!req.file) return res.status(400).json({ error: 'Choose a photo' });
-        const old = (await db.query('SELECT image_url FROM crewfit_products WHERE id = $1', [req.params.id])).rows[0];
+        const col = PICTURE_COLUMN[req.params.kind];
+        if (!req.file) return res.status(400).json({ error: 'Choose a picture' });
+        const old = (await db.query(`SELECT ${col} AS url FROM crewfit_products WHERE id = $1`, [req.params.id])).rows[0];
         if (!old) { removePhoto(req.file.filename); return res.status(404).json({ error: 'That product is gone' }); }
         const url = `/uploads/crewfit/products/${req.file.filename}`;
-        await db.query('UPDATE crewfit_products SET image_url = $2 WHERE id = $1', [req.params.id, url]);
-        removePhoto(old.image_url);
-        res.json({ image_url: url });
+        await db.query(`UPDATE crewfit_products SET ${col} = $2 WHERE id = $1`, [req.params.id, url]);
+        removePhoto(old.url);
+        res.json({ [col]: url });
     } catch (err) {
-        console.error('whatsapp product photo error:', err);
-        res.status(500).json({ error: 'Could not save that photo' });
+        console.error('whatsapp product picture error:', err);
+        res.status(500).json({ error: 'Could not save that picture' });
     }
 });
 
-router.delete('/catalogue/:id/photo', async (req, res) => {
+router.delete('/catalogue/:id/:kind(photo|chart)', async (req, res) => {
     try {
-        const old = (await db.query('SELECT image_url FROM crewfit_products WHERE id = $1', [req.params.id])).rows[0];
-        await db.query('UPDATE crewfit_products SET image_url = NULL WHERE id = $1', [req.params.id]);
-        removePhoto(old?.image_url);
-        res.json({ image_url: null });
+        const col = PICTURE_COLUMN[req.params.kind];
+        const old = (await db.query(`SELECT ${col} AS url FROM crewfit_products WHERE id = $1`, [req.params.id])).rows[0];
+        await db.query(`UPDATE crewfit_products SET ${col} = NULL WHERE id = $1`, [req.params.id]);
+        removePhoto(old?.url);
+        res.json({ [col]: null });
     } catch (err) {
-        console.error('whatsapp product photo delete error:', err);
-        res.status(500).json({ error: 'Could not remove that photo' });
+        console.error('whatsapp product picture delete error:', err);
+        res.status(500).json({ error: 'Could not remove that picture' });
+    }
+});
+
+/* ── Bot answers ─────────────────────────────────────────────────────────────────────────────
+   What the bot says when a customer's message has one of the keywords: the team's own words for
+   the questions that keep coming (MOQ, address, payment terms…). Crewfit only. */
+
+router.get('/bot-answers', async (req, res) => {
+    try {
+        res.json({ answers: await require('../services/cf-assist').savedAnswers() });
+    } catch (err) {
+        console.error('bot answers error:', err);
+        res.status(500).json({ error: 'Could not read the bot answers' });
+    }
+});
+
+router.put('/bot-answers', async (req, res) => {
+    try {
+        const list = (Array.isArray(req.body?.answers) ? req.body.answers : []).slice(0, 60).map(a => ({
+            on: !!a.on,
+            keywords: (Array.isArray(a.keywords) ? a.keywords : String(a.keywords || '').split(','))
+                .map(k => String(k).trim().toLowerCase()).filter(Boolean).slice(0, 20),
+            answer: String(a.answer || '').trim().slice(0, 1000),
+        })).filter(a => a.answer && a.keywords.length);
+        await db.query(`INSERT INTO wa_settings (key, value, updated_by) VALUES ('cf_bot_answers', $1, $2)
+                        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_by = EXCLUDED.updated_by`,
+            [JSON.stringify(list), req.user?.username || null]);
+        res.json({ answers: list });
+    } catch (err) {
+        console.error('bot answers save error:', err);
+        res.status(500).json({ error: 'Could not save the bot answers' });
     }
 });
 

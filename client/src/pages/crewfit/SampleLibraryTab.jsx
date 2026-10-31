@@ -111,6 +111,7 @@ export default function SampleLibraryTab() {
   const upload = async () => {
     if (!form?.files?.length) { toast.error('Choose the images'); return }
     if (!form.product?.trim()) { toast.error('Name the product these are of'); return }
+    if (!form.color?.trim()) { toast.error('Say which colour these are — the bot sends one of each colour'); return }
     const totalMb = form.files.reduce((n, f) => n + f.size, 0) / (1024 * 1024)
     if (totalMb > BATCH_LIMIT_MB) {
       toast.error(`That is ${totalMb.toFixed(0)}MB in one go — send them in batches under ${BATCH_LIMIT_MB}MB`)
@@ -119,6 +120,7 @@ export default function SampleLibraryTab() {
     const body = new FormData()
     for (const f of form.files) body.append('images', f)
     body.append('product', form.product.trim())
+    body.append('color', form.color.trim())
     if (form.title) body.append('title', form.title)
     setBusy(true)
     const res = await apiFetch('/api/crewfit/catalog/samples', { method: 'POST', body })
@@ -209,9 +211,18 @@ export default function SampleLibraryTab() {
                 {(data?.products || []).map(p => <option key={p.name} value={p.name} />)}
               </datalist>
             </div>
+            {/* The colour lets the bot and the inbox send one photo of each colour. */}
+            <div className="input-group">
+              <label>Colour *</label>
+              <input list="samples-colours" value={form.color || ''} placeholder="Navy"
+                onChange={e => setForm(f => ({ ...f, color: e.target.value }))} />
+              <datalist id="samples-colours">
+                {[...new Set((data?.images || []).map(i => i.color).filter(Boolean))].sort().map(c => <option key={c} value={c} />)}
+              </datalist>
+            </div>
             <div className="input-group">
               <label>Note <span className="label-hint">optional</span></label>
-              <input value={form.title || ''} placeholder="Navy, chest embroidery"
+              <input value={form.title || ''} placeholder="Chest embroidery"
                 onChange={e => setForm(f => ({ ...f, title: e.target.value }))} />
             </div>
           </div>
@@ -249,7 +260,7 @@ export default function SampleLibraryTab() {
                 {picked.has(img.url) ? '✓' : ''}
               </button>
               <div className="sample-meta">
-                <b>{img.product || 'Not named'}</b>
+                <b>{img.product || 'Not named'}{img.color ? ` · ${img.color}` : ''}</b>
                 {/* Whose shirt this is. The thing to know before sending it to somebody else. */}
                 <span>{img.source === 'Uploaded'
                   ? (img.title || 'Uploaded sample')

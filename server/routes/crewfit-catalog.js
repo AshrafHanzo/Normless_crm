@@ -207,7 +207,7 @@ async function libraryImages() {
     }
 
     const uploaded = (await db.query(
-        `SELECT id, product, title, file_path, uploaded_by, uploaded_at FROM crewfit_samples ORDER BY uploaded_at DESC`)).rows;
+        `SELECT id, product, color, title, file_path, uploaded_by, uploaded_at FROM crewfit_samples ORDER BY uploaded_at DESC`)).rows;
     for (const s of uploaded) {
         out.push({
             id: `sample:${s.id}`,
@@ -215,6 +215,7 @@ async function libraryImages() {
             url: s.file_path,
             source: 'Uploaded',
             product: s.product || null,
+            color: s.color || null,
             title: s.title || null,
             uploaded_by: s.uploaded_by,
             taken_on: s.uploaded_at,
@@ -271,12 +272,14 @@ router.post('/samples', canUploadSamples, (req, res, next) => sampleUpload.array
             return res.status(400).json({ error: 'Name the product these are of — it is how anyone finds them again' });
         }
         const title = trim(req.body?.title);
+        // The colour lets the bot and the inbox send "polos in every colour we've made".
+        const color = trim(req.body?.color);
         const saved = [];
         for (const f of req.files) {
             const r = await db.query(
-                `INSERT INTO crewfit_samples (product, title, file_path, size_bytes, uploaded_by)
-                 VALUES ($1,$2,$3,$4,$5) RETURNING id, product, title, file_path, uploaded_at`,
-                [product, title, `/uploads/crewfit-samples/${f.filename}`, f.size, req.user?.username || null]);
+                `INSERT INTO crewfit_samples (product, color, title, file_path, size_bytes, uploaded_by)
+                 VALUES ($1,$2,$3,$4,$5,$6) RETURNING id, product, color, title, file_path, uploaded_at`,
+                [product, color, title, `/uploads/crewfit-samples/${f.filename}`, f.size, req.user?.username || null]);
             saved.push(r.rows[0]);
         }
         res.status(201).json({ added: saved.length, samples: saved });
@@ -381,3 +384,4 @@ router.post('/samples/zip', async (req, res) => {
 });
 
 module.exports = router;
+module.exports.libraryImages = libraryImages;   // services/cf-samples.js

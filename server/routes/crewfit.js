@@ -681,14 +681,20 @@ router.put('/orders/:id', canEditOrders, async (req, res) => {
 });
 
 // POST /api/crewfit/orders — create
-router.post('/orders', canEditOrders, async (req, res) => {
-  try {
-    const body = { ...req.body };
+/** A refusal from createOrder, with the reason to show. */
+const orderError = (message) => Object.assign(new Error(message), { status: 400 });
+
+/**
+ * Raise an order: the route below, and the WhatsApp inbox when a customer confirms their mockup
+ * (services/cf-mockup.js). Returns { order, inventory }. Throws with .status 400 on a refusal.
+ */
+async function createOrder(input, username) {
+    const body = { ...input };
     const phoneError = validatePhoneFields(body);
-    if (phoneError) return res.status(400).json({ error: phoneError });
+    if (phoneError) throw orderError(phoneError);
 
     if (body.status === 'Dispatched' && !body.tracking_link && !NO_TRACKING_MOTS.includes(body.mot)) {
-      return res.status(400).json({ error: 'Add a tracking ID before marking this order as Dispatched' });
+      throw orderError('Add a tracking ID before marking this order as Dispatched');
     }
     if (body.tracking_link && body.status !== 'Cancelled') {
       body.status = 'Dispatched';
@@ -723,26 +729,33 @@ router.post('/orders', canEditOrders, async (req, res) => {
     }
     if (body.gst_number !== undefined) body.gst_number = cleanGstin(body.gst_number);
     const pos = settlePlaceOfSupply(body);
-    if (pos.error) return res.status(400).json({ error: pos.error });
+    if (pos.error) throw orderError(pos.error);
     body.place_of_supply = pos.state;
     const cols = ['customer_name', 'contact_number', 'description', 'product', 'color', 'size_breakdown', 'qty', 'total_cost',
       'deadline_at', 'deadline_text', 'order_date', 'customer_type', 'so', 'vendor', 'mot', 'mock_folder', 'notes',
       'layout_status', 'payment_status', 'status', ...EXTRA];
     const provided = cols.filter(c => body[c] !== undefined && body[c] !== '');
-    if (!body.customer_name) return res.status(400).json({ error: 'Customer name is required' });
+    if (!body.customer_name) throw orderError('Customer name is required');
     const nextRow = await db.query('SELECT COALESCE(MAX(sl_no), 0) + 1 AS next FROM crewfit_orders');
     const sl_no = nextRow.rows[0].next;
     const allCols = ['sl_no', ...provided];
     const vals = [sl_no, ...provided.map(c => c === 'line_items' ? JSON.stringify(body[c] || []) : body[c])];
     const ph = allCols.map((_, i) => `$${i + 1}`).join(',');
     const r = await db.query(`INSERT INTO crewfit_orders (${allCols.join(',')}) VALUES (${ph}) RETURNING *`, vals);
-    await recordAudit(r.rows[0], null, r.rows[0], req.user?.username, 'create');
-    require('../services/wa-orders').orderChanged(null, r.rows[0], req.user?.username);
+    await recordAudit(r.rows[0], null, r.rows[0], username, 'create');
+    require('../services/wa-orders').orderChanged(null, r.rows[0], username);
     // Usually a no-op — a new order starts at Awaiting Payment, well before production — but an
     // order can be entered after the fact, already in production or dispatched.
     const stock = await applyStock(r.rows[0]);
-    res.status(201).json({ ...parseOrder(r.rows[0]), inventory: stock });
+    return { order: r.rows[0], inventory: stock };
+}
+
+router.post('/orders', canEditOrders, async (req, res) => {
+  try {
+    const { order, inventory } = await createOrder(req.body, req.user?.username);
+    res.status(201).json({ ...parseOrder(order), inventory });
   } catch (err) {
+    if (err.status === 400) return res.status(400).json({ error: err.message });
     console.error('crewfit create error:', err); res.status(500).json({ error: 'Failed to create order' });
   }
 });
@@ -1279,3 +1292,4 @@ router.delete('/products/:id', ownerOnly, async (req, res) => {
 module.exports = router;
 module.exports.orderDocumentBuffer = orderDocumentBuffer;
 module.exports.parseOrder = parseOrder;
+module.exports.createOrder = createOrder;   // services/cf-mockup.js

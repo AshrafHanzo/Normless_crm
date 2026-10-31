@@ -111,8 +111,34 @@ const MainMenuContext = createContext({ openMenu: () => {}, immersive: false })
 export function useMainMenu() { return useContext(MainMenuContext) }
 const IMMERSIVE = ['/crewfit/whatsapp', '/whatsapp']
 
+/**
+ * "Still working": once a minute, while the CRM is in front of a WhatsApp user and they've clicked
+ * or typed in the last three minutes, the server notes the minute. The dashboard adds them up as
+ * the time each person worked. A tab left open in the background counts for nothing.
+ */
+function usePresence(user) {
+  const apiFetch = useApi()
+  useEffect(() => {
+    if (!user?.can_view_whatsapp && !['owner', 'admin'].includes(user?.role)) return
+    let lastInput = Date.now()
+    const touched = () => { lastInput = Date.now() }
+    const events = ['mousedown', 'keydown', 'touchstart', 'wheel']
+    events.forEach(e => window.addEventListener(e, touched, { passive: true }))
+    const tick = () => {
+      if (document.visibilityState === 'visible' && Date.now() - lastInput < 3 * 60 * 1000) {
+        apiFetch('/api/whatsapp/presence', { method: 'POST' }).catch(() => {})
+      }
+    }
+    tick()
+    const t = setInterval(tick, 60 * 1000)
+    return () => { clearInterval(t); events.forEach(e => window.removeEventListener(e, touched)) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.username])
+}
+
 function AppLayout({ children }) {
-  const { brand } = useAuth()
+  const { brand, user } = useAuth()
+  usePresence(user)
   const location = useLocation()
   const immersive = IMMERSIVE.some(p => location.pathname === p || location.pathname.startsWith(`${p}/`))
   // Open for the page it was opened on: a link followed from the menu lands on another page, and

@@ -733,6 +733,8 @@ async function ensureCrewfitSchema() {
                 uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             CREATE INDEX IF NOT EXISTS crewfit_samples_product_idx ON crewfit_samples (LOWER(product));
+            -- Which colour a sample shows, so a customer can be sent one of each colour.
+            ALTER TABLE crewfit_samples ADD COLUMN IF NOT EXISTS color TEXT;
 
             -- Every logo that has been digitised, with what came out of it.
             --
@@ -1023,6 +1025,16 @@ async function ensureCrewfitSchema() {
             ALTER TABLE wa_activity ADD COLUMN IF NOT EXISTS detail TEXT;
             -- A photo per product, sent with its details when a rep shares it from a chat.
             ALTER TABLE crewfit_products ADD COLUMN IF NOT EXISTS image_url TEXT;
+            -- The size chart: the product's catalogue page (sizes, colours, prices), sent on request.
+            -- A minute somebody was using the CRM (the app pings while it is in front of them and they
+            -- have clicked or typed lately): how long each person worked, on the dashboard.
+            CREATE TABLE IF NOT EXISTS wa_user_minutes (
+                username TEXT NOT NULL,
+                minute TIMESTAMP NOT NULL,
+                PRIMARY KEY (username, minute)
+            );
+            CREATE INDEX IF NOT EXISTS wa_user_minutes_day_idx ON wa_user_minutes (minute);
+            ALTER TABLE crewfit_products ADD COLUMN IF NOT EXISTS chart_url TEXT;
 
             -- Whether a product can be sent from a chat. Hiding one keeps it in the catalog
             -- page and the quotes, just not in the inbox.

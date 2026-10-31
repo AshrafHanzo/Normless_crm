@@ -40,59 +40,54 @@ const CREWFIT_FLOW = {
             text: 'Hello 👋 This is Crewfit — bulk t-shirts, polos, caps and workwear, printed or embroidered with your logo.\n\nWhat would you like to do?',
             buttons: [
                 { id: 'quote', title: 'Get a quote' },
-                { id: 'products', title: 'See products' },
+                { id: 'info', title: 'Catalogue & sizes' },
                 { id: 'human', title: 'Talk to sales' },
             ],
-            next: { quote: 'product', products: 'catalogue', human: 'handoff' },
+            next: { quote: 'product', info: 'info', human: 'handoff' },
         },
-        catalogue: {
-            type: 'send_catalogue',
-            text: 'Here is our full catalogue 📘 — every product, colour and price tier.',
-            next: { '*': 'range' },
-        },
-        range: {
-            type: 'text',
-            text: 'We make polos (poly-cotton, airtex and pure cotton), round-neck and oversized tees, kids\' sizes, caps and aprons — in a range of colours, from 5 pieces upwards.\n\nLet\'s find the right one for you.',
-            next: { '*': 'product' },
-        },
-        product: {
+        // Everything a customer may want to look at before asking for a price.
+        info: {
             type: 'list',
-            text: 'Which of these is closest to what you need?',
-            button: 'See the list',
-            save_as: 'product_interest',
+            text: 'What would you like to see?',
+            button: 'Choose',
             sections: [{
-                title: 'Our products',
+                title: 'Crewfit',
                 rows: [
-                    { id: 'Poly Cotton Polos', title: 'Poly cotton polo', description: 'Everyday staff polo' },
-                    { id: 'Classic Cotton Polos', title: 'Pure cotton polo', description: 'Softer, premium feel' },
-                    { id: 'Classic Polos Airtex', title: 'Airtex polo', description: 'Breathable, for outdoors' },
-                    { id: 'Regular Fit T-Shirt', title: 'Round neck t-shirt', description: 'Regular fit' },
-                    { id: 'Oversized T-Shirts', title: 'Oversized t-shirt', description: 'Drop shoulder' },
-                    { id: 'Toddlers & Kids Round Neck', title: 'Kids t-shirt', description: 'School and events' },
-                    { id: 'Caps', title: 'Caps', description: 'Embroidered front' },
-                    { id: 'other', title: 'Something else', description: 'Tell us what you need' },
+                    { id: 'catalogue', title: 'Catalogue (PDF)', description: 'Every product, colour and price' },
+                    { id: 'sizes', title: 'Size chart', description: 'Sizes, colours and prices of one product' },
+                    { id: 'samples', title: 'Photos of our work', description: 'Real orders we have made, in different colours' },
+                    { id: 'prices', title: 'Price list', description: 'Price per piece, printing included' },
                 ],
             }],
-            next: { other: 'describe', '*': 'quantity' },
+            next: { catalogue: 'catalogue', sizes: 'size_product', samples: 'sample_product', prices: 'prices' },
         },
+        catalogue: { type: 'send_catalogue', text: 'Here is our full catalogue 📘 — every product, colour and price tier.', next: { '*': 'after_info' } },
+        size_product: { type: 'catalogue_pick', text: 'Which product would you like the size chart for?', card: false, next: { '*': 'size_chart' } },
+        size_chart: { type: 'send_size_chart', next: { '*': 'after_info' } },
+        sample_product: { type: 'catalogue_pick', text: 'Which product would you like to see?', card: false, next: { '*': 'samples' } },
+        samples: { type: 'send_samples', next: { '*': 'after_info' } },
+        prices: { type: 'send_prices', next: { '*': 'after_info' } },
+        after_info: {
+            type: 'buttons',
+            text: 'Anything else?',
+            buttons: [
+                { id: 'quote', title: 'Get a quote' },
+                { id: 'info', title: 'See something else' },
+                { id: 'human', title: 'Talk to sales' },
+            ],
+            next: { quote: 'product', info: 'info', human: 'handoff' },
+        },
+        // The quote: product (with its photo, sizes and prices), colour, how many, and again for
+        // another product; then branding, the logo, and a summary with prices.
+        product: { type: 'catalogue_pick', text: 'Which product do you need?', card: true, save_as: 'product_interest', next: { other: 'describe', '*': 'color' } },
         describe: {
             type: 'ask_text',
             text: 'No problem — tell us what you are looking for and we will come back on it.',
             save_as: 'product_interest',
             next: { '*': 'quantity' },
         },
-        quantity: {
-            type: 'buttons',
-            text: 'Roughly how many pieces?',
-            save_as: 'quantity',
-            buttons: [
-                { id: 'Under 50', title: 'Under 50' },
-                { id: '50-200', title: '50 to 200' },
-                { id: '200+', title: 'More than 200' },
-            ],
-            next: { '*': 'more' },
-        },
-        // Each product and its quantity go on a list; this asks for the next one.
+        color: { type: 'color_pick', text: 'Which colour would you like for the {product}?', save_as: 'color', next: { '*': 'quantity' } },
+        quantity: { type: 'ask_number', text: 'How many pieces of {product}{ in color}? Just type the number, for example 50.', save_as: 'quantity', next: { '*': 'more' } },
         more: {
             type: 'buttons',
             text: 'Got it. Do you need another product as well?',
@@ -107,15 +102,15 @@ const CREWFIT_FLOW = {
             text: 'And how would you like your logo on them?',
             save_as: 'branding',
             buttons: [
-                { id: 'Embroidery', title: 'Embroidery' },
                 { id: 'Printing', title: 'Printing' },
+                { id: 'Embroidery', title: 'Embroidery' },
                 { id: 'Not sure', title: 'Not sure yet' },
             ],
             next: { '*': 'logo' },
         },
         logo: {
             type: 'ask_media',
-            text: 'If you have your logo handy, send it across — a PNG, JPG or PDF is perfect. It helps us quote properly.\n\nIf not, just reply "skip".',
+            text: 'Please send your logo — a PNG, JPG or PDF is perfect. Our designer will make a mockup of your t-shirt with it for you to approve.\n\nIf you don’t have it handy, just reply "skip".',
             save_as: 'logo',
             next: { '*': 'summary' },
         },
@@ -191,7 +186,9 @@ function tierRange(label) {
  * answer is a range they can trust rather than a single number that will move.
  */
 async function priceFor(productName, band) {
-    const [low, high] = BANDS[band] || [1, Infinity];
+    // An exact number of pieces ("60"), or one of the old ranges ("50-200").
+    const exact = /^\s*\d+\s*$/.test(String(band || '')) ? Number(band) : null;
+    const [low, high] = exact ? [exact, exact] : (BANDS[band] || [1, Infinity]);
     const r = await db.query(
         `SELECT name, tiers, from_price FROM crewfit_products
           WHERE LOWER(name) = LOWER($1) LIMIT 1`, [productName]);
@@ -219,51 +216,27 @@ async function priceFor(productName, band) {
 }
 
 /** The message that closes the menu: what they asked for, and what it costs. */
-const bandText = (q) => (q === '50-200' ? '50 to 200' : q);
+const bandText = (q) => (q === '50-200' ? '50 to 200' : /^\s*\d+\s*$/.test(String(q || '')) ? `${String(q).trim()} pcs` : q);
 
 async function summaryText(answers) {
     const items = itemsOf(answers);
-    // Several products: each with its quantity and what that comes to.
-    if (items.length > 1) {
-        const lines = ['Thank you — here is what we have:'];
-        for (const it of items) lines.push(`• ${it.product}${it.quantity ? ` — ${bandText(it.quantity)}` : ''}`);
-        if (answers.branding) lines.push(`• Branding: ${answers.branding}`);
-        if (answers.logo) lines.push('• Logo: received, thank you');
-        const priced = [];
-        for (const it of items) {
-            const price = it.quantity ? await priceFor(it.product, it.quantity) : null;
-            if (price?.low) priced.push(`${price.name}: around ₹${price.low === price.high ? price.low : `${price.high} down to ₹${price.low}`} a piece`);
-            else if (price) priced.push(`${price.name}: quoted individually at that quantity`);
-        }
-        if (priced.length) lines.push('', 'At those quantities:', ...priced.map(p => `• ${p}`), 'That is before GST and branding.');
-        if (answers.branding === 'Embroidery') lines.push('Embroidery also has a one-off ₹800 digitising charge for the logo.');
-        lines.push('', 'This is an estimate, not a confirmed quote — one of our team will go through it with you shortly.');
-        return lines.join('\n');
-    }
     const lines = ['Thank you — here is what we have:'];
-    if (answers.product_interest) lines.push(`• Product: ${answers.product_interest}`);
-    if (answers.quantity) lines.push(`• Quantity: ${bandText(answers.quantity)}`);
+    for (const it of items) lines.push(`• ${[it.product, it.color].filter(Boolean).join(' — ')}${it.quantity ? ` × ${bandText(it.quantity)}` : ''}`);
     if (answers.branding) lines.push(`• Branding: ${answers.branding}`);
-    if (answers.logo) lines.push('• Logo: received, thank you');
+    lines.push(answers.logo ? '• Logo: received, thank you' : '• Logo: please send it here when you can');
 
-    const price = answers.product_interest && answers.quantity
-        ? await priceFor(answers.product_interest, answers.quantity) : null;
-
-    if (price && price.low) {
-        lines.push('', price.low === price.high
-            ? `At that quantity ${price.name} works out around ₹${price.low} a piece.`
-            : `At that quantity ${price.name} works out around ₹${price.high} down to ₹${price.low} a piece, depending on the exact count.`);
-        // Part of the band is published and part of it is not. Saying so is more use than
-        // hiding the rate we do know behind "ask us".
-        if (price.onRequest) lines.push('Above that we price each order on its own — larger runs come down further.');
-        lines.push('That is before GST and branding.');
-    } else if (price) {
-        lines.push('', `For that quantity of ${price.name} we quote individually — the rates get better the larger the order.`);
+    // What each comes to, off the published tiers.
+    const priced = [];
+    for (const it of items) {
+        const price = it.quantity ? await priceFor(it.product, it.quantity) : null;
+        if (price?.low) priced.push(`${price.name}: ${price.low === price.high ? `₹${price.low}` : `₹${price.high} down to ₹${price.low}`} a piece${price.onRequest ? ' (larger runs priced on request)' : ''}`);
+        else if (price) priced.push(`${price.name}: quoted individually at that quantity`);
     }
-    if (answers.branding === 'Embroidery') {
-        lines.push('Embroidery also has a one-off ₹800 digitising charge for the logo.');
-    }
-    lines.push('', 'This is an estimate, not a confirmed quote — one of our team will go through it with you shortly.');
+    if (priced.length) lines.push('', items.length > 1 ? 'At those quantities:' : 'At that quantity:', ...priced.map(p => `• ${p}`), 'Printing included; GST extra.');
+    if (answers.branding === 'Embroidery') lines.push('Embroidery has a one-off ₹800 digitising charge for the logo.');
+    lines.push('', answers.logo
+        ? 'Our designer will now prepare a mockup with your logo and send it here for your approval ✍️'
+        : 'This is an estimate — one of our team will go through it with you shortly.');
     return lines.join('\n');
 }
 
@@ -282,10 +255,96 @@ async function record(conversation, wamid, body, type = 'text', payload = null) 
         [conversation.id, String(body || '').slice(0, 200)]);
 }
 
+/* ── Steps that come from the catalogue ─────────────────────────────────────────────────────── */
+
+const assist = () => require('./cf-assist');
+/** A step's words with what was chosen so far: {product}, {color}, and "{ in color}" (" in Navy"). */
+const fill = (text, answers) => String(text || '')
+    .replace(/\{product\}/g, answers.product_interest || 'it')
+    .replace(/\{ in color\}/g, answers.color ? ` in ${answers.color}` : '')
+    .replace(/\{color\}/g, answers.color || '');
+
+async function productOf(answers) {
+    const list = await assist().products();
+    return list.find(p => String(p.id) === String(answers._pid)) || list.find(p => p.name === answers.product_interest) || null;
+}
+
+async function remember(conversation, flow, stepId, answers) {
+    await db.query(
+        `UPDATE wa_conversations SET mode = 'flow', flow_id = $2, flow_step = $3, flow_data = $4,
+                updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
+        [conversation.id, flow.key, stepId, JSON.stringify(answers)]);
+}
+
+/**
+ * The products as a WhatsApp list, from the catalogue as it is today: by category first when there
+ * are more than fit in one list (WhatsApp allows ten rows), then the products of the one picked.
+ */
+async function sendPicker(conversation, flow, stepId, step, answers, category = null) {
+    const list = await assist().products();
+    const cats = [...new Set(list.map(p => p.category || 'Other'))];
+    const other = step.next?.other ? [{ id: 'other', title: 'Something else', description: 'Tell us what you need' }] : [];
+    let rows;
+    let button = 'See products';
+    if (!category && cats.length > 1 && list.length > 9) {
+        rows = cats.slice(0, 9).map(c => ({
+            id: `cat:${c}`.slice(0, 200), title: c.slice(0, 24),
+            description: list.filter(p => (p.category || 'Other') === c).map(p => p.name).join(', ').slice(0, 72),
+        }));
+        button = 'See categories';
+    } else {
+        rows = list.filter(p => !category || (p.category || 'Other') === category).slice(0, 9).map(p => ({
+            id: `p:${p.id}`, title: p.name.slice(0, 24),
+            description: [p.name.length > 24 ? p.name : null, p.from_price ? `from ₹${Number(p.from_price)}` : null, p.gsm ? `${p.gsm} GSM` : null].filter(Boolean).join(' · ').slice(0, 72),
+        }));
+    }
+    const text = fill(category ? `${category} — which one?` : step.text, answers);
+    const wamid = await wa.sendList(conversation.phone, text, { button, sections: [{ title: category || 'Our products', rows: [...rows, ...other].slice(0, 10) }] });
+    await record(conversation, wamid, text, 'interactive', { kind: 'list', button, options: [...rows, ...other].map(r => r.title) });
+    await remember(conversation, flow, stepId, answers);
+}
+
 /** Send one step and remember where we are. */
 async function send(conversation, flow, stepId, answers) {
     const step = flow.steps?.[stepId];
     if (!step) return handToHuman(conversation, 'the menu ran out of steps');
+    const next = () => (step.next?.['*'] ? send(conversation, flow, step.next['*'], answers) : handToHuman(conversation, `nothing after ${stepId}`));
+
+    if (step.type === 'catalogue_pick') return sendPicker(conversation, flow, stepId, step, answers);
+    if (step.type === 'color_pick') {
+        const p = await productOf(answers);
+        const colors = p?.colors || [];
+        if (!colors.length) return next();       // a product with no colours listed: nothing to ask
+        const rows = [...colors.slice(0, 9).map(c => ({ id: `c:${c}`.slice(0, 200), title: c.slice(0, 24) })), { id: 'other', title: 'Another colour' }];
+        const text = fill(step.text, answers);
+        const wamid = await wa.sendList(conversation.phone, text, { button: 'Choose colour', sections: [{ title: `${p.name}`.slice(0, 24), rows }] });
+        await record(conversation, wamid, text, 'interactive', { kind: 'list', button: 'Choose colour', options: rows.map(r => r.title) });
+        return remember(conversation, flow, stepId, answers);
+    }
+    if (step.type === 'ask_number') {
+        const text = fill(step.text, answers);
+        await record(conversation, await wa.sendText(conversation.phone, text), text);
+        return remember(conversation, flow, stepId, answers);
+    }
+    if (step.type === 'send_size_chart') {
+        await assist().sendSizeChart(conversation, await productOf(answers));
+        await remember(conversation, flow, stepId, answers);
+        return next();
+    }
+    if (step.type === 'send_samples') {
+        const p = await productOf(answers);
+        if (!p || !(await assist().sendSamples(conversation, p))) {
+            const text = `We'll share photos of ${p?.name || 'that'} with you shortly.`;
+            await record(conversation, await wa.sendText(conversation.phone, text), text);
+        }
+        await remember(conversation, flow, stepId, answers);
+        return next();
+    }
+    if (step.type === 'send_prices') {
+        await assist().sendPriceList(conversation, await assist().products());
+        await remember(conversation, flow, stepId, answers);
+        return next();
+    }
 
     // The menu's last word, after hours: "someone will pick this up shortly" is not true at
     // night, so the customer is told the team's hours instead.
@@ -364,10 +423,10 @@ async function handToHuman(conversation, why) {
  */
 function collectItem(answers, step) {
     if (step.save_as !== 'quantity' || !answers.product_interest) return;
-    answers.items = [...(answers.items || []), { product: answers.product_interest, quantity: answers.quantity }];
+    answers.items = [...(answers.items || []), { product: answers.product_interest, color: answers.color || '', quantity: answers.quantity }];
 }
 const itemsOf = (answers) => (answers.items?.length ? answers.items
-    : answers.product_interest ? [{ product: answers.product_interest, quantity: answers.quantity }] : []);
+    : answers.product_interest ? [{ product: answers.product_interest, color: answers.color || '', quantity: answers.quantity }] : []);
 
 /** The end of the menu: everything learned goes onto the enquiry, and a person takes over. */
 async function finish(conversation, answers) {
@@ -380,7 +439,7 @@ async function finish(conversation, answers) {
         quantity: items.map(i => `${i.product}: ${bandText(i.quantity)}`).join(', '),
     } : {};
     if (items.length) {
-        params.push(JSON.stringify(items.map(i => ({ product: i.product, quantity: bandText(i.quantity) }))));
+        params.push(JSON.stringify(items.map(i => ({ product: i.product, color: i.color || '', quantity: /^\s*\d+\s*$/.test(String(i.quantity || '')) ? String(i.quantity).trim() : bandText(i.quantity) }))));
         sets.push(`products = $${params.length}`);
     }
     for (const [key, column] of [['product_interest', 'product_interest'], ['quantity', 'quantity'],
@@ -397,6 +456,8 @@ async function finish(conversation, answers) {
             `UPDATE crewfit_leads SET ${sets.join(', ')}, status = CASE WHEN status IN ('new','enquiry') THEN 'qualified' ELSE status END,
                     updated_at = CURRENT_TIMESTAMP
               WHERE id = $${params.length}`, params);
+        // Over 50 pieces: Important. Product, colour, quantity and logo all in: Need mockup.
+        await require('./cf-lead-rules').apply(conversation.lead_id, conversation.id);
     }
     await handToHuman(conversation, 'the menu finished');
 }
@@ -419,6 +480,66 @@ async function handle(conversation, message) {
     const answers = safeJson(conversation.flow_data, {});
     const tapped = message.interactive_payload?.id || null;
     const text = String(message.body || '').trim();
+
+    // A product: a category opens its products; a product is chosen (its photo, sizes and prices
+    // go with it); a product named in words counts too.
+    if (step.type === 'catalogue_pick') {
+        if (tapped?.startsWith('cat:')) {
+            await sendPicker(conversation, flow, conversation.flow_step, step, answers, tapped.slice(4));
+            return true;
+        }
+        const list = await assist().products();
+        const p = tapped?.startsWith('p:') ? list.find(x => `p:${x.id}` === tapped) : (!tapped ? assist().matchProducts(text, list)[0] : null);
+        if (tapped === 'other') {
+            await send(conversation, flow, step.next?.other || step.next?.['*'], answers);
+            return true;
+        }
+        if (p) {
+            answers[step.save_as || 'product_interest'] = p.name;
+            answers.product_interest = p.name;
+            answers._pid = p.id;
+            delete answers.color;
+            if (step.card) await assist().sendProductCard(conversation, p);
+            await send(conversation, flow, step.next?.['*'], answers);
+            return true;
+        }
+    }
+
+    if (step.type === 'color_pick') {
+        if (tapped === 'other') {
+            answers._typing = 'color';
+            const ask = 'Sure — type the colour you need.';
+            await record(conversation, await wa.sendText(conversation.phone, ask), ask);
+            await remember(conversation, flow, conversation.flow_step, answers);
+            return true;
+        }
+        const colour = tapped?.startsWith('c:') ? tapped.slice(2) : (!tapped && text && (answers._typing === 'color' || text.length <= 30) ? text : null);
+        if (colour) {
+            answers[step.save_as || 'color'] = colour;
+            answers.color = colour;
+            delete answers._typing;
+            await send(conversation, flow, step.next?.['*'], answers);
+            return true;
+        }
+    }
+
+    if (step.type === 'ask_number') {
+        const n = Number((String(text).replace(/,/g, '').match(/\d+/) || [])[0]);
+        if (n > 0) {
+            answers[step.save_as || 'quantity'] = String(n);
+            delete answers._retry;
+            collectItem(answers, step);
+            await send(conversation, flow, step.next?.['*'], answers);
+            return true;
+        }
+        if (!answers._retry) {
+            answers._retry = 1;
+            const ask = 'Please type just the number of pieces, for example 50.';
+            await record(conversation, await wa.sendText(conversation.phone, ask), ask);
+            await remember(conversation, flow, conversation.flow_step, answers);
+            return true;
+        }
+    }
 
     if (step.type === 'ask_media') {
         if (message.media_url) answers[step.save_as || 'media'] = message.media_url;
