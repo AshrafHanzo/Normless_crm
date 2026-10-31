@@ -332,7 +332,7 @@ async function receiveMessage(message, profileName) {
     // Crewfit's helper: a lead that sends its logo, a quantity, billing details or names a product is
     // marked Qualified; and while nobody has the chat, product questions are answered from the
     // catalogue (cf-assist). It stays out of chats the menu or a person is handling.
-    await require('../services/cf-assist').onInbound(conversation.id, message, { text: describe(message), mediaUrl });
+    await require('../services/cf-assist').onInbound(conversation.id, message, { text: describe(message), mediaUrl, first: isFirst });
 
     // A customer now waiting for a person, outside working hours, is told when somebody is back.
     try {
@@ -882,7 +882,8 @@ router.get('/dashboard/team-day', async (req, res) => {
 router.post('/presence', async (req, res) => {
     try {
         if (req.user?.username) {
-            await db.query(`INSERT INTO wa_user_minutes (username, minute) VALUES ($1, date_trunc('minute', LOCALTIMESTAMP)) ON CONFLICT DO NOTHING`,
+            // India time, like the dashboard's days, whatever the database's own clock is set to.
+            await db.query(`INSERT INTO wa_user_minutes (username, minute) VALUES ($1, date_trunc('minute', NOW() AT TIME ZONE 'Asia/Kolkata')) ON CONFLICT DO NOTHING`,
                 [String(req.user.username).toLowerCase()]);
         }
         res.json({ ok: true });
@@ -2413,7 +2414,7 @@ router.get('/conversations/:id/samples', async (req, res) => {
         if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
         const samples = require('../services/cf-samples');
         const { libraryImages } = require('./crewfit-catalog');
-        const all = (await libraryImages()).filter(i => i.url && /\.(jpe?g|png|webp)$/i.test(i.url));
+        const all = (await libraryImages()).filter(i => i.url && i.source !== 'Mock' && /\.(jpe?g|png|webp)$/i.test(i.url));
         const products = [...all.reduce((m, i) => m.set(i.product || 'Not named', (m.get(i.product || 'Not named') || 0) + 1), new Map())]
             .map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count);
         const product = trim(req.query.product) || conversation.product_interest?.split(',')[0]?.trim() || products[0]?.name || '';

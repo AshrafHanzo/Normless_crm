@@ -524,7 +524,10 @@ const removePhoto = (url) => {
 // colours and prices, which the bot sends when a customer asks for sizes.
 const PICTURE_COLUMN = { photo: 'image_url', chart: 'chart_url' };
 
-router.post('/catalogue/:id/:kind(photo|chart)', (req, res, next) => photoUpload.single('photo')(req, res, (err) => {
+// Only photo or chart: anything else is not a picture a product has.
+const pictureKind = (req, res, next) => (PICTURE_COLUMN[req.params.kind] ? next() : res.status(404).json({ error: 'Not found' }));
+
+router.post('/catalogue/:id/:kind', pictureKind, (req, res, next) => photoUpload.single('photo')(req, res, (err) => {
     if (!err) return next();
     res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? 'Pictures must be under 5MB' : err.message });
 }), async (req, res) => {
@@ -543,7 +546,7 @@ router.post('/catalogue/:id/:kind(photo|chart)', (req, res, next) => photoUpload
     }
 });
 
-router.delete('/catalogue/:id/:kind(photo|chart)', async (req, res) => {
+router.delete('/catalogue/:id/:kind', pictureKind, async (req, res) => {
     try {
         const col = PICTURE_COLUMN[req.params.kind];
         const old = (await db.query(`SELECT ${col} AS url FROM crewfit_products WHERE id = $1`, [req.params.id])).rows[0];

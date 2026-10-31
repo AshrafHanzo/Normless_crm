@@ -21,7 +21,8 @@ async function pick({ product, colors = [], limit = MAX } = {}) {
     const { libraryImages } = require('../routes/crewfit-catalog');
     const want = norm(product);
     const only = new Set(colors.map(norm).filter(Boolean));
-    const photos = (await libraryImages()).filter(i => i.url && norm(i.product) === want
+    // Production photos and uploaded samples only: a mockup on an order is that customer's design.
+    const photos = (await libraryImages()).filter(i => i.url && i.source !== 'Mock' && norm(i.product) === want
         && /\.(jpe?g|png|webp)$/i.test(i.url) && fs.existsSync(path.join(SERVER_ROOT, i.url.replace(/^\//, ''))))
         .filter(i => !only.size || only.has(norm(i.color)));
     // Newest first within each colour, then one of each colour in turn.
@@ -44,7 +45,7 @@ async function colorsFor(product) {
     const { libraryImages } = require('../routes/crewfit-catalog');
     const counts = new Map();
     for (const i of await libraryImages()) {
-        if (norm(i.product) !== norm(product)) continue;
+        if (i.source === 'Mock' || norm(i.product) !== norm(product)) continue;
         const c = (i.color || '').trim() || 'Other';
         counts.set(c, (counts.get(c) || 0) + 1);
     }

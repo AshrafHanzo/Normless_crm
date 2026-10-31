@@ -383,6 +383,72 @@ function CallsCard({ c, children }) {
 
 /* ── Crewfit ──────────────────────────────────────────────────────────────────────────────── */
 
+/**
+ * The team's day, person by person: how long each worked in the CRM (minutes it was open in front
+ * of them and in use), when they started and stopped, what they did, and who is waiting on them.
+ */
+// Today's date in India as YYYY-MM-DD ('en-CA' writes dates that way), whatever the browser's zone.
+const istToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date())
+const hm = (mins) => (mins >= 60 ? `${Math.floor(mins / 60)}h ${String(mins % 60).padStart(2, '0')}m` : `${mins}m`)
+const tclock = (v) => (v ? new Date(v).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' }) : '—')
+const WORK_HOURS = Array.from({ length: 15 }, (_, i) => 8 + i)      // 8 am to 10 pm
+
+function TeamDay() {
+  const apiFetch = useApi()
+  const [day, setDay] = useState(istToday())
+  const [data, setData] = useState(null)
+  useEffect(() => {
+    let live = true
+    setData(null)
+    apiFetch(`/api/whatsapp/dashboard/team-day?day=${day}`).then(r => { if (live) setData(r || { error: 'Could not reach the server' }) })
+    return () => { live = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [day])
+  const isToday = day === istToday()
+  return (
+    <section className="was-card wdb-feature">
+      <div className="was-card-head">
+        <h3>Team {isToday ? 'today' : `on ${fmtDay(day)}`}</h3>
+        <input type="date" className="wdb-day" value={day} max={istToday()} onChange={e => e.target.value && setDay(e.target.value)} aria-label="Day" />
+      </div>
+      <p className="wdb-sub">Worked = minutes the CRM was open and in use (a click or a key in the last 3 minutes). Waiting now = customers whose last message is theirs, in chats assigned to that person.</p>
+      {!data ? <div className="loader"><div className="spinner" /></div> : data.error ? <p className="was-bad">{data.error}</p> : (
+        <div className="data-table-wrapper wdb-table">
+          <table className="data-table">
+            <thead><tr>
+              <th scope="col">Person</th><th scope="col">Worked</th><th scope="col">From – to</th><th scope="col">Active hours</th>
+              <th scope="col">Chats replied</th><th scope="col">Messages</th><th scope="col">First reply</th><th scope="col">Leads moved</th>
+              <th scope="col">Calls</th><th scope="col">Orders</th><th scope="col">Waiting now</th>
+            </tr></thead>
+            <tbody>
+              {data.rows.length ? data.rows.map(p => (
+                <tr key={p.username}>
+                  <td data-label=""><span className="wdb-person"><span className="wdb-avatar">{(p.name || p.username)[0]}</span><b>{p.name || p.username}</b></span></td>
+                  <td data-label="Worked"><b>{hm(p.active_minutes)}</b></td>
+                  <td data-label="From – to">{tclock(p.first_at)} – {tclock(p.last_at)}</td>
+                  <td data-label="Active hours">
+                    <span className="wdb-hours" title={p.hours.length ? `Active in the hours starting ${p.hours.map(h => `${((h + 11) % 12) + 1}${h < 12 ? 'am' : 'pm'}`).join(', ')}` : 'Not active'}>
+                      {WORK_HOURS.map(h => <span key={h} className={p.hours.includes(h) ? 'on' : ''} />)}
+                    </span>
+                  </td>
+                  <td data-label="Chats replied">{num(p.chats_replied)}</td>
+                  <td data-label="Messages">{num(p.messages_sent)}</td>
+                  <td data-label="First reply">{secs(p.first_reply_secs)}</td>
+                  <td data-label="Leads moved">{num(p.leads_moved)}</td>
+                  <td data-label="Calls">{num(p.calls)}</td>
+                  <td data-label="Orders">{p.orders ? `${p.orders} · ${inr(p.order_value)}` : '—'}</td>
+                  <td data-label="Waiting now">{p.waiting_now
+                    ? <span className={overAnHour(p.oldest_waiting) ? 'wdb-bad' : ''}><b>{p.waiting_now}</b>{p.oldest_waiting ? ` · oldest ${ago(p.oldest_waiting)}` : ''}</span> : '—'}</td>
+                </tr>
+              )) : <tr><td colSpan={11} className="wdb-empty">Nobody was active {isToday ? 'yet today' : 'that day'}.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  )
+}
+
 const SO_COLORS = ['c-bot', 'c-blue', 'c-team', 'c-good', 'c-pink', 'c-soft']
 const SOURCE_LABEL = { ads: 'Meta ads (click-to-WhatsApp)', whatsapp: 'Wrote to us on WhatsApp', order: 'Added from an order', other: 'Other' }
 
@@ -408,6 +474,8 @@ function CrewfitDash({ d, brand }) {
           <Delta now={k.first_reply_secs.now} before={k.first_reply_secs.before} better="down" format={secs} /> median
         </Kpi>
       </section>
+
+      <TeamDay />
 
       <section className="was-card wdb-feature">
         <div className="was-card-head"><h3>Team performance</h3><span className="wdb-sub">Orders count for the salesperson written on the order (SO). Open a person for their own page.</span></div>

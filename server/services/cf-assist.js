@@ -39,13 +39,14 @@ const ASK_SIZE = /\b(size ?chart|sizes?|measurements?|chest|length|xxl|xl)\b/i;
 const ASK_SAMPLES = /\b(samples?|photos?|pics?|pictures?|images?|previous (work|orders?)|your work|real (photos?|pics?))\b/i;
 const ASK_COLOUR = /\b(colou?rs?|shades?)\b/i;
 const QUIET_HOURS = 2;          // the bot stays out of a chat a person wrote in this recently
-const ASK_PRICE = /\b(price|cost|rate|how much|quote|moq|minimum)\b/i;
+const ASK_PRICE = /\b(price|cost|rate|how much|quote)\b/i;
 
 async function products() {
     const rows = (await db.query(
         `SELECT id, name, category, fit, gsm, material, from_price, blurb, colors, tiers, image_url, chart_url
            FROM crewfit_products WHERE active AND COALESCE(wa_visible, true) ORDER BY sort_order, id`)).rows;
-    return rows.map(p => ({ ...p, colors: safeJson(p.colors, []), tiers: safeJson(p.tiers, []) }));
+    cachedProducts = rows.map(p => ({ ...p, colors: safeJson(p.colors, []), tiers: safeJson(p.tiers, []) }));
+    return cachedProducts;
 }
 
 const singular = (w) => w.replace(/ies$/, 'y').replace(/(s|es)$/, '');
@@ -59,7 +60,10 @@ function matchProducts(text, list) {
         const score = words.reduce((n, w) => n + (name.includes(w) ? 3 : 0) + (cat.includes(w) ? 1 : 0), 0);
         return { p, score };
     }).filter(x => x.score > 0);
-    return scored.sort((a, b) => b.score - a.score).map(x => x.p);
+    // The best match only (or the ones tied for it): "poly cotton polos" is that product, not
+    // every polo.
+    const top = Math.max(0, ...scored.map(x => x.score));
+    return scored.filter(x => x.score === top).map(x => x.p);
 }
 
 const rupees = (v) => (Number.isFinite(Number(v)) ? `₹${Number(v).toLocaleString('en-IN')}` : String(v));
@@ -199,7 +203,8 @@ async function askWhichProduct(conversation, kind, question) {
 /** The team's saved answers (Settings › Bot answers): [{ keywords: [...], answer, on }]. */
 async function savedAnswers() {
     const r = (await db.query(`SELECT value FROM wa_settings WHERE key = 'cf_bot_answers'`)).rows[0];
-    return safeJson(r?.value, null) || DEFAULT_ANSWERS;
+    cachedAnswers = safeJson(r?.value, null) || DEFAULT_ANSWERS;
+    return cachedAnswers;
 }
 const DEFAULT_ANSWERS = [
     { on: true, keywords: ['moq', 'minimum order', 'minimum quantity', 'min order'], answer: 'Our minimum order is just 5 pieces per design. The price per piece drops as the quantity goes up — tell us how many you need and we\'ll share the exact rate.' },
@@ -233,8 +238,8 @@ async function productInChat(conversation, text, list) {
  * Answer what the bot can, unless a person is in the chat. Returns true when it replied.
  * `conversation` needs id, phone, mode, status. `tapped` is a list reply's id, if any.
  */
-async function answer(conversation, text, tapped = null) {
-    if (conversation.mode !== 'human' || conversation.status === 'closed') return false;
+async function answer(conversation, text, tapped = null, { evenInMenu = false } = {}) {
+    if ((conversation.mode !== 'human' && !evenInMenu) || conversation.status === 'closed') return false;
     if (await personActive(conversation.id)) return false;
     const list = await products();
 
@@ -287,6 +292,16 @@ async function answer(conversation, text, tapped = null) {
         return true;
     }
 
+    // The team's own answers, by keyword — before the general product and price replies, so
+    // "what's the MOQ" gets the MOQ answer rather than the price list.
+    const lower = String(text).toLowerCase();
+    const saved = (await savedAnswers()).find(a => a.on && (a.keywords || []).some(k => k && lower.includes(String(k).toLowerCase())));
+    if (saved) {
+        if (await saidRecently(conversation.id, saved.answer.slice(0, 40))) return true;
+        await record(conversation.id, await wa.sendText(conversation.phone, saved.answer), saved.answer);
+        return true;
+    }
+
     const hits = matchProducts(text, list);
     if (hits.length) {
         let sent = 0;
@@ -306,16 +321,20 @@ async function answer(conversation, text, tapped = null) {
         await sendPriceList(conversation, list);
         return true;
     }
-    // The team's own answers, by keyword.
-    const lower = String(text).toLowerCase();
-    const saved = (await savedAnswers()).find(a => a.on && (a.keywords || []).some(k => k && lower.includes(String(k).toLowerCase())));
-    if (saved) {
-        if (await saidRecently(conversation.id, saved.answer.slice(0, 40))) return true;
-        await record(conversation.id, await wa.sendText(conversation.phone, saved.answer), saved.answer);
-        return true;
-    }
     return false;
 }
+
+/** Would answer() have something to say to these words? (Without saying it.) */
+function canAnswer(text) {
+    const t = String(text || '');
+    if (!t.trim()) return false;
+    return ASK_PERSON.test(t) || ASK_CATALOGUE.test(t) || ASK_SIZE.test(t) || ASK_SAMPLES.test(t) || ASK_COLOUR.test(t)
+        || ASK_RANGE.test(t) || (ASK_PRICE.test(t) && t.length < 80) || matchProducts(t, cachedProducts).length > 0
+        || cachedAnswers.some(a => a.on && (a.keywords || []).some(k => k && t.toLowerCase().includes(String(k).toLowerCase())));
+}
+// What canAnswer() checks against, refreshed whenever the catalogue or the answers are read.
+let cachedProducts = [];
+let cachedAnswers = DEFAULT_ANSWERS;
 
 async function sendColours(conversation, p) {
     const body = p.colors.length
@@ -326,18 +345,23 @@ async function sendColours(conversation, p) {
 }
 
 /** Both, for one Crewfit message. Never throws: the message is already saved. */
-async function onInbound(conversationId, message, { text, mediaUrl }) {
+async function onInbound(conversationId, message, { text, mediaUrl, first = false }) {
     try {
-        await qualify(conversationId, message, { text, mediaUrl });
+        // A tap on a menu button or list row is the menu's to read: its title ("Polos") isn't the
+        // customer naming a product in their own words.
+        if (message?.type !== 'interactive') await qualify(conversationId, message, { text, mediaUrl });
         const c = (await db.query(
             `SELECT c.id, c.mode, c.assigned_to, c.status, k.phone FROM wa_conversations c JOIN wa_contacts k ON k.id = c.contact_id WHERE c.id = $1`,
             [conversationId])).rows[0];
         const tapped = message?.interactive?.list_reply?.id || message?.interactive?.button_reply?.id || null;
-        if (c && lines.current()?.brand === 'crewfit' && wa.configured()) await answer(c, text, tapped);
+        // A question in the very first message ("price of polos?") is answered as well as the menu
+        // greeting it; after that, the menu has the chat until it hands over.
+        const evenInMenu = first && message?.type === 'text' && canAnswer(text);
+        if (c && lines.current()?.brand === 'crewfit' && wa.configured()) await answer(c, text, tapped, { evenInMenu });
     } catch (err) {
         console.error('crewfit assist error:', err.message);
     }
 }
 
 module.exports = { qualify, answer, onInbound, matchProducts, caption, products, QTY, GSTIN,
-    sendProductCard, sendSizeChart, sendSamples, sendPriceList, sendColours, savedAnswers, DEFAULT_ANSWERS };
+    sendProductCard, sendSizeChart, sendSamples, sendPriceList, sendColours, savedAnswers, canAnswer, DEFAULT_ANSWERS };

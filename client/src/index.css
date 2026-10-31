@@ -3874,7 +3874,11 @@ p.wdb-sub { margin: 0; }
 .wa-products-head { display: flex; align-items: center; justify-content: space-between; }
 .wa-products-head label { font-size: 12px; font-weight: 600; color: var(--text-secondary); }
 .wa-products-empty { margin: 0; font-size: 12px; color: var(--text-muted); }
-.wa-product-row { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) 64px 28px; gap: 6px; align-items: center; }
+/* Product on its own line (names are long), colour and quantity under it. */
+.wa-product-row { display: grid; grid-template-columns: minmax(0, 1fr) 72px 28px; gap: 6px; align-items: center;
+  padding-bottom: 8px; border-bottom: 1px dashed var(--border); }
+.wa-product-row > input:first-child { grid-column: 1 / -1; }
+.wa-product-row:last-child { border-bottom: 0; }
 .wa-product-row input { min-width: 0; }
 
 /* ---- WhatsApp settings: a product's size chart ------------------------------------------------ */
@@ -3931,3 +3935,9 @@ p.wdb-sub { margin: 0; }
 .wsm-color { position: absolute; left: 6px; bottom: 6px; padding: 1px 7px; border-radius: 999px; background: rgba(0,0,0,.6); color: #fff; font-size: 10.5px; }
 .wsm-foot { display: flex; align-items: center; gap: 10px; justify-content: flex-end; font-size: 12.5px; color: var(--text-secondary); }
 .wsm-foot span { margin-right: auto; }
+
+/* ---- WhatsApp dashboard: the team's day -------------------------------------------------------- */
+.wdb-day { width: auto; padding: 5px 8px; font-size: 12.5px; }
+.wdb-hours { display: inline-flex; gap: 2px; vertical-align: middle; }
+.wdb-hours span { width: 6px; height: 14px; border-radius: 2px; background: var(--surface-active); }
+.wdb-hours span.on { background: var(--success); }

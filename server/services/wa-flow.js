@@ -541,6 +541,13 @@ async function handle(conversation, message) {
         }
     }
 
+    // A tap that isn't an answer to this question (from an older list, or tapped before this one
+    // arrived) is never saved as one: the question is asked again.
+    if (tapped && ['catalogue_pick', 'color_pick', 'ask_number'].includes(step.type)) {
+        await send(conversation, flow, conversation.flow_step, answers);
+        return true;
+    }
+
     if (step.type === 'ask_media') {
         if (message.media_url) answers[step.save_as || 'media'] = message.media_url;
         else if (!/^(skip|no|later)$/i.test(text)) {
@@ -572,8 +579,13 @@ async function handle(conversation, message) {
         return true;
     }
 
-    // Words where a tap was expected: the menu stops rather than repeating itself.
+    // Words where a tap was expected: the menu stops rather than repeating itself. If the words are
+    // a question the catalogue answers (sizes, photos, prices…), the answer goes instead of the
+    // "passing you on" line (cf-assist sends it, now that a person has the chat).
     await handToHuman(conversation, 'the customer typed instead of tapping');
+    await assist().products();
+    await assist().savedAnswers();
+    if (assist().canAnswer(text)) return false;
     const text_ = 'Thanks — I\'ll pass this to one of our team, they will reply here shortly.';
     const wamid = await wa.sendText(conversation.phone, text_).catch(() => null);
     if (wamid) await record(conversation, wamid, text_);
