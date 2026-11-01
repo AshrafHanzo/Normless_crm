@@ -35,6 +35,9 @@ import OfflineSales from './pages/OfflineSales'
 import Backup from './pages/Backup'
 import DesignStudio from './pages/crewfit/DesignStudio'
 import WhatsAppInbox from './pages/crewfit/WhatsAppInbox'
+import Tasks from './pages/team/Tasks'
+import Payroll from './pages/team/Payroll'
+import TeamMe from './pages/team/Me'
 import WhatsAppSettings from './pages/crewfit/WhatsAppSettings'
 import WhatsAppDashboard, { WhatsAppMyPerformance } from './pages/crewfit/WhatsAppDashboard'
 
@@ -271,6 +274,10 @@ function App() {
             <Route path="/crewfit/quotes" element={<ProtectedRoute permission="can_view_crewfit_calculator"><AppLayout><CrewfitQuotes /></AppLayout></ProtectedRoute>} />
             <Route path="/crewfit/payments" element={<ProtectedRoute permission="can_view_crewfit_payments"><AppLayout><CrewfitPayments /></AppLayout></ProtectedRoute>} />
             <Route path="/crewfit/customers" element={<ProtectedRoute permission="can_view_crewfit_customers"><AppLayout><CrewfitCustomers /></AppLayout></ProtectedRoute>} />
+            {/* Team: shared by both brands. My pay & leave is anyone signed in; their own data only. */}
+            <Route path="/team/tasks" element={<ProtectedRoute permission="can_view_tasks"><AppLayout><Tasks /></AppLayout></ProtectedRoute>} />
+            <Route path="/team/payroll" element={<ProtectedRoute permission="can_view_payroll"><AppLayout><Payroll /></AppLayout></ProtectedRoute>} />
+            <Route path="/team/me" element={<ProtectedRoute><AppLayout><TeamMe /></AppLayout></ProtectedRoute>} />
             <Route path="/crewfit/vendor-orders" element={<ProtectedRoute permission="can_view_crewfit_vendors"><AppLayout><CrewfitVendorOrders /></AppLayout></ProtectedRoute>} />
             <Route path="/crewfit/invoices" element={<ProtectedRoute permission="can_view_crewfit_invoices"><AppLayout><CrewfitInvoices /></AppLayout></ProtectedRoute>} />
             {/* Names who changed what, so it is owner/admin only rather than a team-wide view. */}

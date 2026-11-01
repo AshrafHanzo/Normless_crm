@@ -31,6 +31,7 @@ const PERM_MAP = {
   whatsapp_dashboard: 'can_view_wa_dashboard', whatsapp_settings: 'can_manage_wa_settings',
   wa_normless_dashboard: 'can_view_wa_nl_dashboard', wa_normless_settings: 'can_manage_wa_nl_settings',
   backups: 'can_view_backups',
+  tasks: 'can_view_tasks', boards_manage: 'can_manage_boards', payroll: 'can_view_payroll',
 };
 const PERM_KEYS = Object.keys(PERM_MAP);
 const PERM_COLUMNS = Object.values(PERM_MAP);

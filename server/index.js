@@ -336,6 +336,9 @@ app.use('/api/whatsapp', authMiddleware, require('./services/wa-line').scope('cr
 app.use('/api/nl-whatsapp', authMiddleware, require('./services/wa-line').scope('normless'), require('./routes/whatsapp'));
 // Your own inbox: mentions and replies. Scoped to the caller inside the route.
 app.use('/api/notifications', authMiddleware, require('./routes/notifications'));
+// Team: people, payroll, leave and claims, and the task boards — shared by both brands.
+app.use('/api/team', authMiddleware, require('./routes/team'));
+app.use('/api/tasks', authMiddleware, require('./routes/tasks'));
 // One comment thread implementation for every kind of thing that has one.
 app.use('/api/comments', authMiddleware, require('./routes/comments'));
 // Off-server backups to Telegram. Gated again inside the router: the page needs
@@ -2276,6 +2279,9 @@ app.listen(PORT, async () => {
     await ensureAdminUser();
     // Ensure Crewfit catalog schema + seed
     await ensureCrewfitSchema();
+    await require('./services/team-schema').ensureTeamSchema();
+    require('./services/team-notify').start();
+    require('./routes/tasks').startRepeats();
     // The WhatsApp menu, put in place once. Seeded switched off: nobody should discover that a
     // robot started answering their customers because a deploy happened.
     try { await require('./services/wa-flow').ensureStarterFlow(); }

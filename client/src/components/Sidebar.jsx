@@ -44,6 +44,15 @@ const NAV = {
   ],
 }
 
+// The Team section is the same in both menus: one list of people, one payroll and one set of
+// boards serve Normless and Crewfit alike.
+const TEAM_NAV = [
+  { to: '/team/tasks', icon: 'check', label: 'Tasks', perm: 'can_view_tasks', badge: 'tasks' },
+  { to: '/team/payroll', icon: 'wallet', label: 'Payroll', perm: 'can_view_payroll', badge: 'approvals' },
+  // Anyone signed in: their own payslips, leave and claims.
+  { to: '/team/me', icon: 'calendar', label: 'My pay & leave' },
+]
+
 export default function Sidebar({ collapsed = false, onToggleCollapse, open: openProp, onOpenChange }) {
   const { user, logout, brand, setBrand } = useAuth()
   const { isDark, toggleTheme } = useTheme()
@@ -132,6 +141,20 @@ export default function Sidebar({ collapsed = false, onToggleCollapse, open: ope
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canSeeWa, brand])
 
+  // Team: tasks of mine due today or late, and leave or claims waiting for this person to approve.
+  const [teamCounts, setTeamCounts] = useState({ tasks: 0, approvals: 0 })
+  useEffect(() => {
+    let live = true
+    const check = async () => {
+      const r = await apiFetch('/api/team/badges')
+      if (live && r && !r.error) setTeamCounts({ tasks: r.tasks || 0, approvals: r.approvals || 0 })
+    }
+    check()
+    const t = setInterval(check, 120000)
+    return () => { live = false; clearInterval(t) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   const b = BRANDS[brand] || BRANDS.normless
   const isAdminRole = user?.role === 'owner' || user?.role === 'admin'
   // adminOnly wins over perm: a page that names who did what is not team-wide, and no permission
@@ -144,6 +167,7 @@ export default function Sidebar({ collapsed = false, onToggleCollapse, open: ope
 
   const mainItems = items.filter(i => !i.section)
   const systemItems = items.filter(i => i.section === 'System')
+  const teamItems = TEAM_NAV.filter(canSee)
   const isAdmin = user?.role === 'owner' || user?.role === 'admin'
 
   return (
@@ -199,6 +223,24 @@ export default function Sidebar({ collapsed = false, onToggleCollapse, open: ope
                     {/* Shown on the icon too, so the collapsed rail still carries the alert. */}
                     {count > 0 && <span className="link-dot" />}
                   </span>
+                  <span>{item.label}</span>
+                  {count > 0 && <span className="nav-badge">{count}</span>}
+                </NavLink>
+              )
+            })}
+          </div>
+
+          <div className="sidebar-section">
+            <div className="sidebar-section-label">Team</div>
+            {teamItems.map(item => {
+              const count = teamCounts[item.badge] || 0
+              return (
+                <NavLink key={item.to} to={item.to} onClick={close}
+                  title={!count ? item.label : item.badge === 'tasks'
+                    ? `${item.label} — ${count} of yours due today or late`
+                    : `${item.label} — ${count} leave or claim request${count > 1 ? 's' : ''} to approve`}
+                  className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>
+                  <span className="link-icon"><Icon name={item.icon} size={19} />{count > 0 && <span className="link-dot" />}</span>
                   <span>{item.label}</span>
                   {count > 0 && <span className="nav-badge">{count}</span>}
                 </NavLink>

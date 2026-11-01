@@ -49,7 +49,7 @@ const GROUPS = [
   ] },
 ]
 
-const blankForm = () => ({ username: '', password: '', role: 'operator', is_sales_agent: false, normless: true, dashboard: true, customers: true, orders: true, scanner: true, marketing: false, marketing_dispatch: false, marketing_approve: false, marketing_reports: false, support: false, support_edit: false, invoices: false, crewfit: false, crewfit_analytics: false, crewfit_followups: false, crewfit_orders: false, crewfit_catalog: false, crewfit_catalog_upload: false, crewfit_samples_upload: false, design_studio: false, crewfit_calculator: false, crewfit_payments: false, crewfit_customers: false, crewfit_vendors: false, crewfit_invoices: false, crewfit_orders_edit: false, inventory: false, inventory_edit: false, inventory_import: false, offline_sales: false, offline_sales_edit: false, banking: false, banking_edit: false, whatsapp: false, whatsapp_manage: false, whatsapp_dashboard: false, whatsapp_settings: false, wa_normless: false, wa_normless_manage: false, wa_normless_dashboard: false, wa_normless_settings: false, revenue: false, backups: false })
+const blankForm = () => ({ username: '', password: '', role: 'operator', is_sales_agent: false, normless: true, dashboard: true, customers: true, orders: true, scanner: true, marketing: false, marketing_dispatch: false, marketing_approve: false, marketing_reports: false, support: false, support_edit: false, invoices: false, crewfit: false, crewfit_analytics: false, crewfit_followups: false, crewfit_orders: false, crewfit_catalog: false, crewfit_catalog_upload: false, crewfit_samples_upload: false, design_studio: false, crewfit_calculator: false, crewfit_payments: false, crewfit_customers: false, crewfit_vendors: false, crewfit_invoices: false, crewfit_orders_edit: false, inventory: false, inventory_edit: false, inventory_import: false, offline_sales: false, offline_sales_edit: false, banking: false, banking_edit: false, whatsapp: false, whatsapp_manage: false, whatsapp_dashboard: false, whatsapp_settings: false, wa_normless: false, wa_normless_manage: false, wa_normless_dashboard: false, wa_normless_settings: false, revenue: false, backups: false, tasks: true, boards_manage: false, payroll: false })
 const fromUser = (u) => ({
   id: u.id, username: u.username, password: '', role: u.role, is_sales_agent: !!u.is_sales_agent,
   normless: !!u.can_access_normless, dashboard: !!u.can_view_dashboard, customers: !!u.can_view_customers, orders: !!u.can_view_orders, scanner: !!u.can_scan_orders, invoices: !!u.can_view_invoices,
@@ -57,11 +57,12 @@ const fromUser = (u) => ({
   support: !!u.can_view_support, support_edit: !!u.can_edit_support,
   crewfit: !!u.can_access_crewfit, crewfit_analytics: !!u.can_view_crewfit_analytics, crewfit_followups: !!u.can_view_crewfit_followups, crewfit_orders: !!u.can_view_crewfit_orders, crewfit_catalog: !!u.can_view_crewfit_catalog, crewfit_catalog_upload: !!u.can_upload_crewfit_catalog, crewfit_samples_upload: !!u.can_upload_crewfit_samples, design_studio: !!u.can_use_design_studio, crewfit_calculator: !!u.can_view_crewfit_calculator, crewfit_payments: !!u.can_view_crewfit_payments, crewfit_customers: !!u.can_view_crewfit_customers, crewfit_vendors: !!u.can_view_crewfit_vendors, crewfit_invoices: !!u.can_view_crewfit_invoices, crewfit_orders_edit: !!u.can_edit_crewfit_orders, inventory: !!u.can_view_inventory, inventory_edit: !!u.can_edit_inventory, inventory_import: !!u.can_import_rto, offline_sales: !!u.can_view_offline_sales, offline_sales_edit: !!u.can_edit_offline_sales, banking: !!u.can_view_banking, banking_edit: !!u.can_edit_banking, whatsapp: !!u.can_view_whatsapp, whatsapp_manage: !!u.can_manage_whatsapp, whatsapp_dashboard: !!u.can_view_wa_dashboard, whatsapp_settings: !!u.can_manage_wa_settings, wa_normless: !!u.can_view_wa_normless, wa_normless_manage: !!u.can_manage_wa_normless, wa_normless_dashboard: !!u.can_view_wa_nl_dashboard, wa_normless_settings: !!u.can_manage_wa_nl_settings, revenue: !!u.can_view_revenue,
   backups: !!u.can_view_backups,
+  tasks: u.can_view_tasks !== false, boards_manage: !!u.can_manage_boards, payroll: !!u.can_view_payroll,
 })
 const buildPerms = (f) => {
   // Owner and admin both hold every page; the server short-circuits permission checks for them
   // either way, so these columns are really just kept consistent with the role.
-  if (f.role === 'admin' || f.role === 'owner') return { normless: true, crewfit: true, dashboard: true, customers: true, orders: true, scanner: true, marketing: true, marketing_dispatch: true, marketing_approve: true, marketing_reports: true, support: true, support_edit: true, invoices: true, crewfit_analytics: true, crewfit_followups: true, crewfit_orders: true, crewfit_catalog: true, crewfit_catalog_upload: true, crewfit_samples_upload: true, design_studio: true, crewfit_calculator: true, crewfit_payments: true, crewfit_customers: true, crewfit_vendors: true, crewfit_invoices: true, crewfit_orders_edit: true, inventory: true, inventory_edit: true, inventory_import: true, offline_sales: true, offline_sales_edit: true, banking: true, banking_edit: true, whatsapp: true, whatsapp_manage: true, whatsapp_dashboard: true, whatsapp_settings: true, wa_normless: true, wa_normless_manage: true, wa_normless_dashboard: true, wa_normless_settings: true, revenue: true, backups: true, sync: f.role === 'owner' }
+  if (f.role === 'admin' || f.role === 'owner') return { normless: true, crewfit: true, dashboard: true, customers: true, orders: true, scanner: true, marketing: true, marketing_dispatch: true, marketing_approve: true, marketing_reports: true, support: true, support_edit: true, invoices: true, crewfit_analytics: true, crewfit_followups: true, crewfit_orders: true, crewfit_catalog: true, crewfit_catalog_upload: true, crewfit_samples_upload: true, design_studio: true, crewfit_calculator: true, crewfit_payments: true, crewfit_customers: true, crewfit_vendors: true, crewfit_invoices: true, crewfit_orders_edit: true, inventory: true, inventory_edit: true, inventory_import: true, offline_sales: true, offline_sales_edit: true, banking: true, banking_edit: true, whatsapp: true, whatsapp_manage: true, whatsapp_dashboard: true, whatsapp_settings: true, wa_normless: true, wa_normless_manage: true, wa_normless_dashboard: true, wa_normless_settings: true, revenue: true, backups: true, tasks: true, boards_manage: true, payroll: true, sync: f.role === 'owner' }
   return {
     normless: !!f.normless, crewfit: !!f.crewfit, sync: false,
     dashboard: !!(f.normless && f.dashboard), customers: !!(f.normless && f.customers), orders: !!(f.normless && f.orders), scanner: !!(f.normless && f.scanner), invoices: !!(f.normless && f.invoices),
@@ -106,6 +107,9 @@ const buildPerms = (f) => {
     revenue: !!f.revenue,
     // Not tied to either brand: one database holds both, so one backup covers both.
     backups: !!f.backups,
+    // The Team section serves both brands, so none of these hang off a brand toggle. Running
+    // boards needs Tasks: a lead who cannot open the boards cannot run one.
+    tasks: !!f.tasks, boards_manage: !!(f.tasks && f.boards_manage), payroll: !!f.payroll,
   }
 }
 
@@ -239,6 +243,33 @@ export default function AdminManagement() {
                 <span>
                   <b>See and run backups</b>
                   <em>Open System → Backup, read the history and start a backup. The page shows which Telegram account the archives go to. Connecting or disconnecting that account, changing the encryption passphrase, and restoring an archive remain owner-only whatever is ticked here.</em>
+                </span>
+              </label>
+            </div>
+            {/* The Team section is shared by both brands, so its rights sit outside the brand cards. */}
+            <div className="access-card data-access-card">
+              <label className="page-check" style={{ margin: 0 }}>
+                <input type="checkbox" checked={!!form.tasks} onChange={e => setF({ tasks: e.target.checked, ...(e.target.checked ? {} : { boards_manage: false }) })} />
+                <Icon name="check" size={15} />
+                <span>
+                  <b>Tasks</b>
+                  <em>Open Team → Tasks: the boards they are a member of, their own tasks, comments and files.</em>
+                </span>
+              </label>
+              <label className="page-check" style={{ margin: '10px 0 0', opacity: form.tasks ? 1 : 0.5 }}>
+                <input type="checkbox" disabled={!form.tasks} checked={!!form.boards_manage} onChange={e => setF({ boards_manage: e.target.checked })} />
+                <Icon name="settings" size={15} />
+                <span>
+                  <b>Tasks — create and run boards</b>
+                  <em>Make boards, choose their members, plan and close sprints, and see every board's analytics. A board's lead can already run their own board.</em>
+                </span>
+              </label>
+              <label className="page-check" style={{ margin: '10px 0 0' }}>
+                <input type="checkbox" checked={!!form.payroll} onChange={e => setF({ payroll: e.target.checked })} />
+                <Icon name="wallet" size={15} />
+                <span>
+                  <b>Payroll</b>
+                  <em>Team → Payroll: everyone's salary and bank details, leave and claims for all, and preparing the monthly run. Approving a run stays with owners and admins.</em>
                 </span>
               </label>
             </div>

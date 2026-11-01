@@ -19,6 +19,7 @@ const COLUMNS = new Set([
   'can_view_wa_normless', 'can_manage_wa_normless',
   'can_view_wa_dashboard', 'can_manage_wa_settings', 'can_view_wa_nl_dashboard', 'can_manage_wa_nl_settings',
   'can_view_backups',
+  'can_view_tasks', 'can_manage_boards', 'can_view_payroll',
 ]);
 
 // Whether this request holds a given permission.
