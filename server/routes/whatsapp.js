@@ -297,10 +297,20 @@ async function receiveMessage(message, profileName) {
         // A customer typing MENU (or whatever words the shop chose) gets the menu again, as long
         // as a person is not in the middle of answering them.
         const keyword = fresh?.mode === 'human' && !isFirst && await isMenuKeyword(describe(message));
+        // A returning customer who just says "hi" after hours gets the menu again rather than a
+        // "we're closed" — the bot can take it from there. In working hours the salesperson who
+        // has the chat answers, and a chat a person wrote in lately is never interrupted.
+        const greetAgain = !keyword && fresh?.mode === 'human' && !isFirst && fresh.status !== 'closed'
+            && flow.isGreeting(describe(message)) && !extras.isOpen(await extras.workHours())
+            && !(await db.query(
+                `SELECT 1 FROM wa_messages WHERE conversation_id = $1 AND direction = 'out' AND sender_type IN ('user','phone')
+                    AND created_at > NOW() - INTERVAL '2 hours' LIMIT 1`, [conversation.id])).rows.length;
         if (fresh?.mode === 'billing') {
             await billing.handle(fresh, { body: describe(message) });
         } else if (keyword) {
             await flow.start(fresh);
+        } else if (greetAgain) {
+            await flow.start(fresh, { evenIfOff: true });
         } else if (fresh?.mode === 'flow') {
             const dealt = await flow.handle(fresh, {
                 body: describe(message),

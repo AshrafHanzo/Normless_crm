@@ -413,6 +413,10 @@ async function send(conversation, flow, stepId, answers) {
 // answer. After hours these are the ones told when the team is back (routes/whatsapp.js), rather
 // than every chat that happens to be out of the menu.
 const handovers = new Set();
+
+// A hello and nothing else: "hi", "hello sir", "good morning", "vanakkam".
+const GREETING = /^(h+i+|hai|hey+|hel+o+|hlo|helo|hy|yo|good (morning|afternoon|evening|day)|gm|vanakkam|namaste|namaskaram)( (sir|madam|mam|bro|anna|team|there|crewfit|ji))*$/i;
+const isGreeting = (text) => GREETING.test(String(text || '').replace(/[\p{P}\p{Extended_Pictographic}\p{S}]/gu, ' ').trim().replace(/\s+/g, ' '));
 const takeHandover = (conversationId) => handovers.delete(conversationId);
 
 /** Hand over, with the reason visible in the thread rather than only in a log. */
@@ -586,6 +590,12 @@ async function handle(conversation, message) {
         return true;
     }
 
+    // A "hi" or "good morning" where a tap was expected is just a hello: show the step again.
+    if (isGreeting(text)) {
+        await send(conversation, flow, conversation.flow_step, answers);
+        return true;
+    }
+
     // Words where a tap was expected: the menu stops rather than repeating itself. If the words are
     // a question the catalogue answers (sizes, photos, prices…), the answer goes instead of the
     // "passing you on" line (cf-assist sends it, now that a person has the chat).
@@ -608,4 +618,4 @@ async function start(conversation, { evenIfOff = false } = {}) {
     return true;
 }
 
-module.exports = { activeFlow, flowByKey, ensureStarterFlow, start, handle, priceFor, summaryText, takeHandover, CREWFIT_FLOW };
+module.exports = { activeFlow, flowByKey, ensureStarterFlow, start, handle, priceFor, summaryText, takeHandover, isGreeting, CREWFIT_FLOW };
