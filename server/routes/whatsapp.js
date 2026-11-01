@@ -785,6 +785,9 @@ const LAST_DIRECTION = LAST_MESSAGE('direction');
 // whoever it is assigned to. Older ones are dead leads: kept, but not flagged.
 // Somebody said the customer's last word needs no reply ("ok", "thanks"): until they write again,
 // the chat is not waiting.
+// The customer has written at least once. A chat opened only to send an order update (Bulk Orders
+// raising an order for somebody who never messaged us) has nothing to answer and is no new lead.
+const CUSTOMER_WROTE = `EXISTS (SELECT 1 FROM wa_messages cw WHERE cw.conversation_id = c.id AND cw.direction = 'in')`;
 const NOT_SETTLED = `(c.settled_msg_id IS NULL OR ${LAST_MESSAGE('id')} <> c.settled_msg_id)`;
 const BACKUP_WAITING = `(${LAST_MESSAGE('wamid')} LIKE 'import:%' AND ${LAST_DIRECTION} = 'in'
                           AND ${LAST_MESSAGE('sent_at')} > LOCALTIMESTAMP - INTERVAL '3 days' AND ${NOT_SETTLED})`;
@@ -944,7 +947,7 @@ router.get('/conversations', async (req, res) => {
             params.push(String(req.user?.username || '').toLowerCase());
             where.push(`LOWER(COALESCE(c.assigned_to,'')) = $${params.length}`);
         } else if (filter === 'unassigned') {
-            where.push('c.assigned_to IS NULL');
+            where.push(`c.assigned_to IS NULL AND ${CUSTOMER_WROTE}`);
         } else if (filter === 'waiting') {
             // "Needs a person": a person is answering it, and the customer spoke last. On Crewfit,
             // only chats nobody has taken yet — the queue somebody picks up from.
@@ -1033,7 +1036,7 @@ router.get('/conversations', async (req, res) => {
         const me = `$${tallyParams.length}`;
         const tally = await db.query(
             `SELECT COUNT(*) FILTER (WHERE c.status = 'open') AS open,
-                    COUNT(*) FILTER (WHERE c.status = 'open' AND c.assigned_to IS NULL) AS unassigned,
+                    COUNT(*) FILTER (WHERE c.status = 'open' AND c.assigned_to IS NULL AND ${CUSTOMER_WROTE}) AS unassigned,
                     -- A chat this person muted adds nothing to their badge.
                     COALESCE(SUM(c.unread_count) FILTER (WHERE NOT EXISTS (SELECT 1 FROM wa_conversation_mutes mu
                               WHERE mu.conversation_id = c.id AND mu.username = ${me})), 0) AS unread,
