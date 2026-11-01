@@ -334,10 +334,19 @@ async function receiveMessage(message, profileName) {
     // catalogue (cf-assist). It stays out of chats the menu or a person is handling.
     await require('../services/cf-assist').onInbound(conversation.id, message, { text: describe(message), mediaUrl, first: isFirst });
 
-    // A customer now waiting for a person, outside working hours, is told when somebody is back.
+    // Outside working hours, a customer who needs a person is told when one is back: they asked for
+    // the team, the menu just passed their enquiry on, or nothing here could answer them. A question
+    // the bot has just answered, or an "ok, thanks", needs no "we're closed" after it.
     try {
+        const handedOver = flow.takeHandover(conversation.id);
         const now = (await db.query('SELECT mode FROM wa_conversations WHERE id = $1', [conversation.id])).rows[0];
-        if (now?.mode === 'human') await extras.maybeSendAway(conversation);
+        if (now?.mode === 'human') {
+            const botReplied = (await db.query(
+                `SELECT 1 FROM wa_messages WHERE conversation_id = $1 AND direction = 'out'
+                    AND sender_type IN ('bot','auto') AND id > $2 LIMIT 1`, [conversation.id, messageId])).rows.length > 0;
+            const text = describe(message);
+            if (handedOver || asksForPerson(text) || (!botReplied && !isThanks(message))) await extras.maybeSendAway(conversation);
+        }
     } catch (err) {
         console.error('whatsapp away message error:', err.message);
     }
@@ -1474,6 +1483,17 @@ router.post('/conversations/:id/messages', takeFile, async (req, res) => {
         res.status(500).json({ error: 'Could not send that message' });
     }
 });
+
+// Words that mean "let me talk to someone": these always get the team's hours after hours.
+const PERSON_WORDS = /\b(call me|call back|callback|talk to|speak to|speak with|connect me|real person|human|agent|executive|sales ?(team|person|rep)|customer care|contact number|phone number|your number|manager)\b/i;
+const asksForPerson = (text) => PERSON_WORDS.test(String(text || ''));
+// A plain thank-you or okay (or only emoji): nothing to answer, so no hours message either.
+const THANKS = /^(ok+|okay|okk+|k|kk|fine|sure|done|got it|noted|thanks?|thank ?(you|u)|thx|tq|ty|tnx|welcome|hmm+|yes|yeah|yep|no|nope|good|great|nice|super|cool|alright|all right)( (bro|sir|madam|mam|ji|da|anna|thanks?|thank you|so much))*$/i;
+function isThanks(m) {
+    if (['reaction', 'sticker'].includes(m?.type)) return true;
+    const t = String(m?.text?.body ?? m?.body ?? '').replace(/\u200d|\ufe0f/g, '').replace(/[\p{P}\p{Extended_Pictographic}\p{S}]/gu, ' ').trim().replace(/\s+/g, ' ');
+    return !t || THANKS.test(t);
+}
 
 /**
  * A short last word — "ok", "thanks", "okay bro", a thumbs-up — that needs no answer. One or two

@@ -256,6 +256,10 @@ async function answer(conversation, text, tapped = null, { evenInMenu = false } 
     if (!text) return false;
 
     if (ASK_PERSON.test(text)) {
+        // After hours "someone will reply shortly" isn't true: the hours message says when instead
+        // (once — it is not repeated within 12 hours).
+        const extras = require('./wa-extras');
+        if (!extras.isOpen(await extras.workHours())) { await extras.maybeSendAway(conversation); return true; }
         if (await saidRecently(conversation.id, 'someone from our team')) return true;
         const body = 'Sure — someone from our team will reply to you here shortly.';
         await record(conversation.id, await wa.sendText(conversation.phone, body), body);

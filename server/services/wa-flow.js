@@ -409,6 +409,12 @@ async function send(conversation, flow, stepId, answers) {
     }
 }
 
+// Conversations the menu just passed to the sales team — a finished quote, or words it could not
+// answer. After hours these are the ones told when the team is back (routes/whatsapp.js), rather
+// than every chat that happens to be out of the menu.
+const handovers = new Set();
+const takeHandover = (conversationId) => handovers.delete(conversationId);
+
 /** Hand over, with the reason visible in the thread rather than only in a log. */
 async function handToHuman(conversation, why) {
     await db.query(
@@ -460,6 +466,7 @@ async function finish(conversation, answers) {
         await require('./cf-lead-rules').apply(conversation.lead_id, conversation.id);
     }
     await handToHuman(conversation, 'the menu finished');
+    handovers.add(conversation.id);
 }
 
 /**
@@ -586,6 +593,7 @@ async function handle(conversation, message) {
     await assist().products();
     await assist().savedAnswers();
     if (assist().canAnswer(text)) return false;
+    handovers.add(conversation.id);
     const text_ = 'Thanks — I\'ll pass this to one of our team, they will reply here shortly.';
     const wamid = await wa.sendText(conversation.phone, text_).catch(() => null);
     if (wamid) await record(conversation, wamid, text_);
@@ -600,4 +608,4 @@ async function start(conversation, { evenIfOff = false } = {}) {
     return true;
 }
 
-module.exports = { activeFlow, flowByKey, ensureStarterFlow, start, handle, priceFor, summaryText, CREWFIT_FLOW };
+module.exports = { activeFlow, flowByKey, ensureStarterFlow, start, handle, priceFor, summaryText, takeHandover, CREWFIT_FLOW };
