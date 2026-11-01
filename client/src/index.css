@@ -3746,6 +3746,17 @@ p.wdb-sub { margin: 0; }
 /* ---- WhatsApp: the status picker ------------------------------------------------------------ */
 .wsp { position: relative; min-width: 0; }
 .wsp-block, .wa-status-filter.wsp { display: block; width: 100%; }
+/* The status picker and the sort order, side by side above the chat list. */
+.wa-list-tools { display: flex; gap: 8px; align-items: stretch; flex: none; }
+.wa-list-tools .wa-status-filter.wsp { flex: 1; min-width: 0; width: auto; }
+.wa-sort-btn {
+  display: inline-flex; align-items: center; gap: 6px; flex: none; min-height: 36px; padding: 0 12px;
+  border-radius: var(--radius-md); border: 1px solid var(--border); background: var(--surface); color: var(--text-secondary);
+  font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; white-space: nowrap;
+}
+.wa-sort-btn:hover { color: var(--text-primary); border-color: var(--border-hover); }
+.wa-sort-btn[aria-pressed="true"] { color: var(--text-primary); border-color: var(--primary); background: var(--surface-active); }
+.wa-sort-btn:focus-visible { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-glow); }
 .wsp-trigger {
   display: flex; align-items: center; gap: 8px; width: 100%; min-height: 36px; padding: 6px 10px 6px 12px;
   border-radius: var(--radius-md); border: 1px solid var(--border); background: var(--surface); color: var(--text-primary);
@@ -3995,6 +4006,29 @@ p.wdb-sub { margin: 0; }
 .voa-prow { display: flex; justify-content: space-between; gap: 8px; font-size: 12.5px; }
 .voa-meter { height: 6px; border-radius: 3px; background: var(--border); overflow: hidden; margin-top: 3px; }
 .voa-meter span { display: block; height: 100%; background: var(--primary); border-radius: 3px; }
+/* WhatsApp costs (settings): reuses the vendor-analytics chart and cards. */
+.wac { gap: 16px; }
+.wac-date { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); }
+.wac-date input { width: auto; padding: 5px 8px; font-size: 12.5px; }
+.wac-split { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.wac-line {
+  display: flex; flex-direction: column; gap: 2px; text-align: left; font: inherit; color: inherit; cursor: pointer;
+  border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; background: var(--bg-primary);
+}
+.wac-line:hover { border-color: var(--border-hover); }
+.wac-line > span:first-child { font-size: 12px; color: var(--text-muted); }
+.wac-line b { font-size: 18px; font-weight: 800; }
+.wac-line em { font-style: normal; font-size: 12px; color: var(--text-muted); }
+.wac-chart-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.wac-chart-head h3 { margin: 0; font-size: 14px; }
+.wac .voa-x { left: -24px; right: -24px; overflow: visible; text-overflow: clip; }
+.wac-dot { display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-right: 7px; vertical-align: 0; }
+.wac .data-table .num { text-align: right; white-space: nowrap; }
+.wac .data-table td .voa-muted { max-width: 380px; margin-top: 2px; }
+.wac-sender + .wac-sender { border-top: 1px solid var(--border); padding-top: 8px; }
+.wac-rules { gap: 10px !important; font-size: 12.5px; color: var(--text-secondary); }
+.wac-rules b { color: var(--text-primary); }
+.wac-link { display: inline-block; margin-top: 12px; font-size: 12.5px; color: var(--primary); }
 @media (max-width: 900px) { .voa-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } .voa-split { grid-template-columns: 1fr; } }
 
 /* ---- Team: tasks, payroll, my pay & leave (pages/team) ---------------------------------------- */

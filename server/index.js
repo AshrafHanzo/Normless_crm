@@ -1905,6 +1905,12 @@ async function ensureWaLinesSchema() {
             -- The message this one answers, as WhatsApp's own id: a reply the customer made to one of
             -- ours, or one of ours to one of theirs.
             ALTER TABLE wa_messages ADD COLUMN IF NOT EXISTS reply_to TEXT;
+            -- What Meta says each message we sent is charged as, from its status updates: the
+            -- category (marketing, utility, authentication, service), whether it is billed, and
+            -- why not (inside the customer-service window, or a lead from an ad).
+            ALTER TABLE wa_messages ADD COLUMN IF NOT EXISTS pricing_category TEXT;
+            ALTER TABLE wa_messages ADD COLUMN IF NOT EXISTS pricing_type TEXT;
+            ALTER TABLE wa_messages ADD COLUMN IF NOT EXISTS billable BOOLEAN;
             -- "No reply needed": the customer's last word was a thank-you, and somebody said so. The
             -- chat stops counting as waiting up to that message.
             ALTER TABLE wa_conversations ADD COLUMN IF NOT EXISTS settled_msg_id INTEGER;

@@ -548,6 +548,17 @@ async function receiveStatus(status) {
             AND COALESCE(ARRAY_POSITION(ARRAY['sent','delivered','read','failed'], status), 0)
                 <= ARRAY_POSITION(ARRAY['sent','delivered','read','failed'], $2::text)`,
         [status.id, status.status, error ? (error.title || error.message || 'Message failed') : null]);
+    // How Meta prices it — on the sent and delivered statuses, whichever order they come in.
+    const pricing = status.pricing;
+    if (pricing && (pricing.category || pricing.type)) {
+        await db.query(
+            `UPDATE wa_messages SET pricing_category = COALESCE($2, pricing_category),
+                    pricing_type = COALESCE($3, pricing_type), billable = COALESCE($4, billable)
+              WHERE wamid = $1`,
+            [status.id, pricing.category ? String(pricing.category).toLowerCase() : null,
+             pricing.type ? String(pricing.type).toLowerCase() : null,
+             typeof pricing.billable === 'boolean' ? pricing.billable : null]);
+    }
 }
 
 /**
@@ -982,8 +993,12 @@ router.get('/conversations', async (req, res) => {
                          OR k.phone LIKE $${i + 1} ${byOrder})`);
         }
 
-        // The next page starts after the last chat of the one before: the list is newest first,
-        // chats with no messages last. The time travels as text so no time zone touches it.
+        // Newest first, or oldest first so the team can work through the longest-waiting chats;
+        // either way, chats with no messages come last.
+        const oldest = req.query.sort === 'oldest';
+        const past = oldest ? '>' : '<';
+        // The next page starts after the last chat of the one before. The time travels as text so
+        // no time zone touches it.
         const beforeId = parseInt(req.query.before_id, 10);
         const paging = Number.isFinite(beforeId);
         if (paging) {
@@ -993,16 +1008,16 @@ router.get('/conversations', async (req, res) => {
             if (beforeAt) {
                 params.push(beforeAt);
                 const at = `$${params.length}::timestamp`;
-                where.push(`(c.last_message_at < ${at} OR (c.last_message_at = ${at} AND c.id < ${id}) OR c.last_message_at IS NULL)`);
+                where.push(`(c.last_message_at ${past} ${at} OR (c.last_message_at = ${at} AND c.id ${past} ${id}) OR c.last_message_at IS NULL)`);
             } else {
-                where.push(`(c.last_message_at IS NULL AND c.id < ${id})`);
+                where.push(`(c.last_message_at IS NULL AND c.id ${past} ${id})`);
             }
         }
         const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 60, 1), 200);
         const rows = await db.query(
             `SELECT ${LIST_FIELDS}, c.last_message_at::text AS page_at ${LIST_FROM}
               WHERE ${where.join(' AND ')}
-              ORDER BY c.last_message_at DESC NULLS LAST, c.id DESC
+              ORDER BY c.last_message_at ${oldest ? 'ASC' : 'DESC'} NULLS LAST, c.id ${oldest ? 'ASC' : 'DESC'}
               LIMIT ${limit}`, params);
         const lastRow = rows.rows[rows.rows.length - 1];
         const next = rows.rows.length === limit ? { before_at: lastRow.page_at || '', before_id: lastRow.id } : null;

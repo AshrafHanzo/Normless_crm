@@ -43,6 +43,26 @@ async function getSettings() {
     return Object.fromEntries(r.rows.map(x => [x.key, x.value]));
 }
 
+/* ── What WhatsApp costs ──────────────────────────────────────────────────────────────────────
+   Meta's figures for both numbers over a range of days. Money, so admin and owner only. */
+
+const DATE = /^\d{4}-\d{2}-\d{2}$/;
+router.get('/costs', async (req, res) => {
+    if (!isAdmin(req)) return res.status(403).json({ error: 'Only an admin can see what WhatsApp costs' });
+    const from = String(req.query.from || '');
+    const to = String(req.query.to || '');
+    if (!DATE.test(from) || !DATE.test(to) || from > to) return res.status(400).json({ error: 'Pick a start and an end date' });
+    if ((Date.parse(to) - Date.parse(from)) / 86400000 > 366) return res.status(400).json({ error: 'Pick a range of a year or less' });
+    try {
+        const costs = require('../services/wa-costs');
+        const brands = await Promise.all(['crewfit', 'normless'].map(b => costs.forLine(b, from, to)));
+        res.json({ from, to, brands });
+    } catch (err) {
+        console.error('whatsapp costs error:', err);
+        res.status(500).json({ error: 'Could not load the costs' });
+    }
+});
+
 /* ── Lead statuses ───────────────────────────────────────────────────────────────────────────
    Saved as a whole list, in order, because that is how the page edits them: reorder, rename,
    recolour, add, remove, then save once. A removed status has its leads moved to the default

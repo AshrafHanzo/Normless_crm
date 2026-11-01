@@ -12,6 +12,7 @@ import { WaCallsTab } from './WaCallsSettings'
 import { WaImportTab } from './WaImport'
 import WaMarketing from './WaMarketing'
 import WaReopen from './WaReopen'
+import { WaCostsTab } from './WaCosts'
 import { NlTemplateLibrary } from './NlSettings'
 
 /**
@@ -35,6 +36,7 @@ const TABS = [
   { key: 'statuses', label: 'Lead statuses', icon: 'check' },
   { key: 'calls', label: 'Calls & new chats', icon: 'phone' },
   { key: 'import', label: 'Import chats', icon: 'download' },
+  { key: 'costs', label: 'Costs', icon: 'wallet', adminOnly: true },
   { key: 'connect', label: 'Connect WhatsApp', icon: 'whatsapp', adminOnly: true },
 ]
 // Normless's settings, as the design lays them out: the bot first, then what it knows and does.
@@ -51,6 +53,7 @@ const NL_TABS = [
   { key: 'templates', label: 'Templates', icon: 'mail' },
   { key: 'calls', label: 'Calls & new chats', icon: 'phone' },
   { key: 'import', label: 'Import chats', icon: 'download' },
+  { key: 'costs', label: 'Costs', icon: 'wallet', adminOnly: true },
   { key: 'connect', label: 'Connect WhatsApp', icon: 'whatsapp', adminOnly: true },
 ]
 
@@ -67,8 +70,8 @@ export default function WhatsAppSettings({ brand: brandKey = 'crewfit' }) {
   if (!tabs.some(t => t.key === tab)) return <Navigate to={`${brand.path}/settings/${brand.defaultTab}`} replace />
   const Pane = brand.key !== 'crewfit' ? {
     bot: NlBotTab, knowledge: NlKnowledgeTab, products: NlProductsTab, handoff: NlHandoffTab, menu: NlMenuTab,
-    replies: NlRepliesTab, team: NlTeamTab, assignment: NlAssignmentTab, hours: NlHoursTab, templates: NlTemplatesTab, calls: WaCallsTab, import: WaImportTab, connect: ConnectTab,
-  }[tab] : { connect: ConnectTab, calls: WaCallsTab, import: WaImportTab, menu: MenuTab, answers: BotAnswersTab, templates: TemplatesTab, orders: OrderMessagesTab, hours: HoursTab, catalogue: CatalogueTab, team: TeamTab, assignment: AssignmentTab, statuses: StatusesTab }[tab]
+    replies: NlRepliesTab, team: NlTeamTab, assignment: NlAssignmentTab, hours: NlHoursTab, templates: NlTemplatesTab, calls: WaCallsTab, import: WaImportTab, costs: WaCostsTab, connect: ConnectTab,
+  }[tab] : { connect: ConnectTab, costs: WaCostsTab, calls: WaCallsTab, import: WaImportTab, menu: MenuTab, answers: BotAnswersTab, templates: TemplatesTab, orders: OrderMessagesTab, hours: HoursTab, catalogue: CatalogueTab, team: TeamTab, assignment: AssignmentTab, statuses: StatusesTab }[tab]
 
   return (
     <WaBrandContext.Provider value={brand}>

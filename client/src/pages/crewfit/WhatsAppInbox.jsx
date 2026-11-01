@@ -310,6 +310,15 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
   const [filter, setFilter] = useState(params.get('filter') || 'all')
   const [focusOrder, setFocusOrder] = useState(null)    // Normless: the order the panel is about
   const [statusFilter, setStatusFilter] = useState(params.get('status') || '')
+  // Newest chats first, or oldest first so the team can answer the longest-waiting customers first.
+  // Remembered per browser.
+  const sortKey = `wa-sort-${brandKey}`
+  const [sort, setSort] = useState(() => { try { return localStorage.getItem(sortKey) === 'oldest' ? 'oldest' : 'newest' } catch { return 'newest' } })
+  const flipSort = () => setSort(s => {
+    const next = s === 'oldest' ? 'newest' : 'oldest'
+    try { localStorage.setItem(sortKey, next) } catch { /* private window: just not remembered */ }
+    return next
+  })
   const [search, setSearch] = useState('')
   const [term, setTerm] = useState('')
   const [conversations, setConversations] = useState([])
@@ -430,6 +439,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
     const qs = new URLSearchParams({ filter, status: 'open' })
     if (term) qs.set('search', term)
     if (statusFilter) qs.set('lead_status', statusFilter)
+    if (sort === 'oldest') qs.set('sort', 'oldest')
     if (range.from) qs.set('from', range.from)
     if (range.to) qs.set('to', range.to)
     return qs
@@ -454,7 +464,8 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
         // The first page, refreshed, then the older chats already loaded below it.
         const ids = new Set(head.map(c => c.id))
         const last = head[head.length - 1]
-        setConversations(prev => [...head, ...prev.filter(c => !ids.has(c.id) && (!last || olderThan(c, last)))])
+        const further = (c) => (sort === 'oldest' ? olderThan(last, c) : olderThan(c, last))
+        setConversations(prev => [...head, ...prev.filter(c => !ids.has(c.id) && (!last || further(c)))])
       }
       setTally(r.tally || { open: 0, unassigned: 0, unread: 0 })
       setStatusCounts(r.statusCounts || {})
@@ -491,7 +502,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
     setLoading(true)
     loadConversations()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filter, term, statusFilter, range])
+  }, [filter, term, statusFilter, sort, range])
 
   /* ── One conversation ────────────────────────────────────────────────────────────────── */
 
@@ -1407,10 +1418,16 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
             ))}
           </div>
           {cf && <p className="wa-filter-hint">{FILTERS.find(f => f.key === filter)?.hint}</p>}
-          {!!statuses.length && (
-            <WaStatusPicker className="wa-status-filter" statuses={statuses} value={statusFilter} onChange={setStatusFilter}
-              counts={statusCounts} anyLabel="Any status" label="Show chats at" />
-          )}
+          <div className="wa-list-tools">
+            {!!statuses.length && (
+              <WaStatusPicker className="wa-status-filter" statuses={statuses} value={statusFilter} onChange={setStatusFilter}
+                counts={statusCounts} anyLabel="Any status" label="Show chats at" />
+            )}
+            <button type="button" className="wa-sort-btn" onClick={flipSort} aria-pressed={sort === 'oldest'}
+              title={sort === 'oldest' ? 'Oldest chats first — press for newest first' : 'Newest chats first — press for oldest first'}>
+              <Icon name="sort" size={13} /> {sort === 'oldest' ? 'Oldest first' : 'Newest first'}
+            </button>
+          </div>
 
           {loading ? (
             <div className="loader"><div className="spinner" /></div>
@@ -1547,8 +1564,8 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                     </span>
                   )}
                   {freeUntil(thread) && (
-                    <span className="wa-window-chip wa-window-free" title="This lead came from a click-to-WhatsApp ad: Meta doesn't charge for messages for 72 hours, templates included.">
-                      Free until {day(freeUntil(thread))}, {clock(freeUntil(thread))}
+                    <span className="wa-window-chip wa-window-free" title="This lead came from a click-to-WhatsApp ad, so Meta doesn't charge for any message until then — templates included. It doesn't reopen typing: once the 24-hour window closes, send a template (it will cost nothing).">
+                      {thread.window_open ? 'No charge' : 'Templates free'} until {day(freeUntil(thread))}, {clock(freeUntil(thread))}
                     </span>
                   )}
                   {config?.canManage ? (
