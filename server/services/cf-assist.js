@@ -181,10 +181,10 @@ async function sendPriceList(conversation, list) {
     await record(conversation.id, await wa.sendText(conversation.phone, body), body);
 }
 
-/** Up to 30 production photos of the product, one colour after another. False if we have none. */
+/** Up to 7 production photos of the product, one colour after another. False if we have none. */
 async function sendSamples(conversation, p) {
     const samples = require('./cf-samples');
-    const photos = await samples.pick({ product: p.name });
+    const photos = await samples.pick({ product: p.name, limit: samples.BOT_MAX });
     if (!photos.length) return false;
     const colours = [...new Set(photos.map(x => x.color).filter(Boolean))];
     await samples.send(conversation, photos, { senderType: 'bot',
@@ -225,6 +225,16 @@ async function personActive(conversationId) {
 }
 
 /** The product the chat is about: named in the message, else the one on the lead. */
+/** Has this customer ordered from us? Matched on the number, as the inbox matches orders. */
+async function hasOrder(conversation) {
+    const last10 = String(conversation.phone || '').replace(/\D/g, '').slice(-10);
+    if (last10.length !== 10) return false;
+    return (await db.query(
+        `SELECT 1 FROM crewfit_orders
+          WHERE RIGHT(REGEXP_REPLACE(COALESCE(whatsapp_number,''), '\\D', '', 'g'), 10) = $1
+             OR RIGHT(REGEXP_REPLACE(COALESCE(contact_number,''), '\\D', '', 'g'), 10) = $1 LIMIT 1`, [last10])).rowCount > 0;
+}
+
 async function productInChat(conversation, text, list) {
     const hit = matchProducts(text, list)[0];
     if (hit) return hit;
@@ -280,7 +290,11 @@ async function answer(conversation, text, tapped = null, { evenInMenu = false } 
     // "Sample" can also mean a trial piece ("sample piece price") — that's a saved answer, not photos.
     const trialPiece = /\bsamples?\s*(piece|price|cost|charges?|order|rate)\b|\b(trial|one piece)\b/i.test(text);
     if (ASK_SAMPLES.test(text) && !trialPiece && !/\b(logo|design)\b/i.test(text)) {
-        const p = await productInChat(conversation, text, list);
+        // A customer with an order asking for photos means their own order's — that is the team's.
+        if (await hasOrder(conversation)) return false;
+        // Only the product they name in this message; otherwise they are asked, never guessed
+        // from what the lead was once interested in.
+        const p = matchProducts(text, list)[0];
         if (p) {
             if (await sendSamples(conversation, p)) return true;
             await sendProductCard(conversation, p);

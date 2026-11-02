@@ -3,8 +3,8 @@
  *
  * The pictures are the sample library's (routes/crewfit-catalog): production photos on orders,
  * which carry the order line's product and colour, and samples uploaded on purpose with a product
- * and a colour. "Show me polos" gets up to 30 of them, newest first but taking one of each colour
- * in turn, so the customer sees the range rather than thirty black polos.
+ * and a colour. A pick is newest first but takes one of each colour in turn, so the customer sees
+ * the range rather than a row of black polos. The bot sends up to 7; the team up to 30.
  */
 
 const path = require('path');
@@ -14,6 +14,9 @@ const wa = require('./whatsapp');
 
 const SERVER_ROOT = path.join(__dirname, '..');
 const MAX = 30;
+// What the bot sends by itself when a customer asks: a handful, so the chat is not flooded. The
+// team can send up to MAX from the inbox.
+const BOT_MAX = 7;
 const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 
 /** Photos of a product (by catalogue name), optionally of some colours, one colour after another. */
@@ -89,4 +92,4 @@ async function record(conversationId, { wamid, senderType, user, body, type = 't
         [conversationId, wamid, senderType, user, type, body, mediaUrl, mime])).rows[0];
 }
 
-module.exports = { pick, colorsFor, send, MAX };
+module.exports = { pick, colorsFor, send, MAX, BOT_MAX };
