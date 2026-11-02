@@ -724,8 +724,22 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
       lastSeen.current = m.messages[m.messages.length - 1].id
       apiFetch(`${API}/conversations/${openId}/read`, { method: 'POST' })
     }
-    // Ticks change on messages already here, and the 24-hour countdown moves whether or not
-    // anything new arrives, so the header is refreshed with them. The lead form is left alone:
+    // Delivered and read arrive on messages already here: changed ticks are put on in place.
+    if (m && !m.error && m.ticks?.length) {
+      const now = new Map(m.ticks.map(t => [t.id, t]))
+      setMessages(list => {
+        let moved = false
+        const next = list.map(x => {
+          const t = now.get(x.id)
+          if (!t || (t.status === x.status && t.error === x.error)) return x
+          moved = true
+          return { ...x, status: t.status, error: t.error }
+        })
+        return moved ? next : list
+      })
+    }
+    // The 24-hour countdown moves whether or not anything new arrives, so the header is
+    // refreshed too. The lead form is left alone:
     // somebody may be typing in it.
     const r = await apiFetch(`${API}/conversations/${openId}`)
     if (r && !r.error) {

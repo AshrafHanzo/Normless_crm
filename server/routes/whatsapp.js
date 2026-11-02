@@ -1396,8 +1396,16 @@ router.get('/conversations/:id/messages', async (req, res) => {
                       media_mime, media_name, interactive_payload, status, error, sent_at, reply_to, ${quoted}
                  FROM wa_messages WHERE ${where} ORDER BY COALESCE(sent_at, created_at) DESC, id DESC LIMIT 500) t
                ORDER BY COALESCE(sent_at, '-infinity'::timestamp) ASC, id ASC`, params);
+        // Ticks move on messages already on screen (sent → delivered → read), which asking for new
+        // ids never sees, so the poll also carries where the latest sent messages stand.
+        const ticks = Number.isFinite(after)
+            ? (await db.query(
+                `SELECT id, status, error FROM wa_messages
+                  WHERE conversation_id = $1 AND direction = 'out' ORDER BY id DESC LIMIT 100`, [conversation.id])).rows
+            : undefined;
         res.json({
             messages: rows.rows.map(m => ({ ...m, interactive_payload: safeJson(m.interactive_payload, null) })),
+            ticks,
         });
     } catch (err) {
         console.error('whatsapp messages error:', err);
