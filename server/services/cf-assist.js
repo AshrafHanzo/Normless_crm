@@ -128,12 +128,22 @@ async function qualify(conversationId, message, { text = '', mediaUrl = null } =
     const product = list.find(p => p.name === (set.product_interest || row.product_interest));
     const colour = product && product.colors.find(c => new RegExp(`\\b${c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(text));
     if (colour) found.push(`the colour ${colour}`);
+    // A size split ("M-10, L-20, XL-20"): two sizes at least, so "2 XL" in passing is not one.
+    const split = require('./cf-sizes').parse(text);
+    if (split.length >= 2) found.push(`the sizes (${require('./cf-sizes').format(split)})`);
     if (!found.length) return [];
     // The product list follows: one product picked here, its colour and quantity when given.
-    const items = require('./cf-lead-rules').itemsOf({ ...row, ...set });
+    let items = require('./cf-lead-rules').itemsOf({ ...row, ...set }).map(i => ({ ...i }));
     if ((set.product_interest || colour || set.quantity) && items.length <= 1) {
-        const it = { product: set.product_interest || row.product_interest || items[0]?.product || '', color: colour || items[0]?.color || '', quantity: set.quantity || row.quantity || items[0]?.quantity || '' };
-        if (it.product) set.products = JSON.stringify([it]);
+        const it = { product: set.product_interest || row.product_interest || items[0]?.product || '', color: colour || items[0]?.color || '', quantity: set.quantity || row.quantity || items[0]?.quantity || '', sizes: items[0]?.sizes || '' };
+        if (it.product) { items = [it]; set.products = JSON.stringify(items); }
+    }
+    // The sizes go on the product the message names, else the first without sizes, else the last.
+    if (split.length >= 2 && items.length) {
+        const named = hits[0] && items.find(i => i.product === hits[0].name);
+        const target = named || items.find(i => !i.sizes) || items[items.length - 1];
+        target.sizes = require('./cf-sizes').format(split);
+        set.products = JSON.stringify(items);
     }
 
     const keys = Object.keys(set);
@@ -250,6 +260,9 @@ async function productInChat(conversation, text, list) {
  */
 async function answer(conversation, text, tapped = null, { evenInMenu = false } = {}) {
     if ((conversation.mode !== 'human' && !evenInMenu) || conversation.status === 'closed') return false;
+    // A chat the team has is theirs: the bot answers only while nobody has it, or when a person
+    // handed it to the bot.
+    if (!evenInMenu && !(conversation.bot_on ?? !conversation.assigned_to)) return false;
     if (await personActive(conversation.id)) return false;
     const list = await products();
 
@@ -369,7 +382,7 @@ async function onInbound(conversationId, message, { text, mediaUrl, first = fals
         // customer naming a product in their own words.
         if (message?.type !== 'interactive') await qualify(conversationId, message, { text, mediaUrl });
         const c = (await db.query(
-            `SELECT c.id, c.mode, c.assigned_to, c.status, k.phone FROM wa_conversations c JOIN wa_contacts k ON k.id = c.contact_id WHERE c.id = $1`,
+            `SELECT c.id, c.mode, c.assigned_to, c.bot_on, c.status, k.phone FROM wa_conversations c JOIN wa_contacts k ON k.id = c.contact_id WHERE c.id = $1`,
             [conversationId])).rows[0];
         const tapped = message?.interactive?.list_reply?.id || message?.interactive?.button_reply?.id || null;
         // A question in the very first message ("price of polos?") is answered as well as the menu

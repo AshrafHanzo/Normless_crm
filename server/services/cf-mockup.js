@@ -193,4 +193,41 @@ async function onReply(conversationId, payloadId) {
     return true;
 }
 
-module.exports = { askForApproval, onReply, orderFromLead, unitPrice, CONFIRM, CHANGES, TEMPLATE };
+/**
+ * The lead went to Need mockup: the customer is told we have what we need and the design team
+ * will send the mockup here — once per lead, from the CRM's number, as an automatic message.
+ * Only inside the 24-hour window (there is no template for it); outside it the timeline says so.
+ * `told` marks it done without a message, for when the menu's own summary just said it.
+ */
+async function detailsReceived(leadId, conversationId, { told = false } = {}) {
+    if (!leadId || !conversationId) return;
+    const lead = (await db.query('SELECT * FROM crewfit_leads WHERE id = $1', [leadId])).rows[0];
+    if (!lead || lead.mockup_notice_at) return;
+    if (told) {
+        await db.query('UPDATE crewfit_leads SET mockup_notice_at = CURRENT_TIMESTAMP WHERE id = $1', [leadId]);
+        return;
+    }
+    const conv = (await db.query(
+        `SELECT c.id, c.last_inbound_at, k.phone FROM wa_conversations c JOIN wa_contacts k ON k.id = c.contact_id WHERE c.id = $1`,
+        [conversationId])).rows[0];
+    if (!conv || !wa.configured()) return;
+    if (!wa.windowOpen(conv.last_inbound_at)) {
+        await note(conversationId, 'Need mockup — the customer was not told: the chat is past WhatsApp’s 24-hour window');
+        return;
+    }
+    const lines = ['Thank you! 🙌 We have received all the details for your order:', ''];
+    for (const it of rules.itemsOf(lead)) {
+        const what = [it.product, it.color].filter(Boolean).join(' — ');
+        if (what) lines.push(`• ${what}${it.quantity ? ` × ${it.quantity}` : ''}${it.sizes ? ` (${it.sizes})` : ''}`);
+    }
+    if (lead.printing_placement) lines.push(`• Logo placement: ${lead.printing_placement}`);
+    if (lead.logo_url) lines.push('• Your logo: received ✅');
+    lines.push('', 'Our design team is now preparing your mockup and will send you the mock images right here shortly. 🎨');
+    const text = lines.join('\n');
+    const wamid = await wa.sendText(conv.phone, text);
+    await record(conv.id, { wamid, body: text, senderType: 'auto' });
+    await db.query('UPDATE crewfit_leads SET mockup_notice_at = CURRENT_TIMESTAMP WHERE id = $1', [leadId]);
+    await note(conv.id, 'Told the customer their details are with the design team');
+}
+
+module.exports = { askForApproval, onReply, orderFromLead, unitPrice, detailsReceived, CONFIRM, CHANGES, TEMPLATE };

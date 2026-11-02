@@ -87,7 +87,13 @@ const CREWFIT_FLOW = {
             next: { '*': 'quantity' },
         },
         color: { type: 'color_pick', text: 'Which colour would you like for the {product}?', save_as: 'color', next: { '*': 'quantity' } },
-        quantity: { type: 'ask_number', text: 'How many pieces of {product}{ in color}? Just type the number, for example 50.', save_as: 'quantity', next: { '*': 'more' } },
+        quantity: { type: 'ask_number', text: 'How many pieces of {product}{ in color}? Just type the number, for example 50.', save_as: 'quantity', next: { '*': 'sizes' } },
+        // The split by size for those pieces, kept on that product of the enquiry.
+        sizes: {
+            type: 'ask_sizes',
+            text: 'What sizes do you need for the {quantity} pieces? Type the split like this:\n\nM-10, L-20, XL-20\n\nNot sure yet? Just reply "skip".',
+            next: { '*': 'more' },
+        },
         more: {
             type: 'buttons',
             text: 'Got it. Do you need another product as well?',
@@ -105,6 +111,17 @@ const CREWFIT_FLOW = {
                 { id: 'Printing', title: 'Printing' },
                 { id: 'Embroidery', title: 'Embroidery' },
                 { id: 'Not sure', title: 'Not sure yet' },
+            ],
+            next: { '*': 'placement' },
+        },
+        placement: {
+            type: 'buttons',
+            text: 'Where would you like the logo?',
+            save_as: 'placement',
+            buttons: [
+                { id: 'Front only', title: 'Front only' },
+                { id: 'Back only', title: 'Back only' },
+                { id: 'Front & back', title: 'Front & back' },
             ],
             next: { '*': 'logo' },
         },
@@ -161,6 +178,21 @@ async function ensureStarterFlow() {
          ON CONFLICT (key) DO UPDATE SET definition = EXCLUDED.definition
           WHERE wa_flows.updated_by IS NULL AND wa_flows.definition <> EXCLUDED.definition`,
         [CREWFIT_FLOW.key, CREWFIT_FLOW.name, definition]);
+
+    // Two questions added since — the size split after a quantity, where the logo goes after the
+    // branding — go into an edited menu too, in between the same two steps, keeping its wording.
+    const row = (await db.query(`SELECT id, definition FROM wa_flows WHERE key = $1`, [CREWFIT_FLOW.key])).rows[0];
+    const def = safeJson(row?.definition, null);
+    if (!def?.steps) return;
+    let changed = false;
+    for (const [after, added] of [['quantity', 'sizes'], ['branding', 'placement']]) {
+        const from = def.steps[after];
+        if (def.steps[added] || !from?.next?.['*']) continue;
+        def.steps[added] = { ...CREWFIT_FLOW.steps[added], next: { '*': from.next['*'] } };
+        from.next['*'] = added;
+        changed = true;
+    }
+    if (changed) await db.query(`UPDATE wa_flows SET definition = $2 WHERE id = $1`, [row.id, JSON.stringify(def)]);
 }
 
 /* ── Prices ──────────────────────────────────────────────────────────────────────────────────
@@ -221,8 +253,9 @@ const bandText = (q) => (q === '50-200' ? '50 to 200' : /^\s*\d+\s*$/.test(Strin
 async function summaryText(answers) {
     const items = itemsOf(answers);
     const lines = ['Thank you — here is what we have:'];
-    for (const it of items) lines.push(`• ${[it.product, it.color].filter(Boolean).join(' — ')}${it.quantity ? ` × ${bandText(it.quantity)}` : ''}`);
-    if (answers.branding) lines.push(`• Branding: ${answers.branding}`);
+    for (const it of items) lines.push(`• ${[it.product, it.color].filter(Boolean).join(' — ')}${it.quantity ? ` × ${bandText(it.quantity)}` : ''}${it.sizes ? ` (${it.sizes})` : ''}`);
+    if (answers.branding) lines.push(`• Branding: ${answers.branding}${answers.placement ? `, ${answers.placement.toLowerCase()}` : ''}`);
+    else if (answers.placement) lines.push(`• Logo: ${answers.placement.toLowerCase()}`);
     lines.push(answers.logo ? '• Logo: received, thank you' : '• Logo: please send it here when you can');
 
     // What each comes to, off the published tiers.
@@ -261,6 +294,7 @@ const assist = () => require('./cf-assist');
 /** A step's words with what was chosen so far: {product}, {color}, and "{ in color}" (" in Navy"). */
 const fill = (text, answers) => String(text || '')
     .replace(/\{product\}/g, answers.product_interest || 'it')
+    .replace(/\{quantity\}/g, answers.quantity || '')
     .replace(/\{ in color\}/g, answers.color ? ` in ${answers.color}` : '')
     .replace(/\{color\}/g, answers.color || '');
 
@@ -321,7 +355,7 @@ async function send(conversation, flow, stepId, answers) {
         await record(conversation, wamid, text, 'interactive', { kind: 'list', button: 'Choose colour', options: rows.map(r => r.title) });
         return remember(conversation, flow, stepId, answers);
     }
-    if (step.type === 'ask_number') {
+    if (step.type === 'ask_number' || step.type === 'ask_sizes') {
         const text = fill(step.text, answers);
         await record(conversation, await wa.sendText(conversation.phone, text), text);
         return remember(conversation, flow, stepId, answers);
@@ -449,11 +483,11 @@ async function finish(conversation, answers) {
         quantity: items.map(i => `${i.product}: ${bandText(i.quantity)}`).join(', '),
     } : {};
     if (items.length) {
-        params.push(JSON.stringify(items.map(i => ({ product: i.product, color: i.color || '', quantity: /^\s*\d+\s*$/.test(String(i.quantity || '')) ? String(i.quantity).trim() : bandText(i.quantity) }))));
+        params.push(JSON.stringify(items.map(i => ({ product: i.product, color: i.color || '', quantity: /^\s*\d+\s*$/.test(String(i.quantity || '')) ? String(i.quantity).trim() : bandText(i.quantity), sizes: i.sizes || '' }))));
         sets.push(`products = $${params.length}`);
     }
     for (const [key, column] of [['product_interest', 'product_interest'], ['quantity', 'quantity'],
-        ['branding', 'branding'], ['logo', 'logo_url']]) {
+        ['branding', 'branding'], ['logo', 'logo_url'], ['placement', 'printing_placement']]) {
         const value = joined[key] || answers[key];
         if (value) {
             params.push(String(value));
@@ -467,7 +501,8 @@ async function finish(conversation, answers) {
                     updated_at = CURRENT_TIMESTAMP
               WHERE id = $${params.length}`, params);
         // Over 50 pieces: Important. Product, colour, quantity and logo all in: Need mockup.
-        await require('./cf-lead-rules').apply(conversation.lead_id, conversation.id);
+        // The summary just told a customer who sent their logo that the designer has it.
+        await require('./cf-lead-rules').apply(conversation.lead_id, conversation.id, { told: !!answers.logo });
     }
     await handToHuman(conversation, 'the menu finished');
     handovers.add(conversation.id);
@@ -552,9 +587,38 @@ async function handle(conversation, message) {
         }
     }
 
+    // The sizes for the product just counted: kept on it, and told back if they don't add up.
+    if (step.type === 'ask_sizes' && !tapped) {
+        const sizes = require('./cf-sizes');
+        const split = sizes.parse(text);
+        const last = answers.items?.[answers.items.length - 1];
+        if (split.length) {
+            const got = sizes.total(split);
+            const want = Number(answers.quantity) || 0;
+            if (last) last.sizes = sizes.format(split);
+            delete answers._retry;
+            const note = want && got !== want
+                ? `Noted: ${sizes.format(split)} — that is ${got} pieces, and you asked for ${want}. Our team will confirm the final split with you.`
+                : `Noted: ${sizes.format(split)} ✅`;
+            await record(conversation, await wa.sendText(conversation.phone, note), note);
+            await send(conversation, flow, step.next?.['*'], answers);
+            return true;
+        }
+        if (answers._retry || /^(skip|no|not sure|later|don'?t know|dont know)\b/i.test(text)) {
+            delete answers._retry;
+            await send(conversation, flow, step.next?.['*'], answers);
+            return true;
+        }
+        answers._retry = 1;
+        const ask = 'Please type the sizes like this: M-10, L-20, XL-20 — or reply "skip".';
+        await record(conversation, await wa.sendText(conversation.phone, ask), ask);
+        await remember(conversation, flow, conversation.flow_step, answers);
+        return true;
+    }
+
     // A tap that isn't an answer to this question (from an older list, or tapped before this one
     // arrived) is never saved as one: the question is asked again.
-    if (tapped && ['catalogue_pick', 'color_pick', 'ask_number'].includes(step.type)) {
+    if (tapped && ['catalogue_pick', 'color_pick', 'ask_number', 'ask_sizes'].includes(step.type)) {
         await send(conversation, flow, conversation.flow_step, answers);
         return true;
     }
@@ -602,7 +666,8 @@ async function handle(conversation, message) {
     await handToHuman(conversation, 'the customer typed instead of tapping');
     await assist().products();
     await assist().savedAnswers();
-    if (assist().canAnswer(text)) return false;
+    // Only when the bot may go on answering here; in a chat the team has, they get the line below.
+    if ((conversation.bot_on ?? !conversation.assigned_to) && assist().canAnswer(text)) return false;
     handovers.add(conversation.id);
     const text_ = 'Thanks — I\'ll pass this to one of our team, they will reply here shortly.';
     const wamid = await wa.sendText(conversation.phone, text_).catch(() => null);

@@ -48,7 +48,7 @@ function missingForMockup(lead) {
  * Move the lead on if it should be. Returns the new status, or null if nothing changed.
  * `conversationId` is where the change is noted (and rerouted, for a mockup).
  */
-async function apply(leadId, conversationId) {
+async function apply(leadId, conversationId, { told = false } = {}) {
     const lead = (await db.query('SELECT * FROM crewfit_leads WHERE id = $1', [leadId])).rows[0];
     if (!lead) return null;
     const statuses = new Set((await db.query('SELECT key FROM wa_lead_statuses')).rows.map(r => r.key));
@@ -71,6 +71,11 @@ async function apply(leadId, conversationId) {
         // A mockup request goes to the design team, if the assignment rules say so.
         try { await require('./wa-routing').reroute(conversationId, 'lead_status', next); }
         catch (err) { console.error('lead rules reroute:', err.message); }
+        // The customer hears that the designers have it.
+        if (next === 'need_mockup') {
+            try { await require('./cf-mockup').detailsReceived(leadId, conversationId, { told }); }
+            catch (err) { console.error('need mockup notice:', err.message); }
+        }
     }
     return next;
 }

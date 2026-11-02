@@ -296,11 +296,13 @@ async function receiveMessage(message, profileName) {
                JOIN wa_contacts k ON k.id = c.contact_id WHERE c.id = $1`, [conversation.id])).rows[0];
         // A customer typing MENU (or whatever words the shop chose) gets the menu again, as long
         // as a person is not in the middle of answering them.
-        const keyword = fresh?.mode === 'human' && !isFirst && await isMenuKeyword(describe(message));
+        // Neither happens in a chat the team has: there only a person answers.
+        const botMay = fresh && (fresh.bot_on ?? !fresh.assigned_to);
+        const keyword = botMay && fresh?.mode === 'human' && !isFirst && await isMenuKeyword(describe(message));
         // A returning customer who just says "hi" after hours gets the menu again rather than a
         // "we're closed" — the bot can take it from there. In working hours the salesperson who
         // has the chat answers, and a chat a person wrote in lately is never interrupted.
-        const greetAgain = !keyword && fresh?.mode === 'human' && !isFirst && fresh.status !== 'closed'
+        const greetAgain = botMay && !keyword && fresh?.mode === 'human' && !isFirst && fresh.status !== 'closed'
             && flow.isGreeting(describe(message)) && !extras.isOpen(await extras.workHours())
             && !(await db.query(
                 `SELECT 1 FROM wa_messages WHERE conversation_id = $1 AND direction = 'out' AND sender_type IN ('user','phone')
@@ -821,7 +823,11 @@ const ORDER_BILLING_NAME = `(SELECT NULLIF(TRIM(o.billing_name), '') FROM crewfi
 // A Normless chat with a support ticket still open on it.
 const HAS_OPEN_TICKET = `EXISTS (SELECT 1 FROM support_tickets t WHERE t.wa_conversation_id = c.id AND t.status <> 'Closed')`;
 
+// Crewfit: does the bot answer this chat? A person's choice if they made one; otherwise only while
+// nobody has it.
+const BOT_ANSWERS = `COALESCE(c.bot_on, c.assigned_to IS NULL)`;
 const LIST_FIELDS = `c.id, c.status, c.mode, c.assigned_to, c.unread_count, c.last_message_preview,
+                     c.bot_on, ${BOT_ANSWERS} AS bot_answers,
                      c.last_inbound_at, c.last_message_at, c.ad_referral,
                      k.phone, k.profile_name, k.lead_id, k.customer_id, k.avatar_url,
                      l.name AS lead_name, l.company AS lead_company, l.status AS lead_status,
@@ -1350,7 +1356,7 @@ async function loadConversation(req, id) {
                 c.settled_msg_id, c.settled_at::text AS settled_at, l.products,
                 l.branding, l.notes AS lead_notes, l.email AS lead_email, l.logo_url,
                 l.billing_name, l.billing_address, l.delivery_address, l.contact_person,
-                l.billing_mobile, l.billing_email, l.gst_number,
+                l.billing_mobile, l.billing_email, l.gst_number, l.printing_placement,
                 TO_CHAR(l.needed_by, 'YYYY-MM-DD') AS needed_by, l.quoted_amount, l.received_amount
            ${LIST_FROM}
           WHERE c.id = $1 AND ${visibility(req, params)}`, params);
@@ -1654,6 +1660,9 @@ router.patch('/conversations/:id', async (req, res) => {
             return res.json({ conversation: await loadConversation(req, conversation.id) });
         }
 
+        // A chat given to somebody (or put back in Unassigned) follows the default again: the bot
+        // stays out while a person has it.
+        if ('assigned_to' in req.body) sets.push('bot_on = NULL');
         await db.query(
             `UPDATE wa_conversations SET ${sets.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
             params);
@@ -1916,14 +1925,37 @@ router.get('/conversations/:id/call-permission', async (req, res) => {
     } catch (err) { callError(res, err, 'Could not check the call permission'); }
 });
 
-/** Ask the customer, in the chat, whether we may call them. Only inside the 24-hour window. */
+/**
+ * Ask the customer, in the chat, whether we may call them. Inside the 24-hour window it is
+ * WhatsApp's own question; past it, the "May we call you?" template (wa-calls), submitted to Meta
+ * the first time it is needed.
+ */
 router.post('/conversations/:id/call-permission', async (req, res) => {
     try {
         const conversation = await loadConversation(req, req.params.id);
         if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
         if (isDemo(conversation)) return demoRefusal(res);
         if (!conversation.window_open) {
-            return res.status(409).json({ error: 'This chat is past the 24-hour window — the customer has to write first (or call us) before we can ask to call.', window_closed: true });
+            const t = await calls.callTemplate({ create: true });
+            if (t.status !== 'APPROVED') {
+                return res.status(409).json({
+                    window_closed: true,
+                    error: t.created
+                        ? 'The chat is past the 24-hour window, so this needs the “May we call you?” template. It has just been sent to Meta for approval (usually a few minutes) — try again once it is approved.'
+                        : `The chat is past the 24-hour window, and the “May we call you?” template (${t.name}) is ${String(t.status).toLowerCase()} at Meta. Try again once Meta approves it.`,
+                });
+            }
+            const first = String(conversation.lead_name || conversation.profile_name || 'there').trim().split(/\s+/)[0];
+            const wamid = await wa.sendTemplate(conversation.phone, { name: t.name, language: t.language, variables: [first] });
+            const body = `📞 Asked to call (template): Hi ${first}, may we give you a quick WhatsApp call about your enquiry?`;
+            const row = await db.query(
+                `INSERT INTO wa_messages (conversation_id, wamid, direction, sender_type, sender_user, type, body, status)
+                 VALUES ($1,$2,'out','user',$3,'template',$4,'sent')
+                 RETURNING id, wamid, direction, sender_type, sender_user, type, body, status, error, sent_at`,
+                [conversation.id, wamid, req.user?.username || null, body]);
+            await db.query(`UPDATE wa_conversations SET last_message_at = CURRENT_TIMESTAMP, last_message_preview = $2 WHERE id = $1`,
+                [conversation.id, '📞 Asked permission to call']);
+            return res.status(201).json({ message: row.rows[0], template: true });
         }
         const text = trim(req.body?.body) || 'May we give you a quick WhatsApp call about this?';
         const wamid = await calls.sendPermissionRequest(conversation.phone, text);
@@ -2064,7 +2096,7 @@ router.patch('/leads/:id', async (req, res) => {
         const sets = [];
         const params = [req.params.id];
         for (const key of ['name', 'company', 'email', 'product_interest', 'quantity', 'branding', 'status', 'notes', 'needed_by',
-            'billing_name', 'billing_address', 'delivery_address', 'contact_person', 'billing_mobile', 'billing_email', 'gst_number']) {
+            'billing_name', 'billing_address', 'delivery_address', 'contact_person', 'billing_mobile', 'billing_email', 'gst_number', 'printing_placement']) {
             if (key in body) {
                 params.push(trim(body[key]));
                 sets.push(`${key} = $${params.length}`);
@@ -2074,7 +2106,7 @@ router.patch('/leads/:id', async (req, res) => {
         // for the dashboard, quotes and the assistant, which read those.
         if ('products' in body) {
             const items = (Array.isArray(body.products) ? body.products : [])
-                .map(p => ({ product: (trim(p?.product) || '').slice(0, 120), color: (trim(p?.color) || '').slice(0, 60), quantity: (trim(p?.quantity) || '').slice(0, 40) }))
+                .map(p => ({ product: (trim(p?.product) || '').slice(0, 120), color: (trim(p?.color) || '').slice(0, 60), quantity: (trim(p?.quantity) || '').slice(0, 40), sizes: (trim(p?.sizes) || '').slice(0, 200) }))
                 .filter(p => p.product || p.quantity).slice(0, 30);
             params.push(items.length ? JSON.stringify(items) : null);
             sets.push(`products = $${params.length}`);
@@ -2093,6 +2125,7 @@ router.patch('/leads/:id', async (req, res) => {
             }
         }
         if (!sets.length) return res.status(400).json({ error: 'Nothing to change' });
+        const before = (await db.query('SELECT status FROM crewfit_leads WHERE id = $1', [req.params.id])).rows[0];
         const r = await db.query(
             `UPDATE crewfit_leads SET ${sets.join(', ')}, updated_at = CURRENT_TIMESTAMP
               WHERE id = $1 RETURNING *`, params);
@@ -2107,6 +2140,11 @@ router.patch('/leads/:id', async (req, res) => {
             // A new status may hand the conversation to another team: a mockup request to Design.
             const moved = await routing.reroute(conversationId, 'lead_status', body.status);
             if (moved) await orders.logActivity({ conversationId, kind: 'assign', body: `Assignment rules handed the chat to ${moved.split('@')[0]}` });
+            // Need mockup: the customer is told the design team has their details.
+            if (body.status === 'need_mockup' && before?.status !== 'need_mockup') {
+                await require('../services/cf-mockup').detailsReceived(r.rows[0].id, conversationId)
+                    .catch(err => console.error('need mockup notice:', err.message));
+            }
         }
         res.json({ lead: r.rows[0], conversation: await loadConversation(req, conversationId) });
     } catch (err) {
@@ -3026,10 +3064,13 @@ router.post('/conversations/:id/mode', async (req, res) => {
         // Taking over from the billing questions keeps what was collected; it is already on the lead.
 
         if (next === 'human') {
+            // Taking over silences the bot in this chat until somebody hands it back.
             await db.query(
-                `UPDATE wa_conversations SET mode = 'human', flow_step = NULL,
+                `UPDATE wa_conversations SET mode = 'human', flow_step = NULL, bot_on = false,
                         assigned_to = COALESCE(assigned_to, $2), updated_at = CURRENT_TIMESTAMP
                   WHERE id = $1`, [conversation.id, req.user?.username || null]);
+            await orders.logActivity({ conversationId: conversation.id, kind: 'status', actor: req.user?.username,
+                body: `${String(req.user?.username || '').split('@')[0]} took over — the bot stays out of this chat` });
         } else if (next === 'ai') {
             if (!await ai.enabled()) {
                 return res.status(400).json({ error: 'The assistant is switched off — turn it on at the top of the page' });
@@ -3042,9 +3083,41 @@ router.post('/conversations/:id/mode', async (req, res) => {
             if (!wa.windowOpen(conversation.last_inbound_at)) {
                 return res.status(409).json({ error: 'The 24-hour window has closed — the menu cannot be started now.' });
             }
+            // Starting the menu hands the chat to the bot; it answers questions after it too.
+            await db.query(`UPDATE wa_conversations SET bot_on = true WHERE id = $1`, [conversation.id]);
             const started = await flow.start({ ...conversation, lead_id: conversation.lead_id });
-            if (!started) return res.status(400).json({ error: 'No menu is switched on' });
+            if (!started) {
+                await db.query(`UPDATE wa_conversations SET bot_on = $2 WHERE id = $1`, [conversation.id, conversation.bot_on]);
+                return res.status(400).json({ error: 'No menu is switched on' });
+            }
         }
+        res.json({ conversation: await loadConversation(req, conversation.id) });
+    } catch (err) {
+        console.error('whatsapp mode error:', err);
+        res.status(500).json({ error: 'Could not change who is answering' });
+    }
+});
+
+/**
+ * Crewfit: may the bot answer this chat's questions? "Hand to bot" lets it (whoever has the chat);
+ * "Take over" stops it, the menu included.
+ */
+router.post('/conversations/:id/bot', async (req, res) => {
+    try {
+        const conversation = await loadConversation(req, req.params.id);
+        if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
+        if (req.waLine.brand !== 'crewfit') return res.status(400).json({ error: 'Normless hands chats back with “Hand back to bot”' });
+        const on = req.body?.on === true;
+        await db.query(
+            `UPDATE wa_conversations SET bot_on = $2,
+                    mode = CASE WHEN $2 THEN mode ELSE 'human' END,
+                    flow_step = CASE WHEN $2 THEN flow_step ELSE NULL END,
+                    assigned_to = CASE WHEN $2 THEN assigned_to ELSE COALESCE(assigned_to, $3) END,
+                    updated_at = CURRENT_TIMESTAMP
+              WHERE id = $1`, [conversation.id, on, req.user?.username || null]);
+        const who = String(req.user?.username || '').split('@')[0];
+        await orders.logActivity({ conversationId: conversation.id, kind: 'status', actor: req.user?.username,
+            body: on ? `${who} handed the chat to the bot — it answers the customer's questions` : `${who} took over — the bot stays out of this chat` });
         res.json({ conversation: await loadConversation(req, conversation.id) });
     } catch (err) {
         console.error('whatsapp mode error:', err);

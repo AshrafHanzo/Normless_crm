@@ -1919,6 +1919,14 @@ async function ensureWaLinesSchema() {
             ALTER TABLE wa_conversations ADD COLUMN IF NOT EXISTS settled_msg_id INTEGER;
             ALTER TABLE wa_conversations ADD COLUMN IF NOT EXISTS settled_at TIMESTAMP;
             ALTER TABLE wa_conversations ADD COLUMN IF NOT EXISTS settled_by TEXT;
+            -- Crewfit: may the bot answer this chat? NULL follows the default — it answers while
+            -- nobody has the chat and stays out once somebody does; true / false is a person's
+            -- choice ("Hand to bot" / "Take over").
+            ALTER TABLE wa_conversations ADD COLUMN IF NOT EXISTS bot_on BOOLEAN;
+            -- What the menu asks besides product, colour and quantity: where the logo goes.
+            ALTER TABLE crewfit_leads ADD COLUMN IF NOT EXISTS printing_placement TEXT;
+            -- When the customer was told their details are with the design team (once per lead).
+            ALTER TABLE crewfit_leads ADD COLUMN IF NOT EXISTS mockup_notice_at TIMESTAMP;
             -- Every product an enquiry is for, with its quantity: [{ product, quantity }]. The single
             -- product_interest / quantity columns carry them joined, for everything that reads those.
             ALTER TABLE crewfit_leads ADD COLUMN IF NOT EXISTS products TEXT;

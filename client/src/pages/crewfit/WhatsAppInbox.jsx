@@ -193,9 +193,16 @@ const fillFrom = (source, thread, me) => {
 const productsOf = (t) => {
   try {
     const list = JSON.parse(t?.products || 'null')
-    if (Array.isArray(list) && list.length) return list.map(p => ({ product: p.product || '', color: p.color || '', quantity: p.quantity || '' }))
+    if (Array.isArray(list) && list.length) return list.map(p => ({ product: p.product || '', color: p.color || '', quantity: p.quantity || '', sizes: p.sizes || '' }))
   } catch { /* an old lead: one product, below */ }
-  return t?.product_interest ? [{ product: t.product_interest, color: '', quantity: t.quantity || '' }] : []
+  return t?.product_interest ? [{ product: t.product_interest, color: '', quantity: t.quantity || '', sizes: '' }] : []
+}
+// The order form's placements, from what the menu asked ("Front only", "Front & back").
+const orderPlacement = (v) => {
+  const t = String(v || '').toLowerCase()
+  if (/front/.test(t) && /back/.test(t)) return /chest/.test(t) ? 'Front Chest & Back' : 'Front & Back'
+  if (/back/.test(t)) return 'Back'
+  return 'Front'
 }
 const plainQty = (q) => (/^\s*\d+\s*(pcs|pieces|nos)?\s*$/i.test(String(q || '')) ? parseInt(q, 10) : '')
 
@@ -214,6 +221,7 @@ const leadFormFrom = (t) => ({
   product_interest: t?.product_interest || '',
   quantity: t?.quantity || '',
   branding: t?.branding || '',
+  printing_placement: t?.printing_placement || '',
   needed_by: t?.needed_by ? String(t.needed_by).slice(0, 10) : '',
   quoted_amount: t?.quoted_amount ?? '',
   received_amount: t?.received_amount ?? '',
@@ -749,6 +757,13 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
       const focused = document.activeElement?.id?.startsWith('wa-b-') ? document.activeElement.id.slice(5) : null
       const changed = BILLING.map(([k]) => k).filter(k => k !== focused && (r.conversation[k] || '') !== (prev?.[k] || ''))
       if (changed.length) setBillingForm(f => ({ ...f, ...Object.fromEntries(changed.map(k => [k, r.conversation[k] || ''])) }))
+      // Sizes and placement the customer sent in the chat (or the menu saved), unless the rep is
+      // editing the products or the placement just now.
+      const editing = document.activeElement?.closest?.('.wa-products') || document.activeElement?.id === 'wa-lead-placement'
+      if (!editing && (JSON.stringify(productsOf(r.conversation)) !== JSON.stringify(productsOf(prev))
+        || (r.conversation.printing_placement || '') !== (prev?.printing_placement || ''))) {
+        setLead(l => ({ ...l, products: productsOf(r.conversation), printing_placement: r.conversation.printing_placement || '' }))
+      }
       setThread(r.conversation)
     }
   }
@@ -1032,9 +1047,9 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
       wa_lead_id: thread.lead_id,
       // One line per product on the enquiry.
       line_items: (productsOf(thread).length ? productsOf(thread) : [{ product: '', quantity: thread.quantity }]).map(p => ({
-        product: p.product || '', color: '', printing_placement: 'Front',
+        product: p.product || '', color: '', printing_placement: orderPlacement(thread.printing_placement),
         printing_type: /embroid/i.test(thread.branding || '') ? 'Embroidery' : '',
-        qty: productsOf(thread).length > 1 ? plainQty(p.quantity) : qty, unit_price: '', product_total: '', size_breakdown: '',
+        qty: productsOf(thread).length > 1 ? plainQty(p.quantity) : qty, unit_price: '', product_total: '', size_breakdown: p.sizes || '',
       })),
     })
   }
@@ -1165,6 +1180,15 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
     toast.success(mode === 'human' ? 'You have the conversation' : mode === 'ai' ? (cf ? 'The assistant is answering' : 'The bot is answering again') : 'The menu is asking')
   }
 
+  // Crewfit: does the bot answer in this chat? Off keeps it out entirely, the menu included.
+  const setBot = async (on) => {
+    const r = await apiFetch(`${API}/conversations/${thread.id}/bot`, { method: 'POST', body: JSON.stringify({ on }) })
+    if (!r || r.error) return toast.error(r?.error || 'Could not change who is answering')
+    setThread(r.conversation)
+    loadConversations()
+    toast.success(on ? 'The bot answers the customer’s questions in this chat' : 'You have the chat — the bot stays out of it')
+  }
+
   const setStatus = async (status) => {
     const r = await apiFetch(`${API}/conversations/${thread.id}`, {
       method: 'PATCH', body: JSON.stringify({ status }),
@@ -1200,7 +1224,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
   // The product list is saved whole, once a change to it is finished.
   const saveProducts = (_e, list = lead.products) => {
     const clean = list.filter(p => p.product.trim() || String(p.quantity).trim())
-      .map(p => ({ product: p.product.trim(), color: (p.color || '').trim(), quantity: String(p.quantity).trim() }))
+      .map(p => ({ product: p.product.trim(), color: (p.color || '').trim(), quantity: String(p.quantity).trim(), sizes: (p.sizes || '').trim() }))
     setLead(l => ({ ...l, products: list }))
     if (JSON.stringify(clean) === JSON.stringify(productsOf(thread))) return
     saveLead({ products: clean })
@@ -1470,6 +1494,9 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                         <span className="wa-thread-line">{c.last_message_preview || 'No messages yet'}</span>
                         <span className="wa-thread-foot">
                           {cf && <span className="wa-pill" style={pillStyle(s.color)}>{s.name}</span>}
+                          {cf && (c.mode === 'flow' || c.mode === 'billing' || c.bot_answers) && c.status !== 'closed' && (
+                            <span className="wa-pill" style={pillStyle('#b3a9ff')} title={c.mode === 'flow' ? 'The menu is answering' : 'The bot answers questions in this chat'}>Bot</span>
+                          )}
                           {cf && c.backup_waiting && <span className="wa-pill" style={pillStyle('#f87171')}>Waiting for reply</span>}
                           {!cf && (c.status === 'closed'
                             ? <span className="wa-pill" style={pillStyle('#a8b0be')}>Closed</span>
@@ -1602,8 +1629,19 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                       </span>
                       <button type="button" className="mini-btn" onClick={() => setMode('human')}>Take over</button>
                     </>
+                  ) : cf && thread.bot_answers ? (
+                    <>
+                      <span className="wa-mode wa-mode-bot" title={thread.bot_on ? 'Handed to the bot: it answers questions it knows (photos, sizes, prices), even with somebody on the chat' : 'Nobody has this chat yet, so the bot answers questions it knows (photos, sizes, prices)'}>
+                        bot is answering
+                      </span>
+                      <button type="button" className="mini-btn" title="The bot stops answering in this chat — only your team replies"
+                        onClick={() => setBot(false)}>Take over</button>
+                    </>
                   ) : cf && (
                     <>
+                      <span className="wa-mode wa-mode-team" title="The bot does not answer in this chat — only your team replies">team is answering</span>
+                      <button type="button" className="mini-btn" title="Let the bot answer the customer's questions here (photos, sizes, prices)"
+                        onClick={() => setBot(true)}>Hand to bot</button>
                       <button type="button" className="mini-btn" title="Let the menu ask the opening questions"
                         onClick={() => setMode('flow')}>Start the menu</button>
                       {settings?.aiEnabled && (
@@ -2165,7 +2203,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                 <div className="wa-products">
                   <div className="wa-products-head">
                     <label>Products</label>
-                    <button type="button" className="mini-btn" onClick={() => setLead(l => ({ ...l, products: [...l.products, { product: '', color: '', quantity: '' }] }))}>
+                    <button type="button" className="mini-btn" onClick={() => setLead(l => ({ ...l, products: [...l.products, { product: '', color: '', quantity: '', sizes: '' }] }))}>
                       <Icon name="plus" size={12} /> Add product
                     </button>
                   </div>
@@ -2185,6 +2223,10 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                         onBlur={saveProducts} />
                       <button type="button" className="btn-icon" aria-label={`Remove product ${i + 1}`} title="Remove"
                         onClick={() => saveProducts(null, lead.products.filter((_, j) => j !== i))}><Icon name="close" size={13} /></button>
+                      {/* Filled in by the menu, or from the customer's message ("M-10, L-20"). */}
+                      <input className="wa-sizes" aria-label={`Sizes of product ${i + 1}`} placeholder="Sizes, e.g. M-10, L-20, XL-20" value={p.sizes || ''}
+                        onChange={e => setLead(l => ({ ...l, products: l.products.map((x, j) => (j === i ? { ...x, sizes: e.target.value } : x)) }))}
+                        onBlur={saveProducts} />
                     </div>
                   ))}
                 </div>
@@ -2194,6 +2236,12 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                     <label htmlFor="wa-lead-brand">Branding</label>
                     <input id="wa-lead-brand" value={lead.branding} placeholder="Embroidery, print…"
                       onChange={e => setLead(l => ({ ...l, branding: e.target.value }))} onBlur={() => saveField('branding')} />
+                  </div>
+                  <div className="input-group">
+                    <label htmlFor="wa-lead-placement">Logo placement</label>
+                    <input id="wa-lead-placement" list="wa-placements" value={lead.printing_placement} placeholder="Front only…"
+                      onChange={e => setLead(l => ({ ...l, printing_placement: e.target.value }))} onBlur={() => saveField('printing_placement')} />
+                    <datalist id="wa-placements">{['Front only', 'Back only', 'Front & back', 'Left chest', 'Left chest & back'].map(x => <option key={x} value={x} />)}</datalist>
                   </div>
                   <div className="input-group">
                     <label htmlFor="wa-lead-date">Needed by</label>

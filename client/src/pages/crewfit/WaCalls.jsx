@@ -247,13 +247,11 @@ export function useWaCalls({ API, apiFetch, toast }) {
 
   /* ── Placing a call ──────────────────────────────────────────────────────────────────── */
 
+  // Past the 24-hour window the server asks with the "May we call you?" template instead.
   const askPermission = async (thread) => {
-    if (!thread.window_open) {
-      return toast.error('The customer has not allowed calls, and the chat is past the 24-hour window — they need to write (or call) first before we can ask.')
-    }
     const r = await apiFetch(`${API}/conversations/${thread.id}/call-permission`, { method: 'POST', body: JSON.stringify({}) })
     if (!r || r.error) return toast.error(r?.error || 'Could not ask for permission')
-    toast.success('Asked. You can call once they tap Allow — WhatsApp lets us ask once a day.')
+    toast.success(`Asked${r.template ? ' with the call template' : ''}. You can call once they tap Allow — WhatsApp lets us ask once a day.`)
     return r.message
   }
 
