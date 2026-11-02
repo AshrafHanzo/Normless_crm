@@ -599,6 +599,19 @@ const EDITABLE = ['status', 'payment_status', 'layout_status', 'customer_type', 
   'deadline_at', 'deadline_text', 'dispatch_date', 'order_date', 'notes', 'total_cost', 'qty', 'color', 'size_breakdown',
   'customer_name', 'contact_number', 'mock_folder', 'description', 'product', ...EXTRA];
 
+// POST /api/crewfit/orders/:id/approve-photos — production photos approved: they go to the
+// customer on WhatsApp with the balance link and order summary (services/wa-orders).
+router.post('/orders/:id/approve-photos', canEditOrders, async (req, res) => {
+  const orders = require('../services/wa-orders');
+  try {
+    res.status(201).json(await orders.approvePhotos(req.params.id, { user: req.user?.username }));
+  } catch (err) {
+    if (err instanceof orders.SendError) return res.status(err.status).json({ error: err.message });
+    console.error('approve photos error:', err);
+    res.status(500).json({ error: 'Could not send the photos' });
+  }
+});
+
 // PUT /api/crewfit/orders/:id — inline field / dropdown updates
 router.put('/orders/:id', canEditOrders, async (req, res) => {
   try {

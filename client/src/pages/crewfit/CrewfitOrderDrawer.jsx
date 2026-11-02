@@ -1197,6 +1197,26 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
     }
   }
   const copyPhotosMessage = () => navigator.clipboard?.writeText(buildPhotosMessage(form, API_URL))
+  // Approving sends from the CRM's own WhatsApp number: the photos, then the balance link with
+  // the order summary unless the order is already paid in full.
+  const [approving, setApproving] = useState(false)
+  const approveAndSendPhotos = async () => {
+    const paid = form.payment_status === 'Fully Paid' || !(Number(form.balance) > 0)
+    if (!await toast.confirm({
+      title: `Approve and send CF-${form.sl_no}'s production photos?`,
+      message: `${form.customer_name} gets the production photos on WhatsApp${paid ? '. The order is paid in full, so no payment link goes with them.' : `, then the order summary with the balance payment link for ₹${Number(form.balance).toLocaleString('en-IN')}.`}`,
+      confirmLabel: 'Approve & send',
+    })) return
+    setApproving(true)
+    const r = await apiFetch(`/api/crewfit/orders/${form.id}/approve-photos`, { method: 'POST' })
+    setApproving(false)
+    if (!r || r.error) { toast.error(r?.error || 'Could not send the photos'); return }
+    setF({ photos_sent_at: new Date().toISOString() })
+    setServerSync(n => n + 1)
+    loadPayments(form.id)
+    if (r.balance === 'failed') toast.error(`Photos sent, but the balance link did not go: ${r.balanceError}`)
+    else toast.success(r.balance === 'sent' ? 'Photos and balance link sent to the customer' : 'Photos sent to the customer')
+  }
   const sendOrderSummaryWhatsApp = () => {
     const num = toWaNumber(waSource(form))
     const msg = encodeURIComponent(preview)
@@ -1756,13 +1776,19 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
           {form.line_items.some(it => (it.prodImages || []).length > 0) && (
             <div className="dispatch-banner">
               <span>
-                📷 Production photos ready — share with the client before collecting the balance payment
+                📷 Production photos ready — approve them to send to the customer with the balance payment link
                 {form.photos_sent_at ? <> · <span style={{ color: 'var(--success)' }}>✓ sent</span></> : ''}
               </span>
               <span style={{ display: 'flex', gap: 8 }}>
                 <button type="button" className="mini-btn" onClick={downloadAllPhotos} disabled={bulkDownloading === 'order-prod-all'}>{bulkDownloading === 'order-prod-all' ? 'Downloading…' : '⬇ Download all'}</button>
                 <button type="button" className="mini-btn" onClick={copyPhotosMessage}>📋 Copy</button>
-                <button type="button" className="btn btn-secondary" onClick={sendPhotosWhatsApp}>💬 {form.photos_sent_at ? 'Resend' : 'Send'} Photos via WhatsApp</button>
+                <button type="button" className="mini-btn" onClick={sendPhotosWhatsApp} title="Opens WhatsApp on this device with the message typed in">💬 Open in WhatsApp</button>
+                {form.id && (
+                  <button type="button" className="btn btn-primary" onClick={approveAndSendPhotos} disabled={approving}
+                    title="Sends the photos from the CRM's WhatsApp number, then the balance link with the order summary">
+                    {approving ? 'Sending…' : form.photos_sent_at ? '✓ Approve & resend to customer' : '✓ Approve & send to customer'}
+                  </button>
+                )}
               </span>
             </div>
           )}

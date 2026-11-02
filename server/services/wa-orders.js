@@ -456,7 +456,7 @@ async function send(orderId, kind, opts = {}) {
     }
 }
 
-async function sendOnce(orderId, kind, { user = null, auto = false } = {}) {
+async function sendOnce(orderId, kind, { user = null, auto = false, bare = false } = {}) {
     if (!MESSAGES[kind]) throw new SendError('Unknown order message');
     if (!wa.configured()) throw new SendError('WhatsApp is not configured on this server', 503);
     const order = (await db.query('SELECT * FROM crewfit_orders WHERE id = $1', [orderId])).rows[0];
@@ -491,7 +491,8 @@ async function sendOnce(orderId, kind, { user = null, auto = false } = {}) {
     } else if (kind === 'photos') {
         files = photoFiles(order);
         if (!files.length) throw new SendError(`${ref(order)} has no production photos uploaded yet`);
-        text = photosText(order);
+        // Bare when the balance message follows: it says "production complete" itself.
+        text = bare ? null : photosText(order);
     } else if (kind === 'mockups') {
         files = photoFiles(order, 'mockImages');
         if (!files.length) throw new SendError(`${ref(order)} has no design mockups uploaded yet`);
@@ -599,6 +600,28 @@ async function submitTemplates(user) {
     return out;
 }
 
+/**
+ * The team approved the production photos: the photos go to the customer, then — unless the order
+ * is paid in full — the balance link with the order summary, which is what they pay from. The
+ * photos going is the approval; a balance link that cannot go (no Razorpay, no template outside
+ * the window) is reported back rather than undoing it.
+ */
+async function approvePhotos(orderId, { user = null } = {}) {
+    const order = (await db.query('SELECT sl_no, payment_status, balance FROM crewfit_orders WHERE id = $1', [orderId])).rows[0];
+    if (!order) throw new SendError('Order not found', 404);
+    const owes = order.payment_status !== 'Fully Paid' && Number(order.balance) > 0;
+    const photos = await send(orderId, 'photos', { user, bare: owes });
+    await logActivity({ conversationId: photos.conversationId, orderId, kind: 'order', actor: user, body: `Production photos for CF-${order.sl_no} approved` });
+    if (!owes) return { ...photos, balance: 'paid' };
+    try {
+        const bal = await send(orderId, 'balance_link', { user });
+        return { conversationId: photos.conversationId, messages: [...photos.messages, ...bal.messages], balance: 'sent' };
+    } catch (err) {
+        if (!(err instanceof SendError)) throw err;
+        return { ...photos, balance: 'failed', balanceError: err.message };
+    }
+}
+
 /* ── Sending on its own ──────────────────────────────────────────────────────────────────── */
 
 async function autoSend(orderId, kind) {
@@ -659,4 +682,4 @@ function paymentSettled(payment) {
     })().catch(err => console.error('whatsapp payment hook:', err.message));
 }
 
-module.exports = { MESSAGES, TEMPLATES, SendError, send, submitTemplates, orderChanged, paymentSettled, logActivity, threadForOrder };
+module.exports = { MESSAGES, TEMPLATES, SendError, send, approvePhotos, submitTemplates, orderChanged, paymentSettled, logActivity, threadForOrder };
