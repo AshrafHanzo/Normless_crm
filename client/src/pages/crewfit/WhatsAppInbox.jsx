@@ -1790,8 +1790,10 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
               </div>
 
               {/* Replying is for the person the chat is with: nobody types into a chat that is
-                  waiting for someone, or into someone else's, without taking it first. */}
-              {!thread.is_demo && String(thread.assigned_to || '').toLowerCase() !== String(user?.username || '').toLowerCase() ? (
+                  waiting for someone, or into someone else's, without taking it first — except a
+                  team that sees every chat (Design), who work in it while it stays the salesperson's. */}
+              {!thread.is_demo && String(thread.assigned_to || '').toLowerCase() !== String(user?.username || '').toLowerCase()
+                && !(config?.seesAll && thread.assigned_to) ? (
                 <footer className="wa-compose wa-compose-locked">
                   <div className="wa-locked">
                     <Icon name="lock" size={15} />

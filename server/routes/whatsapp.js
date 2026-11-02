@@ -780,6 +780,8 @@ router.get('/config', (req, res) => {
         configured: wa.configured(),
         brand: req.waLine?.brand,
         canManage: !!req.waManager, canSettings: !!req.waSettings, canDashboard: !!req.waDashboard,
+        // In a team that sees every chat (Design): they reply in anyone's chat without taking it.
+        seesAll: !!req.waSeesAll,
         canConnect: ['admin', 'owner'].includes(req.user?.role),
         windowHours: wa.WINDOW_HOURS,
         maxUploadMb: wa.MAX_MEDIA_MB,
