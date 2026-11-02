@@ -965,6 +965,10 @@ async function ensureCrewfitSchema() {
                 username TEXT NOT NULL,
                 PRIMARY KEY (team_id, username)
             );
+            -- A team that sees every chat on the line, not only its own and unassigned ones: the
+            -- designers, who work in whichever salesperson's chat needs a mockup.
+            ALTER TABLE wa_teams ADD COLUMN IF NOT EXISTS sees_all BOOLEAN;
+            UPDATE wa_teams SET sees_all = (name ILIKE '%design%') WHERE sees_all IS NULL;
             -- How many open chats a person can carry before the rota skips them. Null is no cap.
             ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS wa_max_open INTEGER;
 

@@ -66,8 +66,8 @@ async function apply(leadId, conversationId, { told = false } = {}) {
     await db.query('UPDATE crewfit_leads SET status = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1', [leadId, next]);
     if (conversationId) {
         const name = (await db.query('SELECT name FROM wa_lead_statuses WHERE key = $1', [next])).rows[0]?.name || next;
-        await db.query(`INSERT INTO wa_activity (conversation_id, kind, body) VALUES ($1,'status',$2)`,
-            [conversationId, `Marked ${name} automatically — ${why}`]);
+        await db.query(`INSERT INTO wa_activity (conversation_id, kind, body, detail) VALUES ($1,'status',$2,$3)`,
+            [conversationId, `Marked ${name} automatically — ${why}`, next]);
         // A mockup request goes to the design team, if the assignment rules say so.
         try { await require('./wa-routing').reroute(conversationId, 'lead_status', next); }
         catch (err) { console.error('lead rules reroute:', err.message); }

@@ -26,16 +26,18 @@ const iso = (d) => d.toISOString().slice(0, 10);
 function range(q, defaultDays = 7) {
     const today = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
     const ok = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || ''));
-    let to = ok(q.to) ? new Date(`${q.to}T00:00:00Z`) : new Date(Date.UTC(today.getFullYear(), today.getMonth(), today.getDate()));
-    let from = ok(q.from) ? new Date(`${q.from}T00:00:00Z`) : new Date(to.getTime() - (defaultDays - 1) * DAY);
+    // "All time": from before the CRM's first record to today.
+    const all = String(q.all || '') === '1';
+    let to = ok(q.to) && !all ? new Date(`${q.to}T00:00:00Z`) : new Date(Date.UTC(today.getFullYear(), today.getMonth(), today.getDate()));
+    let from = all ? new Date(Date.UTC(2023, 0, 1)) : ok(q.from) ? new Date(`${q.from}T00:00:00Z`) : new Date(to.getTime() - (defaultDays - 1) * DAY);
     if (from > to) [from, to] = [to, from];
-    if (to - from > 366 * DAY) from = new Date(to.getTime() - 366 * DAY);
+    if (!all && to - from > 366 * DAY) from = new Date(to.getTime() - 366 * DAY);
     const days = Math.round((to - from) / DAY) + 1;
     const prevTo = new Date(from.getTime() - DAY);
     const prevFrom = new Date(prevTo.getTime() - (days - 1) * DAY);
     // Timestamps are stored in India time without a zone, so plain dates bound them directly.
     const span = (a, b) => ({ from: iso(a), to: iso(b), start: `${iso(a)} 00:00:00`, end: `${iso(new Date(b.getTime() + DAY))} 00:00:00` });
-    return { ...span(from, to), days, prev: span(prevFrom, prevTo) };
+    return { ...span(from, to), days, all, prev: span(prevFrom, prevTo) };
 }
 
 /** The name a person goes by, as the Normless handover introduces them ("priya.s@…" → "Priya"). */
@@ -245,7 +247,7 @@ async function normless(lineId, q) {
     }).sort((a, b) => b.chats - a.chats || a.name.localeCompare(b.name));
 
     return {
-        brand: 'normless', range: { from: r.from, to: r.to, days: r.days, prev_from: r.prev.from, prev_to: r.prev.to },
+        brand: 'normless', range: { from: r.from, to: r.to, days: r.days, all: r.all, prev_from: r.prev.from, prev_to: r.prev.to },
         kpis: {
             conversations: { now: now.active, before: before.active },
             solved_share: { now: now.solved_share, before: before.solved_share },
@@ -327,6 +329,61 @@ async function weekly(r, soFilter = null) {
     return weeks;
 }
 
+/**
+ * Each person's work on leads in the range, plus what they carry now:
+ *   replied      — chats they wrote in;
+ *   need_mockup  — leads moved to Need mockup, by them or automatically in a chat that is theirs;
+ *   advance_paid — orders whose advance came in, by the salesperson (SO) on the order, else by
+ *                  whoever has the lead's chat;
+ *   important, followups, open — open chats assigned to them now, by the lead's status.
+ * Returns a Map of lower-case username to those numbers.
+ */
+async function people(lineId, r, list) {
+    const out = new Map();
+    const at = (who) => {
+        const k = String(who || '').toLowerCase();
+        if (!out.has(k)) out.set(k, { replied: 0, need_mockup: 0, advance_paid: 0, important: 0, followups: 0, open: 0 });
+        return out.get(k);
+    };
+    for (const x of (await db.query(
+        `SELECT LOWER(m.sender_user) AS who, COUNT(DISTINCT m.conversation_id)::int AS n
+           FROM wa_messages m JOIN wa_conversations c ON c.id = m.conversation_id
+          WHERE c.line_id = $1 AND m.sender_type = 'user' AND m.sender_user IS NOT NULL
+            AND m.created_at >= $2 AND m.created_at < $3 GROUP BY 1`, [lineId, r.start, r.end])).rows) at(x.who).replied = x.n;
+    // The status is noted in the chat's timeline when it moves (detail is its key; older notes only
+    // say it in words).
+    for (const x of (await db.query(
+        `SELECT LOWER(COALESCE(a.actor, c.assigned_to)) AS who, COUNT(DISTINCT a.conversation_id)::int AS n
+           FROM wa_activity a JOIN wa_conversations c ON c.id = a.conversation_id
+          WHERE c.line_id = $1 AND a.kind = 'status' AND a.created_at >= $2 AND a.created_at < $3
+            AND (a.detail = 'need_mockup' OR (a.detail IS NULL AND (a.body ILIKE '%status to Need mockup%' OR a.body ILIKE 'Marked Need mockup%')))
+            AND COALESCE(a.actor, c.assigned_to) IS NOT NULL
+          GROUP BY 1`, [lineId, r.start, r.end])).rows) at(x.who).need_mockup = x.n;
+    const paid = (await db.query(
+        `SELECT NULLIF(TRIM(o.so), '') AS so,
+                (SELECT c.assigned_to FROM wa_contacts k JOIN wa_conversations c ON c.contact_id = k.id
+                  WHERE k.lead_id = o.wa_lead_id AND c.line_id = $1 LIMIT 1) AS owner
+           FROM crewfit_orders o
+          WHERE ${ORDER_OK} AND COALESCE(o.payment_status, 'Pending') <> 'Pending'
+            AND COALESCE((SELECT MIN(p.paid_at) FROM crewfit_payments p WHERE p.order_id = o.id AND p.kind = 'advance' AND p.status = 'Paid'),
+                         o.order_date::timestamp) >= $2
+            AND COALESCE((SELECT MIN(p.paid_at) FROM crewfit_payments p WHERE p.order_id = o.id AND p.kind = 'advance' AND p.status = 'Paid'),
+                         o.order_date::timestamp) < $3`, [lineId, r.start, r.end])).rows;
+    for (const x of paid) {
+        const who = (x.so && userForSo(x.so, list)) || x.owner;
+        if (who) at(who).advance_paid += 1;
+    }
+    for (const x of (await db.query(
+        `SELECT LOWER(c.assigned_to) AS who, COUNT(*)::int AS open,
+                COUNT(*) FILTER (WHERE l.status = 'important')::int AS important,
+                COUNT(*) FILTER (WHERE l.status = 'followup')::int AS followups
+           FROM wa_conversations c JOIN wa_contacts k ON k.id = c.contact_id LEFT JOIN crewfit_leads l ON l.id = k.lead_id
+          WHERE c.line_id = $1 AND c.status = 'open' AND c.assigned_to IS NOT NULL GROUP BY 1`, [lineId])).rows) {
+        Object.assign(at(x.who), { open: x.open, important: x.important, followups: x.followups });
+    }
+    return out;
+}
+
 async function crewfit(lineId, q) {
     const r = range(q, new Date().getDate());       // default: this month so far
     const list = await users();
@@ -379,8 +436,24 @@ async function crewfit(lineId, q) {
           GROUP BY 1 ORDER BY 2 DESC`, [lineId, r.start, r.end])).rows;
 
     const conv = (x) => (x.leads ? Math.round(x.won / x.leads * 100) : null);
+    // Everybody with something to show, and everybody in a team even at nought.
+    const work = await people(lineId, r, list);
+    const teams = (await db.query(
+        `SELECT LOWER(m.username) AS who, STRING_AGG(t.name, ', ' ORDER BY t.name) AS teams
+           FROM wa_team_members m JOIN wa_teams t ON t.id = m.team_id GROUP BY 1`)).rows;
+    const whoAll = new Set([...work.keys(), ...teams.map(t => t.who)]);
+    const persons = [...whoAll].map(who => {
+        const u = list.find(x => x.username.toLowerCase() === who);
+        if (u && !u.active) return null;
+        return {
+            username: u?.username || who, name: u ? shortName(u) : who.split('@')[0], teams: teams.find(t => t.who === who)?.teams || '',
+            ...(work.get(who) || { replied: 0, need_mockup: 0, advance_paid: 0, important: 0, followups: 0, open: 0 }),
+            first_reply_secs: waits.byUser.get(who) ?? null,
+        };
+    }).filter(Boolean).sort((a, b) => b.replied - a.replied || b.advance_paid - a.advance_paid || a.name.localeCompare(b.name));
     return {
-        brand: 'crewfit', range: { from: r.from, to: r.to, days: r.days, prev_from: r.prev.from, prev_to: r.prev.to },
+        brand: 'crewfit', range: { from: r.from, to: r.to, days: r.days, all: r.all, prev_from: r.prev.from, prev_to: r.prev.to },
+        people: persons,
         kpis: {
             orders: { now: o.orders, before: ob.orders }, units: { now: o.units, before: ob.units },
             value: { now: n(o.value), before: n(ob.value) }, collected: { now: n(o.collected), before: n(ob.collected) },
@@ -423,9 +496,11 @@ async function myPerformance(lineId, username, q) {
         `SELECT COUNT(DISTINCT m.conversation_id)::int AS n FROM wa_messages m JOIN wa_conversations c ON c.id = m.conversation_id
           WHERE c.line_id = $1 AND m.sender_type = 'user' AND LOWER(m.sender_user) = $2 AND m.created_at >= $3 AND m.created_at < $4`,
         [lineId, who, r.start, r.end])).rows[0].n;
+    const work = (await people(lineId, r, list)).get(who) || { replied: 0, need_mockup: 0, advance_paid: 0, important: 0, followups: 0, open: 0 };
     return {
         user: { username: u.username, name: shortName(u), so_names: names },
-        range: { from: r.from, to: r.to, days: r.days, prev_from: r.prev.from, prev_to: r.prev.to },
+        range: { from: r.from, to: r.to, days: r.days, all: r.all, prev_from: r.prev.from, prev_to: r.prev.to },
+        work,
         kpis: {
             orders: { now: o.orders, before: ob.orders }, units: { now: o.units, before: ob.units },
             value: { now: n(o.value), before: n(ob.value) }, collected: { now: n(o.collected), before: n(ob.collected) },

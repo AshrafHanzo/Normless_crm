@@ -159,7 +159,7 @@ async function teamPayload() {
             AND (u.role IN ('owner','admin') OR COALESCE(u.can_view_whatsapp, false) = true)
           ORDER BY LOWER(u.username)`);
     const teams = await db.query(
-        `SELECT t.id, t.name,
+        `SELECT t.id, t.name, COALESCE(t.sees_all, false) AS sees_all,
                 COALESCE((SELECT ARRAY_AGG(m.username ORDER BY LOWER(m.username)) FROM wa_team_members m
                            WHERE m.team_id = t.id), '{}') AS members
            FROM wa_teams t ORDER BY LOWER(t.name)`);
@@ -305,7 +305,8 @@ router.post('/teams', async (req, res) => {
     try {
         const name = trim(req.body?.name);
         if (!name) return res.status(400).json({ error: 'A team needs a name' });
-        await db.query('INSERT INTO wa_teams (name) VALUES ($1) ON CONFLICT (name) DO NOTHING', [name.slice(0, 40)]);
+        // A design team sees every chat from the start; it can be switched off.
+        await db.query(`INSERT INTO wa_teams (name, sees_all) VALUES ($1, $1 ILIKE '%design%') ON CONFLICT (name) DO NOTHING`, [name.slice(0, 40)]);
         res.status(201).json(await teamPayload());
     } catch (err) {
         console.error('whatsapp team create error:', err);
@@ -315,6 +316,11 @@ router.post('/teams', async (req, res) => {
 
 router.patch('/teams/:id', async (req, res) => {
     try {
+        // Whether the team sees every chat, or its name.
+        if (typeof req.body?.sees_all === 'boolean') {
+            await db.query('UPDATE wa_teams SET sees_all = $2 WHERE id = $1', [req.params.id, req.body.sees_all]);
+            return res.json(await teamPayload());
+        }
         const name = trim(req.body?.name);
         if (!name) return res.status(400).json({ error: 'A team needs a name' });
         await db.query('UPDATE wa_teams SET name = $2 WHERE id = $1', [req.params.id, name.slice(0, 40)]);

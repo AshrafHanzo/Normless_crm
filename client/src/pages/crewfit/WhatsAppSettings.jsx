@@ -1424,6 +1424,7 @@ function TeamTab() {
     const name = window.prompt('Team name', t.name)
     if (name && name.trim() && name !== t.name) apply(await apiFetch(`/api/whatsapp/admin/teams/${t.id}`, { method: 'PATCH', body: JSON.stringify({ name }) }))
   }
+  const setSeesAll = async (t, on) => apply(await apiFetch(`/api/whatsapp/admin/teams/${t.id}`, { method: 'PATCH', body: JSON.stringify({ sees_all: on }) }))
   const deleteTeam = async (t) => {
     if (!await toast.confirm({ title: `Remove the ${t.name} team?`, message: 'Rules that send chats to it are removed too. Nobody loses access.', danger: true })) return
     apply(await apiFetch(`/api/whatsapp/admin/teams/${t.id}`, { method: 'DELETE' }))
@@ -1499,6 +1500,10 @@ function TeamTab() {
                 </span>
               </div>
               <span>{t.members.length ? t.members.map(short).join(', ') : 'Nobody yet'}</span>
+              <label className="was-check" title="Members can open and work in any chat (send mockups, reply) without taking it from the person who has it">
+                <input type="checkbox" checked={!!t.sees_all} onChange={e => setSeesAll(t, e.target.checked)} />
+                Sees every chat, not only their own
+              </label>
             </div>
           ))}
         </div>

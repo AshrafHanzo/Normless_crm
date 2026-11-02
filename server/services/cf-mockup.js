@@ -12,7 +12,8 @@
  * quantity given as a range, a product priced on request), nothing is guessed: the customer is
  * thanked and the chat waits for a person, with a note saying what is missing.
  *
- * Need changes: the lead goes back to Need mockup and the customer is asked what to change.
+ * The lead stays at Need mockup while the mockup is with the customer: Confirm moves it to Mock
+ * completed; Need changes keeps it at Need mockup and asks the customer what to change.
  */
 
 const db = require('../db/connection');
@@ -42,13 +43,13 @@ async function record(conversationId, { wamid, body, type = 'text', user = null,
     await db.query(`UPDATE wa_conversations SET last_message_at = CURRENT_TIMESTAMP, last_message_preview = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
         [conversationId, String(body).slice(0, 200)]);
 }
-const note = (conversationId, body) => db.query(`INSERT INTO wa_activity (conversation_id, kind, body) VALUES ($1,'status',$2)`, [conversationId, body]);
+const note = (conversationId, body, detail = null) => db.query(`INSERT INTO wa_activity (conversation_id, kind, body, detail) VALUES ($1,'status',$2,$3)`, [conversationId, body, detail]);
 
 async function setStatus(leadId, conversationId, key, why) {
     const s = (await db.query('SELECT name FROM wa_lead_statuses WHERE key = $1', [key])).rows[0];
     if (!s || !leadId) return;
     const r = await db.query('UPDATE crewfit_leads SET status = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND status IS DISTINCT FROM $2', [leadId, key]);
-    if (r.rowCount) await note(conversationId, `Marked ${s.name} — ${why}`);
+    if (r.rowCount) await note(conversationId, `Marked ${s.name} — ${why}`, key);
 }
 
 /**
@@ -72,7 +73,7 @@ async function askForApproval(conversation, { mockupUrl = null, user = null } = 
         });
         await record(conversation.id, { wamid, body: `Mockup sent for approval (template ${TEMPLATE})`, type: 'template', user });
     }
-    await setStatus(conversation.lead_id, conversation.id, 'mock_completed', 'the mockup was sent for approval');
+    // The lead stays at Need mockup until the customer confirms it (confirm moves it on).
 }
 
 /* ── Pricing ─────────────────────────────────────────────────────────────────────────────── */
@@ -157,6 +158,7 @@ async function confirm(conversation) {
     const lead = (await db.query('SELECT * FROM crewfit_leads WHERE id = $1', [conversation.lead_id])).rows[0];
     if (!lead) return;
     await note(conversation.id, 'The customer confirmed the mockup');
+    await setStatus(lead.id, conversation.id, 'mock_completed', 'the customer confirmed the mockup');
     // Already raised (a second tap, or a person got there first): send its summary again.
     const existing = (await db.query(
         `SELECT id, sl_no FROM crewfit_orders WHERE wa_lead_id = $1 AND status <> 'Cancelled' AND created_at > NOW() - INTERVAL '30 days' ORDER BY id DESC LIMIT 1`,

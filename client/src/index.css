@@ -3043,6 +3043,7 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .was-chips { display: flex; flex-wrap: wrap; gap: 4px; }
 .was-chip { font-size: 11.5px; padding: 3px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--text-secondary); }
 .was-teams { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+.was-check { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); margin-top: 6px; cursor: pointer; }
 .was-team { background: var(--bg-secondary); border-radius: var(--radius-md); padding: 10px 12px; font-size: 12.5px; color: var(--text-secondary); }
 .was-team-head { display: flex; align-items: center; justify-content: space-between; color: var(--text-primary); font-size: 13.5px; margin-bottom: 2px; }
 .was-team .btn-icon { width: 30px; height: 30px; }

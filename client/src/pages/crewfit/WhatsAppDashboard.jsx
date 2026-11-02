@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { NavLink, Link, useSearchParams } from 'react-router-dom'
 import { useApi, useAuth, useMainMenu } from '../../App'
 import Icon from '../../components/Icon'
+import DateRangeFilter from '../../components/DateRangeFilter'
 import { WA_BRANDS, WaBrandContext } from './waBrand'
 
 /**
@@ -15,23 +16,6 @@ import { WA_BRANDS, WaBrandContext } from './waBrand'
  * Every number comes from /dashboard (or /dashboard/me) for the chosen dates; each headline is set
  * against the same number of days just before.
  */
-
-const DAY = 86400000
-const isoDay = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-const today = () => new Date()
-
-const PRESETS = {
-  normless: [
-    ['today', 'Today', () => [today(), today()]],
-    ['7d', 'Last 7 days', () => [new Date(Date.now() - 6 * DAY), today()]],
-    ['30d', 'Last 30 days', () => [new Date(Date.now() - 29 * DAY), today()]],
-  ],
-  crewfit: [
-    ['week', 'This week', () => { const d = today(); return [new Date(d.getTime() - ((d.getDay() + 6) % 7) * DAY), d] }],
-    ['month', 'This month', () => { const d = today(); return [new Date(d.getFullYear(), d.getMonth(), 1), d] }],
-    ['last', 'Last month', () => { const d = today(); return [new Date(d.getFullYear(), d.getMonth() - 1, 1), new Date(d.getFullYear(), d.getMonth(), 0)] }],
-  ],
-}
 
 const inr = (v) => {
   const x = Number(v) || 0
@@ -56,6 +40,7 @@ const ago = (t) => {
   return m < 60 ? `${m}m` : m < 1440 ? `${Math.round(m / 60)}h` : `${Math.round(m / 1440)}d`
 }
 
+const rangeQs = (r) => (r.all ? 'all=1' : `from=${r.from}&to=${r.to}`)
 const overAnHour = (t) => !!t && Date.now() - new Date(t) > 3600000
 
 /** The change from the period before, coloured by whether it's good news. */
@@ -99,24 +84,17 @@ function Columns({ items, legend, empty = 'Nothing in these dates.' }) {
   )
 }
 
-function RangeBar({ brand, data, setRange }) {
+/** The dates: the same picker as the inbox, "All time" when cleared. */
+function RangeBar({ data, setRange }) {
   const [params] = useSearchParams()
-  const presets = PRESETS[brand]
-  const from = params.get('from') || data?.range?.from || ''
-  const to = params.get('to') || data?.range?.to || ''
-  const active = presets.find(([, , f]) => { const [a, b] = f(); return isoDay(a) === from && isoDay(b) === to })?.[0]
-  return (
-    <div className="wdb-range" role="group" aria-label="Dates">
-      {presets.map(([key, label, f]) => (
-        <button key={key} type="button" className={`chip${active === key ? ' chip-on' : ''}`} aria-pressed={active === key}
-          onClick={() => { const [a, b] = f(); setRange(isoDay(a), isoDay(b)) }}>{label}</button>
-      ))}
-      <label className="wdb-date"><span className="sr-only">From</span><input type="date" value={from} max={to || undefined} onChange={e => e.target.value && setRange(e.target.value, to)} /></label>
-      <span className="wdb-sub">to</span>
-      <label className="wdb-date"><span className="sr-only">To</span><input type="date" value={to} min={from || undefined} onChange={e => e.target.value && setRange(from, e.target.value)} /></label>
-    </div>
-  )
+  const all = params.get('all') === '1' || !!data?.range?.all
+  const from = all ? '' : params.get('from') || data?.range?.from || ''
+  const to = all ? '' : params.get('to') || data?.range?.to || ''
+  return <DateRangeFilter startDate={from} endDate={to} onApply={(a, b) => setRange(a, b)} onClear={() => setRange('', '', true)} />
 }
+
+/** "1 Nov – 2 Nov", or "All time". */
+const spanText = (r) => (r?.all ? 'All time' : r ? `${fmtDay(r.from)} – ${fmtDay(r.to)}` : '')
 
 /** The page frame: the same top bar as the inbox and settings, with Dashboard selected. */
 /** What this person may open beside the inbox: each is its own permission (admins have all). */
@@ -170,7 +148,11 @@ function useDash(url) {
     return () => { live = false }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key])
-  const setRange = (from, to) => setParams(p => { const n = new URLSearchParams(p); n.set('from', from); n.set('to', to); return n })
+  const setRange = (from, to, all = false) => setParams(p => {
+    const n = new URLSearchParams(p)
+    if (all) { n.set('all', '1'); n.delete('from'); n.delete('to') } else { n.delete('all'); n.set('from', from); n.set('to', to) }
+    return n
+  })
   return { ...state, loading: state.key !== key, setRange }
 }
 
@@ -452,6 +434,54 @@ function TeamDay() {
 const SO_COLORS = ['c-bot', 'c-blue', 'c-team', 'c-good', 'c-pink', 'c-soft']
 const SOURCE_LABEL = { ads: 'Meta ads (click-to-WhatsApp)', whatsapp: 'Wrote to us on WhatsApp', order: 'Added from an order', other: 'Other' }
 
+/**
+ * Each person's work on leads in these dates, and what they carry now — salespeople and designers
+ * alike, so a designer's mockups count as much as a closer's orders.
+ */
+function PeopleTable({ people, range, brand }) {
+  const sum = (f) => people.reduce((s, p) => s + (Number(p[f]) || 0), 0)
+  return (
+    <section className="was-card wdb-feature">
+      <div className="was-card-head"><h3>Leads, person by person</h3>
+        <span className="wdb-sub">Replied, moved to Need mockup and advance paid are for these dates; important, follow-ups and open chats are what each person has now.</span></div>
+      <div className="data-table-wrapper wdb-table">
+        <table className="data-table">
+          <thead><tr>
+            <th scope="col">Person</th>
+            <th scope="col" title="Chats they wrote in">Leads replied</th>
+            <th scope="col" title="Leads moved to Need mockup — by them, or automatically in a chat that is theirs">To Need mockup</th>
+            <th scope="col" title="Orders whose advance came in: the salesperson on the order, else whoever has the lead's chat">Advance paid</th>
+            <th scope="col" title="Open chats assigned to them whose lead is Important">Important</th>
+            <th scope="col" title="Open chats assigned to them whose lead is Follow-up">Follow-ups</th>
+            <th scope="col" title="Open chats assigned to them">Open chats</th>
+            <th scope="col" title="Median wait from a customer's message to their reply">First reply</th>
+            <th scope="col"><span className="sr-only">Open</span></th>
+          </tr></thead>
+          <tbody>
+            {people.length ? people.map(p => (
+              <tr key={p.username}>
+                <td data-label=""><span className="wdb-person"><span className="wdb-avatar">{(p.name || '?')[0]}</span><b>{p.name}</b>{p.teams && <span className="wdb-sub">{p.teams}</span>}</span></td>
+                <td data-label="Leads replied"><b>{num(p.replied)}</b></td>
+                <td data-label="To Need mockup">{num(p.need_mockup)}</td>
+                <td data-label="Advance paid">{num(p.advance_paid)}</td>
+                <td data-label="Important">{p.important ? <span className="status-badge error">{p.important}</span> : 0}</td>
+                <td data-label="Follow-ups">{p.followups ? <span className="status-badge pending">{p.followups}</span> : 0}</td>
+                <td data-label="Open chats">{num(p.open)}</td>
+                <td data-label="First reply">{secs(p.first_reply_secs)}</td>
+                <td data-label=""><Link to={`${brand.path}/me?user=${encodeURIComponent(p.username)}&${rangeQs(range)}`} className="wdb-link">Open</Link></td>
+              </tr>
+            )) : <tr><td colSpan={9} className="wdb-empty">Nobody has worked on a lead in these dates.</td></tr>}
+          </tbody>
+          {people.length > 1 && (
+            <tfoot><tr><td><b>Team</b></td><td><b>{num(sum('replied'))}</b></td><td><b>{num(sum('need_mockup'))}</b></td><td><b>{num(sum('advance_paid'))}</b></td>
+              <td>{num(sum('important'))}</td><td>{num(sum('followups'))}</td><td>{num(sum('open'))}</td><td /><td /></tr></tfoot>
+          )}
+        </table>
+      </div>
+    </section>
+  )
+}
+
 function CrewfitDash({ d, brand }) {
   const k = d.kpis
   const names = [...new Set(d.weekly.flatMap(w => Object.keys(w.by)))]
@@ -477,6 +507,8 @@ function CrewfitDash({ d, brand }) {
 
       <TeamDay />
 
+      <PeopleTable people={d.people || []} range={d.range} brand={brand} />
+
       <section className="was-card wdb-feature">
         <div className="was-card-head"><h3>Team performance</h3><span className="wdb-sub">Orders count for the salesperson written on the order (SO). Open a person for their own page.</span></div>
         <div className="data-table-wrapper wdb-table">
@@ -493,7 +525,7 @@ function CrewfitDash({ d, brand }) {
                   <td data-label="Units"><span className="wdb-inline-bar"><span>{num(p.units)}</span><span className="wdb-track"><span className="c-bot" style={{ width: `${p.units / topUnits * 100}%` }} /></span></span></td>
                   <td data-label="Order value">{inr(p.value)}</td><td data-label="Avg order">{p.avg ? inr(p.avg) : '—'}</td><td data-label="Collected">{inr(p.collected)}</td>
                   <td data-label="Chats">{p.username ? p.chats : '—'}</td><td data-label="First reply">{p.username ? secs(p.first_reply_secs) : '—'}</td><td data-label="Calls">{p.username ? p.calls : '—'}</td>
-                  <td data-label="">{p.username && <Link to={`${brand.path}/me?user=${encodeURIComponent(p.username)}&from=${d.range.from}&to=${d.range.to}`} className="wdb-link">Open</Link>}</td>
+                  <td data-label="">{p.username && <Link to={`${brand.path}/me?user=${encodeURIComponent(p.username)}&${rangeQs(d.range)}`} className="wdb-link">Open</Link>}</td>
                 </tr>
               )) : <tr><td colSpan={10} className="wdb-empty">No orders in these dates.</td></tr>}
             </tbody>
@@ -557,9 +589,9 @@ export default function WhatsAppDashboard({ brand: brandKey = 'crewfit' }) {
       <div className="wdb-head">
         <div>
           <h2>Dashboard</h2>
-          <p className="wdb-sub">{data ? `${fmtDay(data.range.from)} – ${fmtDay(data.range.to)} · compared with ${fmtDay(data.range.prev_from)} – ${fmtDay(data.range.prev_to)}` : ' '}</p>
+          <p className="wdb-sub">{data ? (data.range.all ? 'All time' : `${spanText(data.range)} · compared with ${fmtDay(data.range.prev_from)} – ${fmtDay(data.range.prev_to)}`) : ' '}</p>
         </div>
-        <RangeBar brand={brand.key} data={data} setRange={setRange} />
+        <RangeBar data={data} setRange={setRange} />
       </div>
       {error ? <div className="was-card"><p>{error}</p>{brand.key === 'crewfit' && <Link to={`${brand.path}/me`} className="btn btn-primary btn-sm">See my performance</Link>}</div>
         : !data ? <div className="loader"><div className="spinner" /></div>
@@ -588,14 +620,25 @@ export function WhatsAppMyPerformance() {
               <span className="wdb-avatar wdb-avatar-lg">{(d.user.name || '?')[0]}</span>
               <div>
                 <h2>{mine ? `${d.user.name}, here are your numbers` : `${d.user.name}’s numbers`}{d.range.days > 25 && d.range.days < 32 ? ` for ${month}` : ''}</h2>
-                <p className="wdb-sub">{d.user.so_names.length ? `Orders with ${d.user.so_names.map(s => `“${s.charAt(0).toUpperCase()}${s.slice(1)}”`).join(' or ')} as the salesperson (SO)` : 'No order has this name as its salesperson (SO) yet'} · {fmtDay(d.range.from)} – {fmtDay(d.range.to)}</p>
+                <p className="wdb-sub">{d.user.so_names.length ? `Orders with ${d.user.so_names.map(s => `“${s.charAt(0).toUpperCase()}${s.slice(1)}”`).join(' or ')} as the salesperson (SO)` : 'No order has this name as its salesperson (SO) yet'} · {spanText(d.range)}</p>
               </div>
             </div>
             <div className="wdb-head-end">
-              <RangeBar brand="crewfit" data={d} setRange={setRange} />
-              {d.canSeeTeam && <Link to={`${brand.path}/dashboard?from=${d.range.from}&to=${d.range.to}`} className="btn btn-secondary btn-sm">Back to team</Link>}
+              <RangeBar data={d} setRange={setRange} />
+              {d.canSeeTeam && <Link to={`${brand.path}/dashboard?${rangeQs(d.range)}`} className="btn btn-secondary btn-sm">Back to team</Link>}
             </div>
           </div>
+
+          {d.work && (
+            <section className="wdb-kpis" aria-label="Leads">
+              <Kpi label="Leads replied" value={num(d.work.replied)} hint="Chats written in, in these dates">chats {mine ? 'you' : 'they'} wrote in</Kpi>
+              <Kpi label="To Need mockup" value={num(d.work.need_mockup)} hint="Leads moved to Need mockup, by hand or automatically in a chat that is theirs">leads sent to design</Kpi>
+              <Kpi label="Advance paid" value={num(d.work.advance_paid)} hint="Orders whose advance came in, in these dates">orders</Kpi>
+              <Kpi label="Important" value={num(d.work.important)} hint="Open chats assigned now whose lead is Important">assigned now</Kpi>
+              <Kpi label="Follow-ups" value={num(d.work.followups)} hint="Open chats assigned now whose lead is Follow-up">assigned now</Kpi>
+              <Kpi label="Open chats" value={num(d.work.open)} hint="Open chats assigned now">assigned now</Kpi>
+            </section>
+          )}
 
           <section className="wdb-kpis wdb-kpis-5" aria-label="Numbers">
             <Kpi label="Orders closed" value={num(d.kpis.orders.now)}><Delta now={d.kpis.orders.now} before={d.kpis.orders.before} /> vs the period before</Kpi>

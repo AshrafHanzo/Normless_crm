@@ -10,7 +10,8 @@
  *     to bottom, first match wins, and a match picks the person from inside that team only;
  *   - each person's cap: somebody already carrying their maximum is skipped.
  *
- * Only people ticked as taking new enquiries (`is_sales_agent`) are ever picked automatically.
+ * With no team to pick from, only people ticked as taking new enquiries (`is_sales_agent`) are
+ * picked; a rule's team picks from its own members.
  */
 
 const db = require('../db/connection');
@@ -55,7 +56,8 @@ async function nextAgent(c, { teamId = null } = {}) {
            FROM admin_users u
            LEFT JOIN wa_conversations v ON LOWER(v.assigned_to) = LOWER(u.username)
           WHERE COALESCE(u.is_active, true) = true
-            AND COALESCE(u.is_sales_agent, false) = true
+            -- A rule's team picks from its members; the open rota only from people taking enquiries.
+            AND (${teamId ? 'true' : 'COALESCE(u.is_sales_agent, false) = true'})
             ${team}
           GROUP BY u.username, u.wa_max_open
          HAVING u.wa_max_open IS NULL

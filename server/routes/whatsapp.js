@@ -646,6 +646,10 @@ router.use(async (req, res, next) => {
         if (!grants) return res.status(404).json({ error: 'No such WhatsApp inbox' });
         if (!await hasPermission(req, grants.view)) return res.status(403).json({ error: 'Access denied' });
         req.waManager = await hasPermission(req, grants.manage);
+        // In a team that sees every chat (Design): every chat on the line, without taking it.
+        req.waSeesAll = !req.waManager && req.waLine.brand === 'crewfit' && !!(await db.query(
+            `SELECT 1 FROM wa_team_members m JOIN wa_teams t ON t.id = m.team_id
+              WHERE t.sees_all AND LOWER(m.username) = LOWER($1) LIMIT 1`, [req.user?.username || ''])).rows[0];
         // Seeing the line's numbers and changing its settings are grants of their own.
         req.waDashboard = await hasPermission(req, grants.dashboard);
         req.waSettings = await hasPermission(req, grants.settings);
@@ -695,7 +699,7 @@ function visibility(req, params) {
     // Only this brand's threads, always: the line is the first thing every query checks.
     params.push(req.waLine?.id ?? -1);
     const line = `c.line_id = $${params.length}`;
-    if (req.waManager) return line;
+    if (req.waManager || req.waSeesAll) return line;
     params.push(String(req.user?.username || '').toLowerCase());
     return `(${line} AND (LOWER(COALESCE(c.assigned_to,'')) = $${params.length} OR c.assigned_to IS NULL))`;
 }
@@ -2140,7 +2144,7 @@ router.patch('/leads/:id', async (req, res) => {
 
         if ('status' in body) {
             const name = (await db.query('SELECT name FROM wa_lead_statuses WHERE key = $1', [body.status])).rows[0]?.name;
-            await orders.logActivity({ conversationId, kind: 'status', actor: req.user?.username,
+            await orders.logActivity({ conversationId, kind: 'status', actor: req.user?.username, detail: String(body.status),
                 body: `${String(req.user?.username || '').split('@')[0]} set the status to ${name || body.status}` });
             // A new status may hand the conversation to another team: a mockup request to Design.
             const moved = await routing.reroute(conversationId, 'lead_status', body.status);
