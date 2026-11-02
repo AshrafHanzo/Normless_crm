@@ -985,6 +985,9 @@ router.get('/conversations', async (req, res) => {
             params.push(String(req.query.status || 'open'));
             where.push(`c.status = $${params.length}`);
         }
+        // Unread: chats with messages nobody has opened yet; read: the rest.
+        if (req.query.read === 'unread') where.push('c.unread_count > 0');
+        else if (req.query.read === 'read') where.push('COALESCE(c.unread_count, 0) = 0');
         const leadStatus = trim(req.query.lead_status);
         if (leadStatus) {
             params.push(leadStatus);

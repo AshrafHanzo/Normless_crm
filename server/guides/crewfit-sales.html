@@ -147,28 +147,31 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
       <li class="step"><div class="rail"><span class="dot">2</span><span class="line"></span></div>
         <div class="card"><div class="card-head"><h3>The menu takes the enquiry</h3><span class="who who-bot">Bot</span></div>
           <ul>
-            <li>Product (with its photo, colours and prices) → colour → how many pieces → another product?</li>
-            <li>Printing or embroidery → the logo → a summary with the price per piece.</li>
-            <li>On the way it sends the catalogue PDF, size charts, photos of our work and the price list when asked, and answers common questions (MOQ, sample piece, payment terms, address).</li>
+            <li>Product (with its photo, colours and prices) → colour → how many pieces → <b>the size split</b> (M-10, L-20, XL-20) → another product?</li>
+            <li>Printing or embroidery → <b>where the logo goes</b> (front only, back only, front &amp; back) → the logo → a summary with the price per piece.</li>
+            <li>On the way it sends the catalogue PDF, size charts, photos of our work and the price list when asked, and answers common questions (MOQ, sample piece, payment terms, address). For photos it asks which product first, then sends up to 7.</li>
           </ul>
-          <p class="auto">Sets the status by itself: <b>Qualified</b> once they share details · <b>Important</b> when it’s more than 50 pieces · <b>Need mockup</b> when product, colour, quantity and logo are all in.</p>
+          <p class="auto">Everything goes on the Lead tab — products, colours, quantities, sizes, logo placement and the logo. A size split the customer types later (“S-5 M-10 L-15”) is saved there too.</p>
+          <p class="auto">Sets the status by itself: <b>Qualified</b> once they share details · <b>Important</b> when it’s more than 50 pieces · <b>Need mockup</b> when product, colour, quantity and logo are all in — and the customer is told the design team has their details.</p>
         </div></li>
       <li class="step"><div class="rail"><span class="dot">3</span><span class="line"></span></div>
         <div class="card"><div class="card-head"><h3>You take the chat from “Reply now”</h3><span class="who who-sales">You</span></div>
           <ul>
-            <li>Open the chat and reply — it becomes yours. Read the Lead tab first: products, colours, quantities and the logo are already filled in.</li>
+            <li>Open the chat and reply — it becomes yours, and the bot stops answering in it. Read the Lead tab first: products, colours, quantities, sizes, logo placement and the logo are already filled in.</li>
             <li>Call if they asked, or if the order is big. Send <b>Samples</b>, the catalogue or a quote from the tools under the chat.</li>
-            <li>Fill in anything missing on the Lead tab: exact quantity per product, colour, billing name and GST.</li>
+            <li>Fill in anything missing on the Lead tab: exact quantity and sizes per product, colour, logo placement, billing name and GST.</li>
+            <li>Got product, colour, quantity and the logo yourself? Set the status to <span class="pill p-mock">Need mockup</span> — the customer is told the design team is on it.</li>
           </ul>
         </div></li>
       <li class="step"><div class="rail"><span class="dot">4</span><span class="line"></span></div>
         <div class="card"><div class="card-head"><h3>The designer makes the mockup</h3><span class="who who-design">Designer</span></div>
-          <p>Leads at <span class="pill p-mock">Need mockup</span> go to the design team. The designer uploads the mockup in the chat (Lead tab › Mockups) and taps <b>Send for approval</b>. The customer gets it with two buttons: <b>✅ Confirm mockup</b> and <b>✏️ Need changes</b>.</p>
-          <p class="branch">✏️ Need changes → the lead goes back to Need mockup and the bot asks what to change. The designer updates it and sends again.</p>
+          <p>The design team works on leads at <span class="pill p-mock">Need mockup</span> right in your chat — they see every chat and can reply without taking it, so it stays yours. The designer uploads the mockup (Lead tab › Mockups) and taps <b>Send to customer for approval</b>. The customer gets it with two buttons: <b>✅ Confirm mockup</b> and <b>✏️ Need changes</b>. The lead stays at Need mockup until they confirm.</p>
+          <p class="branch">✏️ Need changes → the lead stays at Need mockup and the bot asks what to change. The designer updates it and sends again.</p>
+          <p class="branch">Chat past the 24-hour window? The button reads <b>Ask customer to reply, then send</b>: a template tells them the mockup is ready, and the mockup goes to them by itself the moment they reply.</p>
         </div></li>
       <li class="step"><div class="rail"><span class="dot">5</span><span class="line"></span></div>
         <div class="card"><div class="card-head"><h3>The customer confirms — the order is created</h3><span class="who who-crm">CRM, automatically</span></div>
-          <p>On ✅ Confirm the CRM raises the order from the lead (each product, colour, quantity, the catalogue price for that quantity, ₹800 digitising for embroidery, 5% GST) and sends the customer the order summary with the <b>50% advance payment link</b>.</p>
+          <p>On ✅ Confirm the lead moves to <span class="pill p-done">Mock completed</span> and the CRM raises the order from the lead (each product, colour, quantity, the catalogue price for that quantity, ₹800 digitising for embroidery, 5% GST) and sends the customer the order summary with the <b>50% advance payment link</b>.</p>
           <p class="branch">If a quantity is a range or a price is “on request”, nothing is guessed: the customer is thanked and the chat waits for you, with a note saying what’s missing. Create the order from the chat.</p>
         </div></li>
       <li class="step"><div class="rail"><span class="dot">6</span><span class="line"></span></div>
@@ -177,7 +180,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
         </div></li>
       <li class="step"><div class="rail"><span class="dot">7</span><span class="line"></span></div>
         <div class="card"><div class="card-head"><h3>Balance and dispatch</h3><span class="who who-sales">You</span></div>
-          <p>When production is done, send the balance link from the order messages in the chat. Once fully paid (<span class="pill p-paid">Paid</span>), the order is dispatched and the tracking goes to the customer.</p>
+          <p>When production is done, upload the production photos on the order and tap <b>✓ Approve &amp; send to customer</b>: the customer gets the photos, then the order summary with the balance payment link (just the photos if it is already paid). Once fully paid (<span class="pill p-paid">Paid</span>), the order is dispatched and the tracking goes to the customer.</p>
         </div></li>
     </ol>
   </section>
@@ -195,7 +198,17 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
       <div class="tab"><div class="tab-name"><span class="chip">All chats</span><span class="rank">reference</span></div>
         <p>Everything open, whoever has it. For managers, or to find a customer.</p></div>
     </div>
-    <p class="section-intro">The status picker under the lists filters any of them — choose <span class="pill p-imp">Important</span> to see the big orders, or <span class="pill p-fu">Follow-up</span> for the ones to chase. The date filter at the top narrows everything to a period.</p>
+    <p class="section-intro">The status picker under the lists filters any of them — choose <span class="pill p-imp">Important</span> to see the big orders, or <span class="pill p-fu">Follow-up</span> for the ones to chase. <b>Unread / Read</b> below it shows only chats with messages nobody has opened yet, or only the rest. <b>Oldest first</b> puts the longest-waiting leads on top. The date filter at the top narrows everything to a period.</p>
+  </section>
+
+  <section aria-labelledby="who">
+    <h2 id="who">Who answers: the bot or you</h2>
+    <p class="section-intro">The top of every chat says who is answering it. The bot never talks over a person.</p>
+    <div class="tools">
+      <div class="tool"><b>menu is answering</b><span>The menu is asking its questions. <b>Take over</b> stops it at once.</span></div>
+      <div class="tool"><b>bot is answering</b><span>Nobody has the chat yet, so the bot answers what it knows (photos, sizes, prices). A <b>Bot</b> tag shows on it in the list. <b>Take over</b> stops it.</span></div>
+      <div class="tool"><b>team is answering</b><span>The chat is someone’s, so the bot stays out completely — the menu included. <b>Hand to bot</b> lets it answer questions again; <b>Start the menu</b> runs the questions from the top.</span></div>
+    </div>
   </section>
 
   <section aria-labelledby="priority">
@@ -203,7 +216,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
     <ol class="prio">
       <li><div><b>Reply now, with a red number.</b> A customer is waiting. Reply within 5 minutes during working hours.</div></li>
       <li><div><b>Important (more than 50 pieces).</b> Reply and call. These are the biggest orders.</div></li>
-      <li><div><b>Mock completed with no answer from the customer.</b> Nudge them to tap Confirm, or ask what to change.</div></li>
+      <li><div><b>Need mockup with the mockup sent and no answer.</b> Nudge them to tap Confirm, or ask what to change.</div></li>
       <li><div><b>Follow-up.</b> Chase quotes and payments promised for today.</div></li>
       <li><div><b>Reply windows running out.</b> A chat showing <span class="timer t-low">2h 10m to reply</span> needs a message before it closes.</div></li>
       <li><div><b>New leads.</b> Take the newest first — they’re still on their phones.</div></li>
@@ -235,7 +248,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
           <tr><td><span class="pill p-qual">Qualified</span></td><td>Real order details: product, quantity or logo.</td><td>Bot / you</td><td>Get the logo and exact quantities.</td></tr>
           <tr><td><span class="pill p-imp">Important</span></td><td>More than 50 pieces.</td><td>Bot</td><td>Reply and call first.</td></tr>
           <tr><td><span class="pill p-mock">Need mockup</span></td><td>Product, colour, quantity and logo are in.</td><td>Bot / you</td><td>Designer makes and sends the mockup.</td></tr>
-          <tr><td><span class="pill p-done">Mock completed</span></td><td>Mockup sent, waiting for the customer.</td><td>CRM</td><td>Nudge them to Confirm.</td></tr>
+          <tr><td><span class="pill p-done">Mock completed</span></td><td>The customer confirmed the mockup; the order is raised.</td><td>CRM</td><td>Collect the 50% advance.</td></tr>
           <tr><td><span class="pill p-fu">Follow-up</span></td><td>Something promised — a quote, a payment, a reply.</td><td>You</td><td>Chase on the day.</td></tr>
           <tr><td><span class="pill p-part">Partially paid</span></td><td>Advance received, in production.</td><td>CRM</td><td>Confirm sizes; balance before dispatch.</td></tr>
           <tr><td><span class="pill p-paid">Paid</span></td><td>Fully paid.</td><td>CRM</td><td>Dispatch and tracking.</td></tr>
@@ -251,7 +264,8 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
       <div class="note"><span class="timer t-open">18h 20m to reply</span><p>Type anything: text, photos, files, samples.</p></div>
       <div class="note"><span class="timer t-low">2h 10m to reply</span><p>Under 3 hours: send what you need to now — a question that gets them to reply keeps the window open.</p></div>
       <div class="note"><span class="timer t-shut">Window closed — template only</span><p>Use <b>Template</b> under the chat (follow-up, payment request, mockup ready). When they reply, the window opens again.</p></div>
-      <div class="note"><span class="timer t-free">Free until 4 Nov, 11:30 am</span><p>Leads from ads: Meta charges nothing for messages for 72 hours — templates included — as long as we reply within 24 hours. Answer ad leads fast.</p></div>
+      <div class="note"><span class="timer t-free">No charge until 4 Nov, 11:30 am</span><p>Leads from ads: Meta charges nothing for messages for 72 hours — templates included — as long as we reply within 24 hours. It does not stretch the 24 hours for typing: after that the chip reads <b>Templates free until…</b>, and a template is how to get them talking again, at no cost.</p></div>
+      <div class="note"><span class="timer">Every message from them</span><p>Restarts the 24 hours — a “hi”, an “ok”, a photo or a tap on a template’s button. Our own messages don’t.</p></div>
     </div>
   </section>
 
@@ -260,13 +274,14 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
     <div class="tools">
       <div class="tool"><b>Reply to a message</b><span>Hover a message, tap the arrow: your answer quotes it on the customer’s phone. <span class="kbd">Esc</span> cancels.</span></div>
       <div class="tool"><b>Several files at once</b><span>Drag them onto the chat, paste a screenshot, or tap +. They wait in a tray; the text goes as the first file’s caption.</span></div>
-      <div class="tool"><b>Samples</b><span>Photos of our work by product and colour — up to 30, a mix of colours ticked for you.</span></div>
+      <div class="tool"><b>Samples</b><span>Photos of our work by product and colour — up to 30, a mix of colours ticked for you. (The bot sends 7, after asking which product.)</span></div>
       <div class="tool"><b>Catalogue</b><span>The catalogue PDF, or one product’s photo and prices.</span></div>
       <div class="tool"><b>Template</b><span>For chats past the 24-hour window.</span></div>
       <div class="tool"><b>Payment</b><span>Payment link or QR for an order.</span></div>
       <div class="tool"><b>Saved replies</b><span>Type <span class="kbd">/</span> in the reply box for the team’s ready answers.</span></div>
       <div class="tool"><b>No reply needed</b><span>When all the customer said was “ok”, “thanks” or 👍, clear the count with this — it comes back if they write again.</span></div>
-      <div class="tool"><b>Calls</b><span>WhatsApp calling switches on once Meta approves the “Crewfit” display name. Until then, call from your phone and note the call on the Lead tab. Once it’s on, calls ring in the CRM, and a missed call shows in the chat — call back within 15 minutes.</span></div>
+      <div class="tool"><b>Calls</b><span>WhatsApp calling switches on once Meta approves the “Crewfit” display name. Until then, call from your phone and note the call on the Lead tab. Once it’s on, calls ring in the CRM, and a missed call shows in the chat — call back within 15 minutes. A customer who hasn’t allowed calls gets WhatsApp’s “May we call you?” with Allow buttons — as a template if the chat is past 24 hours.</span></div>
+      <div class="tool"><b>Your numbers</b><span><b>Performance</b> at the top shows leads you replied to, moved to Need mockup and turned into advance paid, and the Important and Follow-up chats you have now, for any dates.</span></div>
       <div class="tool"><b>Emoji and voice notes</b><span>😊 next to the reply box. Voice notes play right in the chat.</span></div>
     </div>
   </section>

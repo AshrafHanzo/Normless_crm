@@ -325,6 +325,13 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
   // Remembered per browser.
   const sortKey = `wa-sort-${brandKey}`
   const [sort, setSort] = useState(() => { try { return localStorage.getItem(sortKey) === 'oldest' ? 'oldest' : 'newest' } catch { return 'newest' } })
+  // Unread / read / both, remembered like the sort.
+  const readKey = `wa-read-${brandKey}`
+  const [readFilter, setReadFilter] = useState(() => { try { return ['unread', 'read'].includes(localStorage.getItem(readKey)) ? localStorage.getItem(readKey) : '' } catch { return '' } })
+  const pickRead = (v) => {
+    setReadFilter(v)
+    try { localStorage.setItem(readKey, v) } catch { /* private window: just not remembered */ }
+  }
   const flipSort = () => setSort(s => {
     const next = s === 'oldest' ? 'newest' : 'oldest'
     try { localStorage.setItem(sortKey, next) } catch { /* private window: just not remembered */ }
@@ -451,6 +458,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
     if (term) qs.set('search', term)
     if (statusFilter) qs.set('lead_status', statusFilter)
     if (sort === 'oldest') qs.set('sort', 'oldest')
+    if (readFilter) qs.set('read', readFilter)
     if (range.from) qs.set('from', range.from)
     if (range.to) qs.set('to', range.to)
     return qs
@@ -513,7 +521,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
     setLoading(true)
     loadConversations()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filter, term, statusFilter, sort, range])
+  }, [filter, term, statusFilter, sort, range, readFilter])
 
   // The open chat's row, kept in step with the chat itself. A refresh re-reads only the first page,
   // so a chat further down (scrolled to) would show its old status until a reload; with a status
@@ -1490,6 +1498,12 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
               title={sort === 'oldest' ? 'Oldest chats first — press for newest first' : 'Newest chats first — press for oldest first'}>
               <Icon name="sort" size={13} /> {sort === 'oldest' ? 'Oldest first' : 'Newest first'}
             </button>
+          </div>
+          <div className="wa-read-seg" role="group" aria-label="Read or unread">
+            {[['', 'All'], ['unread', 'Unread'], ['read', 'Read']].map(([v, label]) => (
+              <button key={v || 'all'} type="button" aria-pressed={readFilter === v} onClick={() => pickRead(v)}
+                title={v === 'unread' ? 'Chats with messages nobody has opened yet' : v === 'read' ? 'Chats with nothing new' : 'Read and unread'}>{label}</button>
+            ))}
           </div>
 
           {loading ? (
