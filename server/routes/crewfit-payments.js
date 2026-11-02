@@ -272,16 +272,11 @@ router.post('/order/:orderId', async (req, res) => {
 
     // One open link per half — otherwise the customer can be sent two live links for the same
     // money and pay twice. An existing paid link is returned as an error, not silently reissued.
-    const existing = await db.query(
-      `SELECT * FROM crewfit_payments WHERE order_id = $1 AND kind = $2 AND status IN ('Created','Paid') ORDER BY id DESC LIMIT 1`,
-      [order.id, kind]
-    );
-    if (existing.rows[0]) {
-      if (existing.rows[0].status === 'Paid') {
-        return res.status(400).json({ error: `The ${kind} for this order is already paid` });
-      }
-      return res.json({ ...existing.rows[0], reused: true });
-    }
+    const paid = await db.query(
+      `SELECT id FROM crewfit_payments WHERE order_id = $1 AND kind = $2 AND status = 'Paid' LIMIT 1`, [order.id, kind]);
+    if (paid.rows[0]) return res.status(400).json({ error: `The ${kind} for this order is already paid` });
+    const open = await currentOpenLink(order.id, kind, amount);
+    if (open) return res.json({ ...open, reused: true });
 
     const payment = await createLink({
       order_id: order.id, kind,
@@ -349,6 +344,37 @@ router.post('/sync-pending', async (req, res) => {
   }
 });
 
+/** Cancel one unpaid link, at Razorpay and here. Returns the updated row. */
+async function cancelLink(payment) {
+  if (payment.razorpay_payment_link_id && razorpay.isConfigured) {
+    try { await razorpay.client().paymentLink.cancel(payment.razorpay_payment_link_id); }
+    catch (e) {
+      // Already cancelled/expired at Razorpay is not a failure — fall through and record it.
+      console.warn(`cancel link ${payment.razorpay_payment_link_id}:`, e.error?.description || e.message);
+    }
+  }
+  return (await db.query(
+    `UPDATE crewfit_payments SET status = 'Cancelled', cancelled_at = CURRENT_TIMESTAMP,
+     updated_at = CURRENT_TIMESTAMP WHERE id = $1 RETURNING *`, [payment.id])).rows[0];
+}
+
+/**
+ * The open (unpaid) link for one half of an order, if it still asks for `amount`. A link made
+ * before a charge moved the amount is cancelled, so the customer can't settle the half with the
+ * old figure — paying a balance link marks the order Fully Paid whatever it asked for.
+ */
+async function currentOpenLink(orderId, kind, amount) {
+  const open = (await db.query(
+    `SELECT * FROM crewfit_payments WHERE order_id = $1 AND kind = $2 AND status = 'Created' ORDER BY id DESC`,
+    [orderId, kind])).rows;
+  let keep = null;
+  for (const p of open) {
+    if (!keep && Number(p.amount) === Number(amount)) keep = p;
+    else await cancelLink(p);
+  }
+  return keep;
+}
+
 // POST /api/crewfit/payments/:id/cancel
 router.post('/:id/cancel', async (req, res) => {
   try {
@@ -357,17 +383,7 @@ router.post('/:id/cancel', async (req, res) => {
     if (!payment) return res.status(404).json({ error: 'Payment not found' });
     if (payment.status === 'Paid') return res.status(400).json({ error: 'This payment is already paid and cannot be cancelled' });
 
-    if (payment.razorpay_payment_link_id) {
-      try { await razorpay.client().paymentLink.cancel(payment.razorpay_payment_link_id); }
-      catch (e) {
-        // Already cancelled/expired at Razorpay is not a failure — fall through and record it.
-        console.warn(`cancel link ${payment.razorpay_payment_link_id}:`, e.error?.description || e.message);
-      }
-    }
-    const upd = await db.query(
-      `UPDATE crewfit_payments SET status = 'Cancelled', cancelled_at = CURRENT_TIMESTAMP,
-       updated_at = CURRENT_TIMESTAMP WHERE id = $1 RETURNING *`, [payment.id]);
-    res.json(upd.rows[0]);
+    res.json(await cancelLink(payment));
   } catch (err) {
     console.error('payment cancel error:', err); res.status(500).json({ error: 'Failed to cancel payment link' });
   }
@@ -391,3 +407,5 @@ module.exports.settlePayment = settlePayment;
 module.exports.syncPayment = syncPayment;
 module.exports.createLink = createLink;
 module.exports.KIND_LABEL = KIND_LABEL;
+module.exports.cancelLink = cancelLink;
+module.exports.currentOpenLink = currentOpenLink;

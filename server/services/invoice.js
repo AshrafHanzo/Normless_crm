@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { chargesOf } = require('./crewfit-charges');
 
 const SELLER = {
   legalName: 'Normless',
@@ -149,6 +150,12 @@ function itemsTable(doc, order, y) {
   if (Number(order.designer_charge)) {
     doc.text('Embroidery Designer Charge', 65, y, { width: 190 });
     doc.text(money(order.designer_charge), 460, y, { width: 95, align: 'right' });
+    y += 16;
+  }
+  // Additional charges (extra printing, rush fee…), each on its own line, before GST like the rest.
+  for (const c of chargesOf(order)) {
+    doc.text(c.label, 65, y, { width: 190 });
+    doc.text(money(c.amount), 460, y, { width: 95, align: 'right' });
     y += 16;
   }
   if (order.shipping) {

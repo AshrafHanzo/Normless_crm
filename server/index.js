@@ -565,6 +565,9 @@ async function ensureCrewfitSchema() {
                 -- nearly every embroidered order, charged on to the customer and taxed with the
                 -- rest of the order, so it is a column rather than a number buried in a note.
                 ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS designer_charge NUMERIC;
+                -- Extra printing, a rush fee, courier, design changes: a JSON list of charges
+                -- taxed with the order. See services/crewfit-charges.js.
+                ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS extra_charges TEXT;
                 ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS gst_amount NUMERIC;
                 ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS grand_total NUMERIC;
                 ALTER TABLE crewfit_orders ADD COLUMN IF NOT EXISTS advance NUMERIC;

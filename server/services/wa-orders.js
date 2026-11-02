@@ -28,6 +28,7 @@ const path = require('path');
 const crypto = require('crypto');
 const db = require('../db/connection');
 const wa = require('./whatsapp');
+const { chargesOf, chargeGross, gstPctOf, advanceLabel } = require('./crewfit-charges');
 
 const safeJson = (v, fallback) => {
     try { return typeof v === 'string' ? (JSON.parse(v || 'null') ?? fallback) : (v || fallback); }
@@ -160,8 +161,9 @@ function summaryText(order, link) {
         L.push('');
     });
     L.push(`📍 *Delivery Address:* ${dash(order.delivery_location)}`, '');
+    L.push(...chargeLines(order));
     L.push(`💵 *Grand Total:* ${inr(order.grand_total)}`);
-    L.push(`💳 *Advance Payable (50%):* ${inr(order.advance)}`);
+    L.push(`💳 *Advance Payable${advanceLabel(order).includes('50%') ? ' (50%)' : ''}:* ${inr(order.advance)}`);
     L.push(`💵 *Balance Payable Before Dispatch:* ${inr(order.balance)}`, '');
     if (link) L.push('Please complete the advance payment using the link below to begin production:', '', `🔗 ${link}`, '');
     L.push('Kindly verify all the above details before making the payment.', '');
@@ -169,8 +171,17 @@ function summaryText(order, link) {
     return L.join('\n');
 }
 
+/** The order's additional charges with their GST on, as message lines, or none. */
+function chargeLines(order) {
+    const list = chargesOf(order);
+    if (!list.length) return [];
+    const pct = gstPctOf(order);
+    return ['*— Additional Charges —*',
+        ...list.map(c => `➕ ${c.label}: ${inr(chargeGross(c.amount, pct))}${pct ? ' (incl. GST)' : ''}`), ''];
+}
+
 function paymentText(order, payment) {
-    const half = payment.kind === 'advance' ? 'advance (50%)' : 'balance';
+    const half = payment.kind === 'advance' ? advanceLabel(order) : 'balance';
     return [
         `Hi ${firstName(order)}! 👋`, '',
         `Here's the secure payment link for the ${half} of your Crewfit order (Ref: ${ref(order)}):`, '',
@@ -193,6 +204,7 @@ function balanceText(order, payment) {
         L.push(`📦 ${dash(it.product)}${it.color ? ` (${it.color})` : ''} × ${dash(it.qty)}`);
     }
     L.push('');
+    L.push(...chargeLines(order));
     L.push(`💵 *Grand Total:* ${inr(grand)}`);
     L.push(`✅ *Advance Already Paid:* ${inr(Math.max(0, grand - balance))}`);
     L.push(`💰 *Balance Payable Now:* ${inr(balance)}`, '');
@@ -245,7 +257,7 @@ const qrText = (order) => {
     const due = dueNow(order);
     return [
         `Hi ${firstName(order)}! 👋`, '',
-        `Scan the QR code above to pay the ${due.kind === 'advance' ? 'advance (50%)' : 'balance'} of *${inr(due.amount)}* for your Crewfit order (Ref: ${ref(order)}).`, '',
+        `Scan the QR code above to pay the ${due.kind === 'advance' ? advanceLabel(order) : 'balance'} of *${inr(due.amount)}* for your Crewfit order (Ref: ${ref(order)}).`, '',
         '📸 Once paid, please share the *payment screenshot* here so we can confirm it.',
         due.kind === 'advance' ? 'Production begins as soon as the payment is confirmed. 🚀' : 'We will dispatch your order once the payment is confirmed. 🚚',
     ].join('\n');
@@ -261,19 +273,21 @@ const photosText = (order) => [
 
 /** The open payment link for one half of an order, made at Razorpay if there is none. */
 async function ensureLink(order, kind, user) {
-    const existing = (await db.query(
-        `SELECT * FROM crewfit_payments WHERE order_id = $1 AND kind = $2 AND status IN ('Created','Paid')
-          ORDER BY id DESC LIMIT 1`, [order.id, kind])).rows[0];
-    if (existing?.status === 'Paid') throw new SendError(`The ${kind} for ${ref(order)} is already paid`);
-    if (existing) return existing;
+    const paid = (await db.query(
+        `SELECT id FROM crewfit_payments WHERE order_id = $1 AND kind = $2 AND status = 'Paid' LIMIT 1`, [order.id, kind])).rows[0];
+    if (paid) throw new SendError(`The ${kind} for ${ref(order)} is already paid`);
 
-    const razorpay = require('../config/razorpay');
-    if (!razorpay.isConfigured) throw new SendError(`Razorpay is not configured, so no ${kind} link can be made`, 503);
     const grand = Number(order.grand_total) || 0;
     if (!grand) throw new SendError(`${ref(order)} has no total yet — add products and save it first`);
     const advance = order.advance != null ? Number(order.advance) : Math.round(grand / 2);
     const balance = order.balance != null ? Number(order.balance) : grand - advance;
-    const { createLink, KIND_LABEL } = require('../routes/crewfit-payments');
+    const { createLink, KIND_LABEL, currentOpenLink } = require('../routes/crewfit-payments');
+    // An added charge moves the amount; a link still asking for the old one is replaced.
+    const existing = await currentOpenLink(order.id, kind, kind === 'advance' ? advance : balance);
+    if (existing) return existing;
+
+    const razorpay = require('../config/razorpay');
+    if (!razorpay.isConfigured) throw new SendError(`Razorpay is not configured, so no ${kind} link can be made`, 503);
     return createLink({
         order_id: order.id, kind,
         customer_name: order.billing_name || order.customer_name,

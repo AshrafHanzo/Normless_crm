@@ -134,6 +134,9 @@ function dirtySnapshot(f) {
   }
 }
 
+// Paid advance on record: charges go on the balance from here on, through the charges routes.
+const advancePaid = (o) => o.id && o.payment_status && o.payment_status !== 'Pending' && o.advance != null
+
 function blankItem() {
   return {
     product: '', color: '', printing_placement: 'Front & Back', printing_type: '', qty: '', unit_price: '', product_total: '', size_breakdown: '',
@@ -155,7 +158,7 @@ export function blankOrder() {
     // it, so it starts filled in rather than being remembered — and it is a field on the form,
     // not a hidden default, so an order without embroidery can be zeroed on sight.
     designer_charge: DEFAULT_DESIGNER_CHARGE,
-    _gstPct: 5, shipping: '', ship_region: 'Tamil Nadu', whatsapp_number: '', line_items: [blankItem()],
+    _gstPct: 5, shipping: '', extra_charges: [], ship_region: 'Tamil Nadu', whatsapp_number: '', line_items: [blankItem()],
   }
 }
 // What the designer is paid to digitise embroidery artwork. A starting figure, not a rule: the
@@ -163,6 +166,18 @@ export function blankOrder() {
 const DEFAULT_DESIGNER_CHARGE = 800
 
 const waSource = (order) => order.whatsapp_number || order.contact_number || order.billing_mobile
+
+// Additional charges: extra printing, a rush fee, courier… Amounts are before GST and take the
+// order's rate. `collect` says which half pays for one. Mirrors server/services/crewfit-charges.js.
+const CHARGE_COLLECT = [
+  { value: 'split', label: 'Split like the order (50 / 50)' },
+  { value: 'advance', label: 'All with the advance' },
+  { value: 'balance', label: 'All with the balance' },
+]
+const CHARGE_PRESETS = ['Extra printing', 'Rush fee', 'Courier', 'Design changes']
+const liveCharges = (f) => (f.extra_charges || []).filter(c => Number(c.amount) > 0)
+const chargeGross = (amount, gstPct) => Number(amount) + Math.round(Number(amount) * (Number(gstPct) || 0) / 100)
+const newChargeId = () => `c${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
 
 // order-level totals: qty & product subtotal are summed straight from the line items as given
 // (each item's own total is maintained by the item handlers, not recalculated here)
@@ -173,12 +188,21 @@ function recompute(f) {
   const ship = Number(f.shipping) || 0
   // Taxed with the goods, like shipping: it is part of the same supply, not a fee beside it.
   const design = Number(f.designer_charge) || 0
+  const charges = liveCharges(f)
+  const extra = charges.reduce((s, c) => s + Number(c.amount), 0)
   const gstPct = f._gstPct ?? 0
-  const gst = Math.round((pt + design + ship) * gstPct / 100)
-  const grand = pt + design + ship + gst
-  const advance = Math.round(grand / 2)
+  const gst = Math.round((pt + design + ship + extra) * gstPct / 100)
+  const grand = pt + design + ship + extra + gst
+  // Once the advance is paid it is fixed; whatever the order gains or loses lands on the balance.
+  if (f._paidAdvance != null) {
+    return { product_total: pt, gst_amount: gst, grand_total: grand, advance: f._paidAdvance, balance: grand - f._paidAdvance, total_cost: grand, qty }
+  }
+  const only = (want) => charges.filter(c => (c.collect || 'split') === want).reduce((s, c) => s + chargeGross(c.amount, gstPct), 0)
+  const advanceOnly = only('advance')
+  const advance = Math.round((grand - advanceOnly - only('balance')) / 2) + advanceOnly
   return { product_total: pt, gst_amount: gst, grand_total: grand, advance, balance: grand - advance, total_cost: grand, qty }
 }
+const isHalf = (f) => Number(f.advance) === Math.round((Number(f.grand_total) || 0) / 2)
 
 const PAYMENT_LINK_PLACEHOLDER = '[PAYMENT LINK]'
 const dash = (v) => (v === undefined || v === null || v === '' ? '—' : v)
@@ -206,10 +230,11 @@ function buildDescription(f) {
   L.push(`🧾 *GST Number:* ${f.gst_number || 'NA'}`, '')
   L.push(`💰 *Product Subtotal:* ₹${f.product_total || 0}`)
   if (Number(f.designer_charge)) L.push(`🧵 *Embroidery Designer Charge:* ₹${f.designer_charge}`)
+  liveCharges(f).forEach(c => L.push(`➕ *${c.label}:* ₹${c.amount}`))
   L.push(`🚚 *Shipping Charges:* ₹${f.shipping || 0}`)
   L.push(`🧾 *GST (${f._gstPct ?? 0}%):* ₹${f.gst_amount || 0}`)
   L.push(`💵 *Grand Total:* ₹${f.grand_total || 0}`, '')
-  L.push(`💳 *Advance Payable (50%):* ₹${f.advance || 0}`)
+  L.push(`💳 *Advance Payable${isHalf(f) ? ' (50%)' : ''}:* ₹${f.advance || 0}`)
   L.push(`💵 *Balance Payable Before Dispatch:* ₹${f.balance || 0}`, '')
   L.push('Please complete the advance payment using the link below to begin production:', '')
   // Once an advance link exists it goes straight into the summary; until then the placeholder
@@ -242,6 +267,12 @@ function buildBalanceMessage(f, payment) {
     L.push(`📏 *Size Breakdown:* ${dash(it.size_breakdown)}`)
     L.push('')
   })
+  const charges = liveCharges(f)
+  if (charges.length) {
+    L.push('*— Additional Charges —*')
+    charges.forEach(c => L.push(`➕ ${c.label}: ₹${chargeGross(c.amount, f._gstPct).toLocaleString('en-IN')}${f._gstPct ? ' (incl. GST)' : ''}`))
+    L.push('')
+  }
   L.push(`💵 *Grand Total:* ₹${grand.toLocaleString('en-IN')}`)
   L.push(`✅ *Advance Already Paid:* ₹${paid.toLocaleString('en-IN')}`)
   L.push(`💰 *Balance Payable Now:* ₹${balance.toLocaleString('en-IN')}`, '')
@@ -256,7 +287,7 @@ function buildBalanceMessage(f, payment) {
 // Short, standalone nudge for one payment link — used when chasing the advance or the
 // balance on its own, rather than resending the whole order summary.
 function buildPaymentMessage(order, payment) {
-  const half = payment.kind === 'advance' ? 'advance (50%)' : payment.kind === 'balance' ? 'balance' : 'payment';
+  const half = payment.kind === 'advance' ? (isHalf(order) ? 'advance (50%)' : 'advance') : payment.kind === 'balance' ? 'balance' : 'payment';
   const L = [`Hi ${order.customer_name || 'there'}! 👋`, '']
   L.push(`Here's the secure payment link for the ${half} of your Crewfit order (Ref: CF-${order.sl_no}):`, '')
   L.push(`💵 *Amount:* ₹${Number(payment.amount).toLocaleString('en-IN')}`)
@@ -530,6 +561,96 @@ function AccordionSections({ children }) {
   )
 }
 
+/**
+ * Additional charges, under Pricing. Until the advance is paid they are part of the form: each
+ * line picks which half pays for it, and they save with the order. After that, earlier charges are
+ * read-only and a new one is added straight onto the balance (and can be taken back until the
+ * balance is paid). Once the order is fully paid the list is final.
+ */
+function ChargesEditor({ form, setF, paid, closed, busy, onAdd, onRemove }) {
+  const [draft, setDraft] = useState({ label: '', amount: '' })
+  const list = form.extra_charges || []
+  const pct = form._gstPct ?? 0
+  const gstOn = (amount) => fmt(chargeGross(amount, pct) - (Number(amount) || 0))
+  const update = (i, patch) => setF({ extra_charges: list.map((c, j) => j === i ? { ...c, ...patch } : c) }, true)
+  const remove = (i) => setF({ extra_charges: list.filter((_, j) => j !== i) }, true)
+  const add = (label = '') => setF({ extra_charges: [...list, { id: newChargeId(), label, amount: '', collect: 'split' }] }, true)
+  const submitPaid = async () => {
+    if (!draft.label.trim() || !(Number(draft.amount) > 0)) return
+    if (await onAdd(draft.label.trim(), Number(draft.amount))) setDraft({ label: '', amount: '' })
+  }
+  const hint = closed ? 'Fully paid — charges are final'
+    : paid ? 'Advance is paid — new charges go on the balance'
+    : 'Before GST · taxed at the order\'s rate'
+
+  return (
+    <>
+      <div className="form-section">Additional charges <span className="unit-hint">{hint}</span>
+        {!paid && <button type="button" className="mini-btn" onClick={() => add()}>+ Add charge</button>}
+      </div>
+
+      {!paid && list.map((c, i) => (
+        <div key={c.id || i} className="form-item-row charge-cols">
+          <div className="form-row">
+            <div className="input-group"><label>Charge *</label>
+              <input required value={c.label || ''} placeholder="e.g. Extra printing — back print" onChange={e => update(i, { label: e.target.value })} />
+            </div>
+            <div className="input-group"><label>Amount (₹) *</label>
+              <input required type="number" min="0" value={c.amount ?? ''} onChange={e => update(i, { amount: e.target.value })} />
+            </div>
+            <div className="input-group"><label>+ GST</label><input readOnly value={gstOn(c.amount)} /></div>
+            <div className="input-group"><label>Collect with</label>
+              <select value={c.collect || 'split'} onChange={e => update(i, { collect: e.target.value })}>
+                {CHARGE_COLLECT.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+            </div>
+          </div>
+          <button type="button" className="btn-icon" aria-label={`Remove ${c.label || 'charge'}`} onClick={() => remove(i)}>✕</button>
+        </div>
+      ))}
+      {!paid && (
+        <div className="charge-presets">
+          <span className="label-hint">Quick add:</span>
+          {CHARGE_PRESETS.map(p => <button key={p} type="button" className="mini-btn" onClick={() => add(p)}>{p}</button>)}
+        </div>
+      )}
+
+      {paid && list.length > 0 && (
+        <div className="charge-list">
+          {list.map(c => (
+            <div key={c.id} className="charge-list-row">
+              <span>{c.label}</span>
+              <span className="label-hint">{c.after_advance ? 'on balance' : CHARGE_COLLECT.find(o => o.value === (c.collect || 'split'))?.label}</span>
+              <strong>{fmt(chargeGross(c.amount, pct))}</strong>
+              {c.after_advance && !closed
+                ? <button type="button" className="btn-icon" aria-label={`Remove ${c.label}`} disabled={busy} onClick={() => onRemove(c)}>✕</button>
+                : <span className="charge-list-spacer" />}
+            </div>
+          ))}
+        </div>
+      )}
+      {paid && !closed && (
+        <div className="form-item-row charge-cols">
+          <div className="form-row">
+            <div className="input-group"><label>Charge</label>
+              <input value={draft.label} placeholder="e.g. Extra printing — back print" onChange={e => setDraft(d => ({ ...d, label: e.target.value }))} />
+            </div>
+            <div className="input-group"><label>Amount (₹)</label>
+              <input type="number" min="0" value={draft.amount} onChange={e => setDraft(d => ({ ...d, amount: e.target.value }))} />
+            </div>
+            <div className="input-group"><label>+ GST</label><input readOnly value={gstOn(draft.amount)} /></div>
+            <div className="input-group"><label>&nbsp;</label>
+              <button type="button" className="btn btn-primary" disabled={busy || !draft.label.trim() || !(Number(draft.amount) > 0)} onClick={submitPaid}>
+                {busy ? 'Adding…' : `Add ${fmt(chargeGross(draft.amount || 0, pct))} to balance`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
+
 export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
   const apiFetch = useApi()
   const { API_URL, user } = useAuth()
@@ -669,6 +790,7 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
 
   const openEdit = (o) => {
     const base = (Number(o.product_total) || 0) + (Number(o.designer_charge) || 0) + (Number(o.shipping) || 0)
+      + liveCharges(o).reduce((s, c) => s + Number(c.amount), 0)
     let items = Array.isArray(o.line_items) && o.line_items.length ? o.line_items : null
     if (!items) {
       // legacy single-product order — synthesize one line item from the flat fields
@@ -688,6 +810,8 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
       ...o,
       _gstPct: o.gst_amount != null && base ? Math.round(o.gst_amount / base * 100) : 5,
       ship_region: o.ship_region || 'Tamil Nadu',
+      extra_charges: o.extra_charges || [],
+      _paidAdvance: advancePaid(o) ? Number(o.advance) : null,
       line_items: items
     })
   }
@@ -980,6 +1104,34 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
 
   // ---- Razorpay payment links -------------------------------------------------
   const paymentFor = (kind) => payments.find(p => p.kind === kind && ['Created', 'Paid'].includes(p.status))
+
+  // After the advance a charge is saved straight away and goes on the balance: the server does the
+  // sums and cancels any balance link still asking for the old amount.
+  const [chargeBusy, setChargeBusy] = useState(false)
+  const applyChargeResult = (res, done) => {
+    if (!res || res.error) { toast.error(res?.error || 'Could not update the charges'); return false }
+    setForm(f => ({
+      ...f, extra_charges: res.extra_charges || [], gst_amount: res.gst_amount, grand_total: res.grand_total,
+      total_cost: res.total_cost, advance: res.advance, balance: res.balance, _paidAdvance: Number(res.advance),
+    }))
+    setServerSync(n => n + 1)
+    loadPayments(form.id)
+    toast.success(done)
+    return true
+  }
+  const addPaidCharge = async (label, amount) => {
+    setChargeBusy(true)
+    const res = await apiFetch(`/api/crewfit/orders/${form.id}/charges`, { method: 'POST', body: JSON.stringify({ label, amount }) })
+    setChargeBusy(false)
+    return applyChargeResult(res, `${label} added — balance is now ${fmt(res?.balance)}`)
+  }
+  const removePaidCharge = async (charge) => {
+    if (!(await toast.confirm({ title: `Remove ${charge.label}?`, message: 'It comes off the balance, and any unpaid balance link is replaced.' }))) return
+    setChargeBusy(true)
+    const res = await apiFetch(`/api/crewfit/orders/${form.id}/charges/${charge.id}`, { method: 'DELETE' })
+    setChargeBusy(false)
+    applyChargeResult(res, `${charge.label} removed`)
+  }
   // Baked into the order summary so the SO shares one message carrying both the
   // confirmation and the link to pay it.
   const advanceLink = () => paymentFor('advance')?.razorpay_short_url
@@ -1096,6 +1248,10 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
     }
     payload.description = buildDescription({ ...payload, _advanceLink: advanceLink() })
     delete payload._gstPct
+    delete payload._paidAdvance
+    payload.extra_charges = liveCharges(payload).filter(c => c.label?.trim())
+    // After the advance the charges routes own the list; the server ignores it here anyway.
+    if (form._paidAdvance != null) delete payload.extra_charges
     const isNew = !form.id
     const res = await apiFetch(`/api/crewfit/orders${isNew ? '' : '/' + form.id}`, { method: isNew ? 'POST' : 'PUT', body: JSON.stringify(payload) })
     if (res && !res.error) {
@@ -1453,9 +1609,13 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
             <div className="input-group"><label>GST *</label><select required value={form._gstPct ?? 0} onChange={e => setF({ _gstPct: Number(e.target.value) }, true)}><option value={0}>No GST</option><option value={5}>5%</option><option value={12}>12%</option><option value={18}>18%</option></select></div>
             <div className="input-group"><label>GST amount</label><input readOnly value={form.gst_amount ?? 0} /></div>
           </div>
+          <ChargesEditor form={form} setF={setF} paid={form._paidAdvance != null}
+            closed={form.payment_status === 'Fully Paid'} busy={chargeBusy}
+            onAdd={addPaidCharge} onRemove={removePaidCharge} />
+
           <div className="totals-bar">
             <div><span>Grand Total</span><strong>{fmt(form.grand_total)}</strong></div>
-            <div><span>Advance (50%)</span><strong style={{ color: 'var(--warning)' }}>{fmt(form.advance)}</strong></div>
+            <div><span>Advance{form._paidAdvance != null ? ' · paid' : isHalf(form) ? ' (50%)' : ''}</span><strong style={{ color: 'var(--warning)' }}>{fmt(form.advance)}</strong></div>
             <div><span>Balance</span><strong style={{ color: 'var(--info)' }}>{fmt(form.balance)}</strong></div>
           </div>
 
@@ -1466,7 +1626,7 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
               </div>
               <div className="invoice-grid">
                 <PaymentCard
-                  title="Advance (50%)" amount={form.advance} payment={paymentFor('advance')}
+                  title={isHalf(form) ? 'Advance (50%)' : 'Advance'} amount={form.advance} payment={paymentFor('advance')}
                   busy={payBusy === 'advance'}
                   onGenerate={() => generatePaymentLink('advance')}
                   onCopy={() => copyPaymentLink(paymentFor('advance'))}
@@ -1474,7 +1634,7 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
                   onCancel={() => cancelPaymentLink(paymentFor('advance'))}
                 />
                 <PaymentCard
-                  title="Balance (50%)" amount={form.balance} payment={paymentFor('balance')}
+                  title={isHalf(form) ? 'Balance (50%)' : 'Balance'} amount={form.balance} payment={paymentFor('balance')}
                   busy={payBusy === 'balance'}
                   disabled={form.payment_status === 'Pending'} disabledLabel="Collect the advance first"
                   onGenerate={() => generatePaymentLink('balance')}

@@ -14,6 +14,7 @@ const { historyForPhone } = require('./crewfit-customers');
 const { validatePhoneFields } = require('../utils/phone');
 const { canViewRevenue, hasPermission } = require('../utils/permissions');
 const { tableParams, sortAndPage, pagination } = require('../utils/table');
+const charges = require('../services/crewfit-charges');
 
 const router = express.Router();
 
@@ -157,7 +158,7 @@ async function applyStock(row) {
   }
 }
 
-const parseOrder = (o) => ({ ...o, deadline_at: toDateStr(o.deadline_at), order_date: toDateStr(o.order_date), dispatch_date: toDateStr(o.dispatch_date), line_items: safeJson(o.line_items, []), invoices: safeJson(o.invoices, []) });
+const parseOrder = (o) => ({ ...o, deadline_at: toDateStr(o.deadline_at), order_date: toDateStr(o.order_date), dispatch_date: toDateStr(o.dispatch_date), line_items: safeJson(o.line_items, []), extra_charges: safeJson(o.extra_charges, []), invoices: safeJson(o.invoices, []) });
 
 async function fetchAll() {
   // The comment count and the newest line come along for the ride: the orders list flags an order
@@ -567,7 +568,10 @@ router.get('/orders/:id', async (req, res) => {
 
 const EXTRA = ['printing', 'printing_type', 'delivery_location', 'billing_name', 'contact_person', 'billing_mobile', 'billing_email',
   'gst_number', 'billing_address', 'unit_price', 'product_total', 'shipping', 'designer_charge', 'gst_amount', 'grand_total', 'advance', 'balance',
-  'line_items', 'whatsapp_number', 'tracking_sent_at', 'photos_sent_at', 'place_of_supply', 'wa_lead_id'];
+  'line_items', 'extra_charges', 'whatsapp_number', 'tracking_sent_at', 'photos_sent_at', 'place_of_supply', 'wa_lead_id'];
+
+// Stored as JSON text.
+const JSON_FIELDS = ['line_items', 'extra_charges'];
 
 // Anything a change to which can move the place of supply.
 const SUPPLY_EVIDENCE = ['gst_number', 'billing_address', 'delivery_location'];
@@ -659,10 +663,17 @@ router.put('/orders/:id', canEditOrders, async (req, res) => {
       body.place_of_supply = pos.state;
     }
 
+    // Once the advance is in, charges are added and removed only through the charges routes
+    // below, which keep the paid advance fixed. The drawer's whole-form save must not rewrite them.
+    if (body.extra_charges !== undefined) {
+      if (current.payment_status && current.payment_status !== 'Pending') delete body.extra_charges;
+      else body.extra_charges = charges.sanitiseCharges(body.extra_charges);
+    }
+
     const fields = Object.keys(body).filter(k => EDITABLE.includes(k));
     if (!fields.length) return res.status(400).json({ error: 'No editable fields provided' });
     const set = fields.map((f, i) => `${f} = $${i + 1}`).join(', ');
-    const vals = fields.map(f => f === 'line_items' ? JSON.stringify(body[f] || []) : (body[f] === '' ? null : body[f]));
+    const vals = fields.map(f => JSON_FIELDS.includes(f) ? JSON.stringify(body[f] || []) : (body[f] === '' ? null : body[f]));
     vals.push(req.params.id);
     // Read the whole row first: `current` above only carries the handful of columns the pipeline
     // rules need, and the history has to diff against what the field actually held.
@@ -670,6 +681,7 @@ router.put('/orders/:id', canEditOrders, async (req, res) => {
     await db.query(`UPDATE crewfit_orders SET ${set}, updated_at = CURRENT_TIMESTAMP WHERE id = $${fields.length + 1}`, vals);
     const r = await db.query('SELECT * FROM crewfit_orders WHERE id = $1', [req.params.id]);
     await recordAudit(r.rows[0], before, r.rows[0], req.user?.username);
+    await dropStaleLinks(before, r.rows[0]);
     const stock = await applyStock(r.rows[0]);
     // Dispatched, production done: the customer may be due a WhatsApp message. Never awaited —
     // a slow or refused send must not hold up saving the order.
@@ -728,6 +740,7 @@ async function createOrder(input, username) {
       body.customer_type = (await historyForPhone(body.contact_number)).customer_type;
     }
     if (body.gst_number !== undefined) body.gst_number = cleanGstin(body.gst_number);
+    if (body.extra_charges !== undefined) body.extra_charges = charges.sanitiseCharges(body.extra_charges);
     const pos = settlePlaceOfSupply(body);
     if (pos.error) throw orderError(pos.error);
     body.place_of_supply = pos.state;
@@ -739,7 +752,7 @@ async function createOrder(input, username) {
     const nextRow = await db.query('SELECT COALESCE(MAX(sl_no), 0) + 1 AS next FROM crewfit_orders');
     const sl_no = nextRow.rows[0].next;
     const allCols = ['sl_no', ...provided];
-    const vals = [sl_no, ...provided.map(c => c === 'line_items' ? JSON.stringify(body[c] || []) : body[c])];
+    const vals = [sl_no, ...provided.map(c => JSON_FIELDS.includes(c) ? JSON.stringify(body[c] || []) : body[c])];
     const ph = allCols.map((_, i) => `$${i + 1}`).join(',');
     const r = await db.query(`INSERT INTO crewfit_orders (${allCols.join(',')}) VALUES (${ph}) RETURNING *`, vals);
     await recordAudit(r.rows[0], null, r.rows[0], username, 'create');
@@ -749,6 +762,106 @@ async function createOrder(input, username) {
     const stock = await applyStock(r.rows[0]);
     return { order: r.rows[0], inventory: stock };
 }
+
+/**
+ * A change to the advance or balance leaves any unpaid link for the old figure behind; cancel it,
+ * so the customer can only pay what is now due. Never fails the save it follows.
+ */
+async function dropStaleLinks(before, after) {
+  try {
+    const { currentOpenLink } = require('./crewfit-payments');
+    for (const kind of ['advance', 'balance']) {
+      if (before && Number(before[kind]) !== Number(after[kind]) && after[kind] != null) {
+        await currentOpenLink(after.id, kind, Number(after[kind]));
+      }
+    }
+  } catch (err) {
+    console.error(`could not refresh payment links for order ${after.id}:`, err.message);
+  }
+}
+
+/**
+ * How much the order's GST moves when its taxable value moves by `delta`. Rounded on the whole
+ * order, as the drawer does, so a later save of the form lands on the same rupee.
+ */
+function gstDelta(order, delta) {
+  const { taxable_value, gst_pct } = orderFigures(order);
+  return Math.round((taxable_value + delta) * gst_pct / 100) - Math.round(taxable_value * gst_pct / 100);
+}
+
+/** Once the advance is in and until the balance is, charges go straight onto the balance. */
+const chargeStage = (order) => {
+  if (order.payment_status === 'Fully Paid') return 'closed';
+  if (!order.payment_status || order.payment_status === 'Pending') return 'open';
+  return 'balance';
+};
+
+/**
+ * POST /api/crewfit/orders/:id/charges — add a charge to an order whose advance is paid.
+ * { label, amount } with amount before GST. The advance stays as paid; the charge and its GST go
+ * on the balance, and any unpaid balance link for the old figure is cancelled.
+ *
+ * Before the advance, charges are part of the order form and saved with it (PUT above).
+ */
+router.post('/orders/:id/charges', canEditOrders, async (req, res) => {
+  try {
+    const before = (await db.query('SELECT * FROM crewfit_orders WHERE id = $1', [req.params.id])).rows[0];
+    if (!before) return res.status(404).json({ error: 'Not found' });
+    const stage = chargeStage(before);
+    if (stage === 'closed') return res.status(400).json({ error: 'This order is fully paid and its tax invoice is final — use a custom payment link for anything extra' });
+    if (stage === 'open') return res.status(400).json({ error: 'The advance is not paid yet — add the charge in the order form instead' });
+
+    const [charge] = charges.sanitiseCharges([{ label: req.body?.label, amount: req.body?.amount, collect: 'balance' }]);
+    if (!charge) return res.status(400).json({ error: 'Give the charge a name and an amount above zero' });
+    Object.assign(charge, { after_advance: true, added_at: new Date().toISOString(), added_by: req.user?.username || null });
+
+    const gst = gstDelta(before, charge.amount);
+    const grand = (Number(before.grand_total) || 0) + charge.amount + gst;
+    const advance = before.advance != null ? Number(before.advance) : Math.round((Number(before.grand_total) || 0) / 2);
+    const list = [...charges.chargesOf(before), charge];
+
+    const r = await db.query(
+      `UPDATE crewfit_orders SET extra_charges = $1, gst_amount = $2, grand_total = $3, total_cost = $3,
+              advance = $4, balance = $5, updated_at = CURRENT_TIMESTAMP WHERE id = $6 RETURNING *`,
+      [JSON.stringify(list), (Number(before.gst_amount) || 0) + gst, grand, advance, grand - advance, before.id]);
+    await recordAudit(r.rows[0], before, r.rows[0], req.user?.username);
+    await dropStaleLinks(before, r.rows[0]);
+    res.status(201).json(parseOrder(r.rows[0]));
+  } catch (err) {
+    console.error('crewfit add charge error:', err); res.status(500).json({ error: 'Failed to add the charge' });
+  }
+});
+
+// DELETE /api/crewfit/orders/:id/charges/:chargeId — take back a charge added after the advance,
+// while the balance is still unpaid. Charges set before the advance were part of what it paid for.
+router.delete('/orders/:id/charges/:chargeId', canEditOrders, async (req, res) => {
+  try {
+    const before = (await db.query('SELECT * FROM crewfit_orders WHERE id = $1', [req.params.id])).rows[0];
+    if (!before) return res.status(404).json({ error: 'Not found' });
+    const list = charges.chargesOf(before);
+    const charge = list.find(c => c.id === req.params.chargeId);
+    if (!charge) return res.status(404).json({ error: 'No such charge on this order' });
+    if (chargeStage(before) !== 'balance' || !charge.after_advance) {
+      return res.status(400).json({ error: chargeStage(before) === 'closed'
+        ? 'This order is fully paid — its charges are final'
+        : 'Only a charge added after the advance can be removed here' });
+    }
+
+    const gst = gstDelta(before, -Number(charge.amount));
+    const grand = (Number(before.grand_total) || 0) - Number(charge.amount) + gst;
+    const advance = Number(before.advance) || 0;
+    const r = await db.query(
+      `UPDATE crewfit_orders SET extra_charges = $1, gst_amount = $2, grand_total = $3, total_cost = $3,
+              balance = $4, updated_at = CURRENT_TIMESTAMP WHERE id = $5 RETURNING *`,
+      [JSON.stringify(list.filter(c => c !== charge)), (Number(before.gst_amount) || 0) + gst,
+        grand, grand - advance, before.id]);
+    await recordAudit(r.rows[0], before, r.rows[0], req.user?.username);
+    await dropStaleLinks(before, r.rows[0]);
+    res.json(parseOrder(r.rows[0]));
+  } catch (err) {
+    console.error('crewfit remove charge error:', err); res.status(500).json({ error: 'Failed to remove the charge' });
+  }
+});
 
 router.post('/orders', canEditOrders, async (req, res) => {
   try {
@@ -853,15 +966,16 @@ router.delete('/orders/:id', ownerOnly, async (req, res) => {
 /**
  * Pre-GST base, tax rate and full-value figures for an order.
  *
- * The designer charge sits inside the taxable value rather than on top of it: it is billed as part
- * of the same supply and carries the same rate as the goods, exactly as shipping does. Keeping it
- * here means the invoice, the GST register and the payment links all agree without any of them
+ * The designer charge and any additional charges sit inside the taxable value rather than on top
+ * of it: they are billed as part of the same supply and carry the same rate as the goods, exactly
+ * as shipping does. Keeping them here means the invoice, the GST register and the payment links all agree without any of them
  * doing their own arithmetic.
  */
 function orderFigures(order) {
   const taxable = (Number(order.product_total) || 0)
     + (Number(order.designer_charge) || 0)
-    + (Number(order.shipping) || 0);
+    + (Number(order.shipping) || 0)
+    + charges.chargesTaxable(order);
   const gstAmount = Number(order.gst_amount) || 0;
   const gross = Number(order.grand_total) || 0;
   const gstPct = taxable > 0 ? Math.round(gstAmount / taxable * 100) : 0;
