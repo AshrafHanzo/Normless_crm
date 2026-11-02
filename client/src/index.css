@@ -3757,13 +3757,10 @@ p.wdb-sub { margin: 0; }
 .wsp { position: relative; min-width: 0; }
 .wsp-block, .wa-status-filter.wsp { display: block; width: 100%; }
 /* The status picker and the sort order, side by side above the chat list. */
-.wa-list-tools { display: flex; gap: 8px; align-items: stretch; flex: none; }
-.wa-read-seg { display: flex; gap: 2px; padding: 2px; border: 1px solid var(--border); border-radius: var(--radius-md); flex: none; }
-.wa-read-seg button { flex: 1; padding: 4px 6px; border: 0; border-radius: calc(var(--radius-md) - 2px); background: transparent; color: var(--text-secondary); font-size: 12px; cursor: pointer; }
-.wa-read-seg button:hover { color: var(--text-primary); }
-.wa-read-seg button[aria-pressed="true"] { background: var(--surface-active); color: var(--text-primary); font-weight: 600; }
-.wa-read-seg button:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--primary-glow); }
-.wa-list-tools .wa-status-filter.wsp { flex: 1; min-width: 0; width: auto; }
+.wa-list-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: stretch; flex: none; }
+/* The status picker on its own line; the two orderings side by side under it. */
+.wa-list-tools .wa-status-filter.wsp { flex: 1 1 100%; min-width: 0; width: auto; }
+.wa-list-tools .wa-sort-btn { flex: 1 1 0; justify-content: center; }
 .wa-sort-btn {
   display: inline-flex; align-items: center; gap: 6px; flex: none; min-height: 36px; padding: 0 12px;
   border-radius: var(--radius-md); border: 1px solid var(--border); background: var(--surface); color: var(--text-secondary);

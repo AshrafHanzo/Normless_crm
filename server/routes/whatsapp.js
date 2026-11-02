@@ -825,6 +825,8 @@ const UNREPLIED = `(SELECT COUNT(*) FROM wa_messages m WHERE m.conversation_id =
 // A backed-up chat that went quiet more than three days ago is a dead lead: no count on it. Every
 // other chat counts until somebody answers.
 const BACKUP_STALE = `(${LAST_MESSAGE('wamid')} LIKE 'import:%' AND ${LAST_MESSAGE('sent_at')} <= LOCALTIMESTAMP - INTERVAL '3 days')`;
+// Crewfit's red badge: the customer's messages waiting for a person (none on a dead backed-up chat).
+const WAITING_COUNT = `(CASE WHEN ${BACKUP_STALE} THEN 0 ELSE ${UNREPLIED} END)`;
 // The name the customer gave on their last Crewfit order — by the order's link to the lead, or the
 // number it was raised against.
 const ORDER_BILLING_NAME = `(SELECT NULLIF(TRIM(o.billing_name), '') FROM crewfit_orders o
@@ -844,7 +846,7 @@ const LIST_FIELDS = `c.id, c.status, c.mode, c.assigned_to, c.unread_count, c.la
                      k.phone, k.profile_name, k.lead_id, k.customer_id, k.avatar_url,
                      l.name AS lead_name, l.company AS lead_company, l.status AS lead_status,
                      NULLIF(TRIM(l.billing_name), '') AS lead_billing_name, ${ORDER_BILLING_NAME} AS order_billing_name,
-                     CASE WHEN ${BACKUP_STALE} THEN 0 ELSE ${UNREPLIED} END AS unreplied,
+                     ${WAITING_COUNT} AS unreplied,
                      ${BACKUP_WAITING} AS backup_waiting,
                      l.product_interest, l.quantity,
                      NULLIF(TRIM(CONCAT(cu.first_name, ' ', cu.last_name)), '') AS customer_name,
@@ -985,11 +987,6 @@ router.get('/conversations', async (req, res) => {
             params.push(String(req.query.status || 'open'));
             where.push(`c.status = $${params.length}`);
         }
-        // Not replied: the customer wrote since a person last answered — the same count as the
-        // chat's red badge, so a chat stays here until somebody from the team replies (or marks
-        // "No reply needed"). Replied: the rest.
-        if (req.query.replied === 'no') where.push(`(CASE WHEN ${BACKUP_STALE} THEN 0 ELSE ${UNREPLIED} END) > 0`);
-        else if (req.query.replied === 'yes') where.push(`(CASE WHEN ${BACKUP_STALE} THEN 0 ELSE ${UNREPLIED} END) = 0`);
         const leadStatus = trim(req.query.lead_status);
         if (leadStatus) {
             params.push(leadStatus);
@@ -1023,6 +1020,9 @@ router.get('/conversations', async (req, res) => {
         // either way, chats with no messages come last.
         const oldest = req.query.sort === 'oldest';
         const past = oldest ? '>' : '<';
+        // Crewfit, "Not replied first": chats with a red badge on top, each group in that order.
+        const waitingFirst = req.waLine.brand === 'crewfit' && req.query.first === 'waiting';
+        const flag = `(CASE WHEN ${WAITING_COUNT} > 0 THEN 1 ELSE 0 END)`;
         // The next page starts after the last chat of the one before. The time travels as text so
         // no time zone touches it.
         const beforeId = parseInt(req.query.before_id, 10);
@@ -1031,22 +1031,30 @@ router.get('/conversations', async (req, res) => {
             const beforeAt = trim(req.query.before_at);
             params.push(beforeId);
             const id = `$${params.length}`;
+            let after;
             if (beforeAt) {
                 params.push(beforeAt);
                 const at = `$${params.length}::timestamp`;
-                where.push(`(c.last_message_at ${past} ${at} OR (c.last_message_at = ${at} AND c.id ${past} ${id}) OR c.last_message_at IS NULL)`);
+                after = `(c.last_message_at ${past} ${at} OR (c.last_message_at = ${at} AND c.id ${past} ${id}) OR c.last_message_at IS NULL)`;
             } else {
-                where.push(`(c.last_message_at IS NULL AND c.id ${past} ${id})`);
+                after = `(c.last_message_at IS NULL AND c.id ${past} ${id})`;
             }
+            if (waitingFirst) {
+                params.push(Number(req.query.before_flag) ? 1 : 0);
+                const f = `$${params.length}`;
+                after = `(${flag} < ${f} OR (${flag} = ${f} AND ${after}))`;
+            }
+            where.push(after);
         }
         const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 60, 1), 200);
         const rows = await db.query(
             `SELECT ${LIST_FIELDS}, c.last_message_at::text AS page_at ${LIST_FROM}
               WHERE ${where.join(' AND ')}
-              ORDER BY c.last_message_at ${oldest ? 'ASC' : 'DESC'} NULLS LAST, c.id ${oldest ? 'ASC' : 'DESC'}
+              ORDER BY ${waitingFirst ? `${flag} DESC, ` : ''}c.last_message_at ${oldest ? 'ASC' : 'DESC'} NULLS LAST, c.id ${oldest ? 'ASC' : 'DESC'}
               LIMIT ${limit}`, params);
         const lastRow = rows.rows[rows.rows.length - 1];
-        const next = rows.rows.length === limit ? { before_at: lastRow.page_at || '', before_id: lastRow.id } : null;
+        const next = rows.rows.length === limit
+            ? { before_at: lastRow.page_at || '', before_id: lastRow.id, ...(waitingFirst ? { before_flag: lastRow.unreplied > 0 ? 1 : 0 } : {}) } : null;
         const muted = await mutedFor(req, rows.rows.map(r => r.id));
         const shaped = rows.rows.map(({ page_at, ...r }) => ({ ...shapeConversation(r), muted: muted.has(r.id) }));
         // A further page is only more chats: the counts came with the first.
@@ -1076,6 +1084,24 @@ router.get('/conversations', async (req, res) => {
                     COUNT(*) FILTER (WHERE c.status = 'closed')::int AS closed
                ${LIST_FROM} WHERE ${vis}`, tallyParams);
 
+        // Crewfit: how many chats wait for a reply behind each chip — the red badge, which stays
+        // until a person answers (opening a chat does not clear it). Muted chats left out.
+        let waiting = {};
+        if (req.waLine.brand === 'crewfit') {
+            const wp = [];
+            const wv = `${visibility(req, wp)} AND ${lastMessageRange(req, wp)}`;
+            wp.push(String(req.user?.username || '').toLowerCase());
+            const wme = `$${wp.length}`;
+            waiting = (await db.query(
+                `SELECT COUNT(*) FILTER (WHERE x.w > 0)::int AS waiting_all,
+                        COUNT(*) FILTER (WHERE x.w > 0 AND x.assigned_to IS NULL AND x.wrote)::int AS waiting_unassigned,
+                        COUNT(*) FILTER (WHERE x.w > 0 AND LOWER(COALESCE(x.assigned_to, '')) = ${wme})::int AS waiting_mine
+                   FROM (SELECT c.assigned_to, ${CUSTOMER_WROTE} AS wrote, ${WAITING_COUNT} AS w ${LIST_FROM}
+                          WHERE ${wv} AND c.status = 'open'
+                            AND NOT EXISTS (SELECT 1 FROM wa_conversation_mutes mu WHERE mu.conversation_id = c.id AND mu.username = ${wme})) x`,
+                wp)).rows[0];
+        }
+
         // How many chats are at each lead status (Crewfit), over everything this person can see.
         const statusParams = [];
         const statusVis = `${visibility(req, statusParams)} AND ${lastMessageRange(req, statusParams)}`;
@@ -1084,7 +1110,7 @@ router.get('/conversations', async (req, res) => {
         res.json({
             conversations: shaped,
             next,
-            tally: { ...tally.rows[0], unread: Number(tally.rows[0].unread) || 0 },
+            tally: { ...tally.rows[0], ...waiting, unread: Number(tally.rows[0].unread) || 0 },
             statusCounts: Object.fromEntries(byStatus.map(x => [x.status, x.n])),
         });
     } catch (err) {

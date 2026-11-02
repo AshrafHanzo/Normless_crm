@@ -23,9 +23,9 @@ import { WaText, Ticks, BubbleButtons } from './WaBubble'
 // Crewfit's queues, in the order a salesperson works them. `hint` says what each one is.
 const FILTERS = [
   { key: 'waiting', label: 'Reply now', hot: true, hint: 'Customers waiting for a reply — your chats and new ones nobody has taken yet. Work this list first, oldest at the bottom.' },
-  { key: 'mine', label: 'My chats', badge: 'unread_mine', hint: 'Every open chat assigned to you, newest first.' },
-  { key: 'unassigned', label: 'New leads', badge: 'unread_unassigned', hint: 'Chats nobody has taken yet. Open one and reply — it becomes yours.' },
-  { key: 'all', label: 'All chats', badge: 'unread', hint: 'Every open chat, whoever has it.' },
+  { key: 'mine', label: 'My chats', badge: 'waiting_mine', hint: 'Every open chat assigned to you, newest first.' },
+  { key: 'unassigned', label: 'New leads', badge: 'waiting_unassigned', hint: 'Chats nobody has taken yet. Open one and reply — it becomes yours.' },
+  { key: 'all', label: 'All chats', badge: 'waiting_all', hint: 'Every open chat, whoever has it.' },
 ]
 
 // Normless's queues, as the design lays them out: who needs a person first.
@@ -325,13 +325,14 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
   // Remembered per browser.
   const sortKey = `wa-sort-${brandKey}`
   const [sort, setSort] = useState(() => { try { return localStorage.getItem(sortKey) === 'oldest' ? 'oldest' : 'newest' } catch { return 'newest' } })
-  // Crewfit: not replied / replied / both, by the chat's red badge; remembered like the sort.
-  const repliedKey = `wa-replied-${brandKey}`
-  const [repliedFilter, setRepliedFilter] = useState(() => { try { return ['no', 'yes'].includes(localStorage.getItem(repliedKey)) ? localStorage.getItem(repliedKey) : '' } catch { return '' } })
-  const pickReplied = (v) => {
-    setRepliedFilter(v)
-    try { localStorage.setItem(repliedKey, v) } catch { /* private window: just not remembered */ }
-  }
+  // Crewfit: chats with a red badge (not replied yet) on top, the rest below; remembered like the sort.
+  const waitingKey = `wa-waiting-first-${brandKey}`
+  const [waitingFirst, setWaitingFirst] = useState(() => { try { return localStorage.getItem(waitingKey) === '1' } catch { return false } })
+  const flipWaitingFirst = () => setWaitingFirst(v => {
+    try { localStorage.setItem(waitingKey, v ? '0' : '1') } catch { /* private window: just not remembered */ }
+    return !v
+  })
+  const onTop = cf && waitingFirst
   const flipSort = () => setSort(s => {
     const next = s === 'oldest' ? 'newest' : 'oldest'
     try { localStorage.setItem(sortKey, next) } catch { /* private window: just not remembered */ }
@@ -458,7 +459,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
     if (term) qs.set('search', term)
     if (statusFilter) qs.set('lead_status', statusFilter)
     if (sort === 'oldest') qs.set('sort', 'oldest')
-    if (cf && repliedFilter) qs.set('replied', repliedFilter)
+    if (onTop) qs.set('first', 'waiting')
     if (range.from) qs.set('from', range.from)
     if (range.to) qs.set('to', range.to)
     return qs
@@ -483,7 +484,9 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
         // The first page, refreshed, then the older chats already loaded below it.
         const ids = new Set(head.map(c => c.id))
         const last = head[head.length - 1]
-        const further = (c) => (sort === 'oldest' ? olderThan(last, c) : olderThan(c, last))
+        const byTime = (c) => (sort === 'oldest' ? olderThan(last, c) : olderThan(c, last))
+        // With "Not replied first", a waiting chat comes before every answered one.
+        const further = (c) => (!onTop || (c.unreplied > 0) === (last.unreplied > 0) ? byTime(c) : last.unreplied > 0)
         setConversations(prev => [...head, ...prev.filter(c => !ids.has(c.id) && (!last || further(c)))])
       }
       setTally(r.tally || { open: 0, unassigned: 0, unread: 0 })
@@ -501,6 +504,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
     const qs = listQuery()
     qs.set('before_id', String(nextPage.before_id))
     qs.set('before_at', nextPage.before_at || '')
+    if (nextPage.before_flag != null) qs.set('before_flag', String(nextPage.before_flag))
     const key = listQuery().toString()
     const r = await apiFetch(`${API}/conversations?${qs}`)
     if (r && !r.error && listKey.current === key) {
@@ -521,7 +525,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
     setLoading(true)
     loadConversations()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filter, term, statusFilter, sort, range, repliedFilter])
+  }, [filter, term, statusFilter, sort, range, waitingFirst])
 
   // The open chat's row, kept in step with the chat itself. A refresh re-reads only the first page,
   // so a chat further down (scrolled to) would show its old status until a reload; with a status
@@ -1482,9 +1486,10 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                 className={`chip${filter === f.key ? ' chip-on' : ''}`} title={f.hint}
                 onClick={() => setFilter(f.key)}>{f.label}
                 {!cf && f.key !== 'all' && <span className={`wa-q-count${f.hot && tally[f.key] ? ' hot' : ''}`}>{tally[f.key] ?? 0}</span>}
-                {/* Crewfit: chats waiting for somebody, and unread customer messages behind each chip. */}
+                {/* Crewfit: chats waiting for a reply behind each chip — the red badge, which stays
+                    until somebody from the team answers. */}
                 {cf && f.key === 'waiting' && <span className={`wa-q-count${tally.waiting ? ' hot' : ''}`} title="Customers waiting for a reply">{tally.waiting ?? 0}</span>}
-                {cf && f.badge && tally[f.badge] > 0 && <span className="wa-q-count wa-q-unread" title="Unread messages from customers">{tally[f.badge]}</span>}
+                {cf && f.badge && tally[f.badge] > 0 && <span className="wa-q-count wa-q-unread" title="Chats waiting for a reply from the team">{tally[f.badge]}</span>}
               </button>
             ))}
           </div>
@@ -1498,16 +1503,13 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
               title={sort === 'oldest' ? 'Oldest chats first — press for newest first' : 'Newest chats first — press for oldest first'}>
               <Icon name="sort" size={13} /> {sort === 'oldest' ? 'Oldest first' : 'Newest first'}
             </button>
+            {cf && (
+              <button type="button" className="wa-sort-btn" onClick={flipWaitingFirst} aria-pressed={waitingFirst}
+                title={waitingFirst ? 'Chats waiting for a reply are on top — press to list everything by time' : 'Put chats waiting for a reply (red badge) on top'}>
+                <Icon name="sort" size={13} /> Not replied first
+              </button>
+            )}
           </div>
-          {cf && (
-            <div className="wa-read-seg" role="group" aria-label="Replied or not">
-              {[['', 'All'], ['no', 'Not replied'], ['yes', 'Replied']].map(([v, label]) => (
-                <button key={v || 'all'} type="button" aria-pressed={repliedFilter === v} onClick={() => pickReplied(v)}
-                  title={v === 'no' ? 'The customer wrote and nobody from the team has answered yet — the chats with a red badge'
-                    : v === 'yes' ? 'Chats the team has answered' : 'Replied and not replied'}>{label}</button>
-              ))}
-            </div>
-          )}
 
           {loading ? (
             <div className="loader"><div className="spinner" /></div>
