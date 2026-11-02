@@ -283,6 +283,11 @@ async function receiveMessage(message, profileName) {
         return;
     }
 
+    // Mockups waiting for the customer to write (sent past the 24-hour window) go now.
+    try {
+        if (await require('../services/cf-mockup').sendPending(conversation.id, interactivePayload(message)?.id)) return;
+    } catch (err) { console.error('crewfit pending mockups error:', err.message); }
+
     // ✅ Confirm mockup / ✏️ Need changes, from the approval message or its template.
     try {
         if (await require('../services/cf-mockup').onReply(conversation.id, interactivePayload(message)?.id)) return;
@@ -2567,7 +2572,7 @@ const mockUpload = multer({
 });
 
 const mockupRows = async (conversationId) => (await db.query(
-    `SELECT id, url, file_name, mime, uploaded_by, sent_at, sent_by, created_at FROM wa_mockups
+    `SELECT id, url, file_name, mime, uploaded_by, sent_at, sent_by, pending_at, created_at FROM wa_mockups
       WHERE conversation_id = $1 ORDER BY id`, [conversationId])).rows;
 
 router.get('/conversations/:id/mockups', async (req, res) => {
@@ -2634,42 +2639,26 @@ router.post('/conversations/:id/mockups/send', async (req, res) => {
         if (!rows.length) return res.status(400).json({ error: 'Upload a mockup first' });
         const mockup = require('../services/cf-mockup');
 
-        // Past the 24-hour window only a template can go: the approved crewfit_mockup_confirm, with
-        // the first mockup as its picture and the Confirm / Need changes buttons.
+        // Past the 24-hour window: a template asks the customer to reply, and the mockups go the
+        // moment they do (cf-mockup).
         if (!wa.windowOpen(conversation.last_inbound_at)) {
             try {
-                await mockup.askForApproval(conversation, { mockupUrl: rows[0].url, user: req.user?.username });
+                await mockup.askToReply(conversation, rows, { user: req.user?.username });
             } catch (err) {
-                if (err instanceof wa.WhatsAppError) return res.status(502).json({ error: `${err.message} — the “${mockup.TEMPLATE}” template has to be approved by Meta first.` });
+                if (err.status === 409) return res.status(409).json({ error: err.message, window_closed: true });
+                if (err instanceof wa.WhatsAppError) return res.status(502).json({ error: err.message });
                 throw err;
             }
-            await db.query('UPDATE wa_mockups SET sent_at = CURRENT_TIMESTAMP, sent_by = $2 WHERE id = $1', [rows[0].id, req.user?.username || null]);
-            await orders.logActivity({ conversationId: conversation.id, kind: 'message', actor: req.user?.username,
-                body: 'Sent the mockup for approval with the template (outside the 24-hour window)', detail: 'mockups' });
-            return res.status(201).json({ messages: [], mockups: await mockupRows(conversation.id) });
+            return res.status(201).json({ messages: [], mockups: await mockupRows(conversation.id), waiting: true });
         }
 
-        const first = String(conversation.lead_name || conversation.profile_name || '').trim().split(/\s+/)[0] || 'there';
-        const ask = `Hi ${first}! 🎨 Here is the design mockup for your order.`;
-        const sent = [];
+        let sent;
         try {
-            for (const [i, m] of rows.entries()) {
-                const file = path.join(MOCK_DIR, path.basename(m.url));
-                const caption = i === rows.length - 1 ? ask : '';
-                const out = await wa.sendMedia(conversation.phone, { filePath: file, mime: m.mime || 'image/jpeg', filename: m.file_name || path.basename(file), caption });
-                sent.push((await db.query(
-                    `INSERT INTO wa_messages (conversation_id, wamid, direction, sender_type, sender_user, type, body, media_url, media_mime, media_name, status)
-                     VALUES ($1,$2,'out','user',$3,$4,$5,$6,$7,$8,'sent')
-                     RETURNING id, wamid, direction, sender_type, sender_user, type, body, media_url, media_mime, media_name, status, error, sent_at`,
-                    [conversation.id, out.wamid, req.user?.username || null, out.kind, caption || null, m.url, m.mime, m.file_name])).rows[0]);
-                await db.query('UPDATE wa_mockups SET sent_at = CURRENT_TIMESTAMP, sent_by = $2 WHERE id = $1', [m.id, req.user?.username || null]);
-            }
+            sent = await mockup.sendMockups(conversation, rows, { user: req.user?.username });
         } catch (err) {
-            if (err instanceof wa.WhatsAppError) return res.status(502).json({ error: err.message, messages: sent });
+            if (err instanceof wa.WhatsAppError) return res.status(502).json({ error: err.message });
             throw err;
         }
-        // Then the question with the ✅ Confirm / ✏️ Need changes buttons; Confirm raises the order.
-        await mockup.askForApproval(conversation, { user: req.user?.username });
         await orders.logActivity({ conversationId: conversation.id, kind: 'message', actor: req.user?.username,
             body: `Sent ${rows.length} mockup${rows.length > 1 ? 's' : ''} for approval`, detail: 'mockups' });
         res.status(201).json({ messages: sent, mockups: await mockupRows(conversation.id) });

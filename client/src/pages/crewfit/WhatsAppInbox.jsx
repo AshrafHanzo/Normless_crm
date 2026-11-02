@@ -204,6 +204,9 @@ const orderPlacement = (v) => {
   if (/back/.test(t)) return 'Back'
   return 'Front'
 }
+// What a chat's row in the list shows that can change while the chat is open.
+const ROW_FIELDS = ['lead_status', 'assigned_to', 'mode', 'bot_on', 'bot_answers', 'status', 'display_name', 'lead_name',
+  'lead_company', 'product_interest', 'quantity']
 const plainQty = (q) => (/^\s*\d+\s*(pcs|pieces|nos)?\s*$/i.test(String(q || '')) ? parseInt(q, 10) : '')
 
 /**
@@ -512,6 +515,24 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filter, term, statusFilter, sort, range])
 
+  // The open chat's row, kept in step with the chat itself. A refresh re-reads only the first page,
+  // so a chat further down (scrolled to) would show its old status until a reload; with a status
+  // filter on, a chat that no longer matches it leaves the list.
+  useEffect(() => {
+    if (!thread?.id) return
+    setConversations(list => {
+      const at = list.findIndex(c => c.id === thread.id)
+      if (at < 0) return list
+      if (statusFilter && thread.lead_status !== statusFilter) return list.filter(c => c.id !== thread.id)
+      const row = list[at]
+      if (ROW_FIELDS.every(k => (row[k] ?? null) === (thread[k] ?? null))) return list
+      const next = [...list]
+      next[at] = { ...row, ...Object.fromEntries(ROW_FIELDS.map(k => [k, thread[k] ?? null])) }
+      return next
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [thread])
+
   /* ── One conversation ────────────────────────────────────────────────────────────────── */
 
   const showThread = (t) => {
@@ -587,10 +608,14 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
       confirmLabel: 'Send again',
     })) return
     await track({
-      label: `🎨 ${chosen.length} mockup${chosen.length > 1 ? 's' : ''} for approval`, retryKey: 'mockups',
+      label: thread.window_open ? `🎨 ${chosen.length} mockup${chosen.length > 1 ? 's' : ''} for approval` : '🎨 Mockup ready — asking the customer to reply', retryKey: 'mockups',
       stages: [[0, 'Uploading the mockup…'], [3000, 'Sending to WhatsApp…']],
       run: () => apiFetch(`${API}/conversations/${thread.id}/mockups/send`, { method: 'POST', body: JSON.stringify({ ids: chosen.map(m => m.id) }) }),
-      onDone: (r) => { for (const m of r.messages || []) appendSent(m); setMockups(r.mockups); setMockPick([]); loadActivity() },
+      onDone: (r) => {
+        for (const m of r.messages || []) appendSent(m)
+        setMockups(r.mockups); setMockPick([]); loadActivity()
+        if (r.waiting) { toast.success('The customer was told the mockup is ready — it goes to them the moment they reply'); poll.current() }
+      },
     })
   }
 
@@ -2321,17 +2346,18 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                                   onChange={e => setMockPick(p => (e.target.checked ? [...p, m.id] : p.filter(x => x !== m.id)))} />
                                 {/^image\//.test(m.mime || '') ? <img src={fileUrl(m.url)} alt={m.file_name || 'Mockup'} /> : <span className="wa-doc-icon wa-doc-pdf">PDF</span>}
                               </label>
-                              <span className="wa-mock-meta">{m.sent_at ? `Sent ${day(m.sent_at)}` : 'Not sent yet'}</span>
+                              <span className="wa-mock-meta">{m.pending_at ? 'Goes when the customer replies' : m.sent_at ? `Sent ${day(m.sent_at)}` : 'Not sent yet'}</span>
                               <button type="button" className="btn-icon wa-mock-x" aria-label={`Remove ${m.file_name || 'mockup'}`} onClick={() => removeMockup(m)}>
                                 <Icon name="close" size={12} />
                               </button>
                             </div>
                           ))}
                         </div>
-                        <button type="button" className="btn btn-primary btn-sm wa-mock-send" disabled={!mockPick.length || !thread.window_open || busyWith('mockups')}
-                          title={thread.window_open ? '' : 'The chat is past the 24-hour window — the customer has to write first'}
+                        <button type="button" className="btn btn-primary btn-sm wa-mock-send" disabled={!mockPick.length || busyWith('mockups')}
+                          title={thread.window_open ? '' : 'The chat is past the 24-hour window: a template tells the customer the mockup is ready, and the mockups go the moment they reply'}
                           onClick={sendMockups}>
-                          {busyWith('mockups') ? 'Sending…' : `Send ${mockPick.length || ''} to customer for approval`}
+                          {busyWith('mockups') ? 'Sending…' : thread.window_open ? `Send ${mockPick.length || ''} to customer for approval`
+                            : `Ask customer to reply, then send ${mockPick.length || ''}`}
                         </button>
                       </>
                     )}

@@ -129,30 +129,12 @@ async function sendPermissionRequest(phone, text) {
  */
 async function callTemplate({ create = false } = {}) {
     const line = lines.current();
-    const name = `${line.brand}_call_request`;
-    const found = await call(() => graph(`/${wa.wabaId()}/message_templates?name=${name}&fields=name,status,language`));
-    const t = (found?.data || []).find(x => x.name === name);
-    if (t) {
-        await db.query(`UPDATE wa_templates SET status = $3, synced_at = CURRENT_TIMESTAMP WHERE line_id = $1 AND name = $2`, [line.id, name, t.status]);
-        return { name, language: t.language, status: t.status, created: false };
-    }
-    if (!create) return null;
     const shop = line.brand === 'crewfit' ? 'Crewfit' : 'Normless';
     const body = `Hi {{1}}, this is ${shop}. We would like to give you a quick WhatsApp call about your enquiry. Please tap Allow below and we will call you shortly.`;
-    const made = await call(() => graph(`/${wa.wabaId()}/message_templates`, {
-        method: 'POST',
-        body: {
-            name, language: 'en', category: 'UTILITY',
-            components: [{ type: 'BODY', text: body, example: { body_text: [['Rahul']] } }, { type: 'call_permission_request' }],
-        },
+    return call(() => require('./wa-own-template').ensure({
+        name: `${line.brand}_call_request`, body, create, graph,
+        components: [{ type: 'BODY', text: body, example: { body_text: [['Rahul']] } }, { type: 'call_permission_request' }],
     }));
-    // Listed with the other templates, so Settings › Templates shows where it stands.
-    await db.query(
-        `INSERT INTO wa_templates (name, language, category, status, body_text, variables, synced_at, line_id, meta_id)
-         VALUES ($1,'en','UTILITY',$2,$3,1,CURRENT_TIMESTAMP,$4,$5)
-         ON CONFLICT (line_id, name, language) DO UPDATE SET status = EXCLUDED.status, meta_id = EXCLUDED.meta_id, synced_at = CURRENT_TIMESTAMP`,
-        [name, made?.status || 'PENDING', body, line.id, made?.id || null]);
-    return { name, language: 'en', status: made?.status || 'PENDING', created: true };
 }
 
 const action = (body) => call(() => graph(`/${wa.phoneNumberId()}/calls`, {

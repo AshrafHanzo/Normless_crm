@@ -1027,6 +1027,9 @@ async function ensureCrewfitSchema() {
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             CREATE INDEX IF NOT EXISTS wa_mockups_thread_idx ON wa_mockups (conversation_id, id);
+            -- Past the 24-hour window the customer is asked to reply first; these wait for it.
+            ALTER TABLE wa_mockups ADD COLUMN IF NOT EXISTS pending_at TIMESTAMP;
+            ALTER TABLE wa_mockups ADD COLUMN IF NOT EXISTS pending_by TEXT;
             -- The chat a quote was built in, so the inbox lists it beside the orders.
             ALTER TABLE crewfit_quotes ADD COLUMN IF NOT EXISTS wa_lead_id INTEGER;
             -- Which order message an activity line records, so the inbox can say "already sent".

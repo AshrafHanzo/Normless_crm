@@ -22,6 +22,13 @@ const rules = require('./cf-lead-rules');
 const CONFIRM = 'mock_ok';
 const CHANGES = 'mock_change';
 const TEMPLATE = 'crewfit_mockup_confirm';
+// Past the 24-hour window: "your mockup is ready — tap or reply and we'll send it". Its button
+// sends this back; any reply does the same.
+const READY_TEMPLATE = 'crewfit_mockup_ready_reply';
+const SEND_PENDING = 'mock_send';
+// How long mockups waiting for the customer's reply still go out when they write.
+const PENDING_DAYS = 14;
+const MOCK_DIR = require('path').join(__dirname, '..', 'uploads', 'whatsapp', 'mockups');
 const GST_PCT = 5;
 const DIGITISING = 800;
 const PUBLIC_BASE = () => (process.env.PUBLIC_BASE_URL || 'https://ops.normless.store').replace(/\/+$/, '');
@@ -230,4 +237,87 @@ async function detailsReceived(leadId, conversationId, { told = false } = {}) {
     await note(conv.id, 'Told the customer their details are with the design team');
 }
 
-module.exports = { askForApproval, onReply, orderFromLead, unitPrice, detailsReceived, CONFIRM, CHANGES, TEMPLATE };
+/* ── Sending the mockups ─────────────────────────────────────────────────────────────────── */
+
+/**
+ * The mockup pictures, then the question with ✅ Confirm / ✏️ Need changes. Inside the window only.
+ * `rows` are wa_mockups rows; `user` is who sends them (the designer). Returns the messages.
+ */
+async function sendMockups(conversation, rows, { user = null } = {}) {
+    const first = String(conversation.lead_name || conversation.profile_name || '').trim().split(/\s+/)[0] || 'there';
+    const ask = `Hi ${first}! 🎨 Here is the design mockup for your order.`;
+    const sent = [];
+    for (const [i, m] of rows.entries()) {
+        const file = require('path').join(MOCK_DIR, require('path').basename(m.url));
+        const caption = i === rows.length - 1 ? ask : '';
+        const out = await wa.sendMedia(conversation.phone, { filePath: file, mime: m.mime || 'image/jpeg', filename: m.file_name || require('path').basename(file), caption });
+        sent.push((await db.query(
+            `INSERT INTO wa_messages (conversation_id, wamid, direction, sender_type, sender_user, type, body, media_url, media_mime, media_name, status)
+             VALUES ($1,$2,'out','user',$3,$4,$5,$6,$7,$8,'sent')
+             RETURNING id, wamid, direction, sender_type, sender_user, type, body, media_url, media_mime, media_name, status, error, sent_at`,
+            [conversation.id, out.wamid, user, out.kind, caption || null, m.url, m.mime, m.file_name])).rows[0]);
+        await db.query('UPDATE wa_mockups SET sent_at = CURRENT_TIMESTAMP, sent_by = $2, pending_at = NULL WHERE id = $1', [m.id, user]);
+    }
+    await askForApproval(conversation, { user });
+    return sent;
+}
+
+/** The "mockup is ready" template, submitted to Meta the first time it is needed. */
+function readyTemplate({ create = false } = {}) {
+    const body = 'Hi {{1}}, the design mockup for your Crewfit order is ready 🎨 Tap the button below or reply Hi, and we will send you the mockup images right away.';
+    return require('./wa-own-template').ensure({
+        name: READY_TEMPLATE, body, create,
+        components: [
+            { type: 'BODY', text: body, example: { body_text: [['Rahul']] } },
+            { type: 'BUTTONS', buttons: [{ type: 'QUICK_REPLY', text: 'Send my mockup' }] },
+        ],
+    });
+}
+
+/**
+ * Past the window: the template that asks the customer to reply, and the mockups kept waiting —
+ * they go the moment the customer writes (sendPending). Throws { status: 409 } with what to do
+ * while Meta has not approved the template yet.
+ */
+async function askToReply(conversation, rows, { user = null } = {}) {
+    const t = await readyTemplate({ create: true });
+    if (t.status !== 'APPROVED') {
+        throw Object.assign(new Error(t.created
+            ? 'The chat is past the 24-hour window, so the mockup needs the “mockup is ready” template. It has just been sent to Meta for approval (usually a few minutes) — send again once it is approved.'
+            : `The chat is past the 24-hour window, and the “mockup is ready” template (${t.name}) is ${String(t.status).toLowerCase()} at Meta. Send again once Meta approves it.`), { status: 409 });
+    }
+    const first = String(conversation.lead_name || conversation.profile_name || 'there').trim().split(/\s+/)[0];
+    const wamid = await wa.sendTemplate(conversation.phone, {
+        name: t.name, language: t.language, variables: [first], buttons: [{ index: 0, payload: SEND_PENDING }],
+    });
+    await record(conversation.id, { wamid, type: 'template', user,
+        body: `Hi ${first}, the design mockup for your Crewfit order is ready 🎨 Tap the button below or reply Hi, and we will send you the mockup images right away.` });
+    await db.query(`UPDATE wa_mockups SET pending_at = CURRENT_TIMESTAMP, pending_by = $2 WHERE id = ANY($1::int[])`, [rows.map(r => r.id), user]);
+    await note(conversation.id, `Mockup ready — asked the customer to reply (template); ${rows.length} mockup${rows.length > 1 ? 's' : ''} go out when they do`);
+}
+
+/**
+ * The customer wrote (or tapped "Send my mockup"): mockups waiting for that go out now, from the
+ * designer who sent them. True when it dealt with the message — then nothing else answers it.
+ */
+async function sendPending(conversationId, tapped = null) {
+    const rows = (await db.query(
+        `SELECT id, url, file_name, mime, pending_by FROM wa_mockups
+          WHERE conversation_id = $1 AND pending_at > NOW() - make_interval(days => $2) ORDER BY id`, [conversationId, PENDING_DAYS])).rows;
+    if (!rows.length) return tapped === SEND_PENDING;     // a second tap after they went: nothing to add
+    const conversation = (await db.query(
+        `SELECT c.id, c.last_inbound_at, k.phone, k.profile_name, l.name AS lead_name, k.lead_id
+           FROM wa_conversations c JOIN wa_contacts k ON k.id = c.contact_id LEFT JOIN crewfit_leads l ON l.id = k.lead_id
+          WHERE c.id = $1`, [conversationId])).rows[0];
+    if (!conversation || !wa.windowOpen(conversation.last_inbound_at)) return false;
+    // Taken off the waiting list first, so two quick messages do not send them twice.
+    const claimed = await db.query(`UPDATE wa_mockups SET pending_at = NULL WHERE id = ANY($1::int[]) AND pending_at IS NOT NULL RETURNING id`, [rows.map(r => r.id)]);
+    const mine = rows.filter(r => claimed.rows.some(c => c.id === r.id));
+    if (!mine.length) return true;
+    await sendMockups(conversation, mine, { user: mine[0].pending_by });
+    await note(conversation.id, `The customer replied — sent ${mine.length} mockup${mine.length > 1 ? 's' : ''} for approval`);
+    return true;
+}
+
+module.exports = { askForApproval, onReply, orderFromLead, unitPrice, detailsReceived, sendMockups, askToReply, sendPending,
+    readyTemplate, CONFIRM, CHANGES, TEMPLATE, READY_TEMPLATE, SEND_PENDING };
