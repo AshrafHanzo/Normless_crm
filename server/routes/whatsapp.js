@@ -985,9 +985,11 @@ router.get('/conversations', async (req, res) => {
             params.push(String(req.query.status || 'open'));
             where.push(`c.status = $${params.length}`);
         }
-        // Unread: chats with messages nobody has opened yet; read: the rest.
-        if (req.query.read === 'unread') where.push('c.unread_count > 0');
-        else if (req.query.read === 'read') where.push('COALESCE(c.unread_count, 0) = 0');
+        // Not replied: the customer wrote since a person last answered — the same count as the
+        // chat's red badge, so a chat stays here until somebody from the team replies (or marks
+        // "No reply needed"). Replied: the rest.
+        if (req.query.replied === 'no') where.push(`(CASE WHEN ${BACKUP_STALE} THEN 0 ELSE ${UNREPLIED} END) > 0`);
+        else if (req.query.replied === 'yes') where.push(`(CASE WHEN ${BACKUP_STALE} THEN 0 ELSE ${UNREPLIED} END) = 0`);
         const leadStatus = trim(req.query.lead_status);
         if (leadStatus) {
             params.push(leadStatus);

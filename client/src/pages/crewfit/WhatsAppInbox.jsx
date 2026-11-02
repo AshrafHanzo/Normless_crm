@@ -325,12 +325,12 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
   // Remembered per browser.
   const sortKey = `wa-sort-${brandKey}`
   const [sort, setSort] = useState(() => { try { return localStorage.getItem(sortKey) === 'oldest' ? 'oldest' : 'newest' } catch { return 'newest' } })
-  // Unread / read / both, remembered like the sort.
-  const readKey = `wa-read-${brandKey}`
-  const [readFilter, setReadFilter] = useState(() => { try { return ['unread', 'read'].includes(localStorage.getItem(readKey)) ? localStorage.getItem(readKey) : '' } catch { return '' } })
-  const pickRead = (v) => {
-    setReadFilter(v)
-    try { localStorage.setItem(readKey, v) } catch { /* private window: just not remembered */ }
+  // Crewfit: not replied / replied / both, by the chat's red badge; remembered like the sort.
+  const repliedKey = `wa-replied-${brandKey}`
+  const [repliedFilter, setRepliedFilter] = useState(() => { try { return ['no', 'yes'].includes(localStorage.getItem(repliedKey)) ? localStorage.getItem(repliedKey) : '' } catch { return '' } })
+  const pickReplied = (v) => {
+    setRepliedFilter(v)
+    try { localStorage.setItem(repliedKey, v) } catch { /* private window: just not remembered */ }
   }
   const flipSort = () => setSort(s => {
     const next = s === 'oldest' ? 'newest' : 'oldest'
@@ -458,7 +458,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
     if (term) qs.set('search', term)
     if (statusFilter) qs.set('lead_status', statusFilter)
     if (sort === 'oldest') qs.set('sort', 'oldest')
-    if (readFilter) qs.set('read', readFilter)
+    if (cf && repliedFilter) qs.set('replied', repliedFilter)
     if (range.from) qs.set('from', range.from)
     if (range.to) qs.set('to', range.to)
     return qs
@@ -521,7 +521,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
     setLoading(true)
     loadConversations()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filter, term, statusFilter, sort, range, readFilter])
+  }, [filter, term, statusFilter, sort, range, repliedFilter])
 
   // The open chat's row, kept in step with the chat itself. A refresh re-reads only the first page,
   // so a chat further down (scrolled to) would show its old status until a reload; with a status
@@ -1499,12 +1499,15 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
               <Icon name="sort" size={13} /> {sort === 'oldest' ? 'Oldest first' : 'Newest first'}
             </button>
           </div>
-          <div className="wa-read-seg" role="group" aria-label="Read or unread">
-            {[['', 'All'], ['unread', 'Unread'], ['read', 'Read']].map(([v, label]) => (
-              <button key={v || 'all'} type="button" aria-pressed={readFilter === v} onClick={() => pickRead(v)}
-                title={v === 'unread' ? 'Chats with messages nobody has opened yet' : v === 'read' ? 'Chats with nothing new' : 'Read and unread'}>{label}</button>
-            ))}
-          </div>
+          {cf && (
+            <div className="wa-read-seg" role="group" aria-label="Replied or not">
+              {[['', 'All'], ['no', 'Not replied'], ['yes', 'Replied']].map(([v, label]) => (
+                <button key={v || 'all'} type="button" aria-pressed={repliedFilter === v} onClick={() => pickReplied(v)}
+                  title={v === 'no' ? 'The customer wrote and nobody from the team has answered yet — the chats with a red badge'
+                    : v === 'yes' ? 'Chats the team has answered' : 'Replied and not replied'}>{label}</button>
+              ))}
+            </div>
+          )}
 
           {loading ? (
             <div className="loader"><div className="spinner" /></div>
