@@ -646,8 +646,9 @@ router.use(async (req, res, next) => {
         if (!grants) return res.status(404).json({ error: 'No such WhatsApp inbox' });
         if (!await hasPermission(req, grants.view)) return res.status(403).json({ error: 'Access denied' });
         req.waManager = await hasPermission(req, grants.manage);
-        // In a team that sees every chat (Design): every chat on the line, without taking it.
-        req.waSeesAll = !req.waManager && req.waLine.brand === 'crewfit' && !!(await db.query(
+        // In a team that sees every chat (Design): every chat on the line, and they reply in it
+        // without taking it — managers in such a team included.
+        req.waSeesAll = req.waLine.brand === 'crewfit' && !!(await db.query(
             `SELECT 1 FROM wa_team_members m JOIN wa_teams t ON t.id = m.team_id
               WHERE t.sees_all AND LOWER(m.username) = LOWER($1) LIMIT 1`, [req.user?.username || ''])).rows[0];
         // Seeing the line's numbers and changing its settings are grants of their own.
