@@ -286,6 +286,8 @@ function fillDays(r, rows) {
 /* ── Crewfit ──────────────────────────────────────────────────────────────────────────────── */
 
 const ORDER_OK = `COALESCE(o.status, '') <> 'Cancelled'`;
+// An order counts as closed once its advance is in; until then it is "payment pending".
+const PAID = `COALESCE(o.payment_status, 'Pending') <> 'Pending'`;
 const COLLECTED = `CASE WHEN o.payment_status = 'Fully Paid' THEN COALESCE(o.grand_total, 0)
                         ELSE GREATEST(COALESCE(o.grand_total - o.balance, o.advance, 0), 0) END`;
 
@@ -294,8 +296,10 @@ async function orderTotals(r, soFilter = null) {
     let extra = '';
     if (soFilter) { params.push(soFilter); extra = `AND LOWER(TRIM(o.so)) = ANY($3)`; }
     return (await db.query(
-        `SELECT COUNT(*)::int AS orders, COALESCE(SUM(o.qty), 0)::int AS units, COALESCE(SUM(o.grand_total), 0)::numeric AS value,
-                COALESCE(SUM(${COLLECTED}), 0)::numeric AS collected
+        `SELECT COUNT(*) FILTER (WHERE ${PAID})::int AS orders, COALESCE(SUM(o.qty) FILTER (WHERE ${PAID}), 0)::int AS units,
+                COALESCE(SUM(o.grand_total) FILTER (WHERE ${PAID}), 0)::numeric AS value,
+                COALESCE(SUM(${COLLECTED}) FILTER (WHERE ${PAID}), 0)::numeric AS collected,
+                COUNT(*) FILTER (WHERE NOT ${PAID})::int AS pending, COALESCE(SUM(o.grand_total) FILTER (WHERE NOT ${PAID}), 0)::numeric AS pending_value
            FROM crewfit_orders o WHERE o.order_date >= $1::date AND o.order_date <= $2::date AND ${ORDER_OK} ${extra}`, params)).rows[0];
 }
 
@@ -317,7 +321,7 @@ async function weekly(r, soFilter = null) {
     const rows = (await db.query(
         `SELECT DATE_TRUNC('week', o.order_date)::date::text AS week, COALESCE(NULLIF(TRIM(o.so), ''), '—') AS so,
                 COUNT(*)::int AS orders, COALESCE(SUM(o.qty), 0)::int AS units
-           FROM crewfit_orders o WHERE o.order_date > $1::date AND o.order_date <= $2::date AND ${ORDER_OK} ${extra}
+           FROM crewfit_orders o WHERE o.order_date > $1::date AND o.order_date <= $2::date AND ${ORDER_OK} AND ${PAID} ${extra}
           GROUP BY 1, 2 ORDER BY 1`, params)).rows;
     const weeks = [];
     const monday = (d) => { const x = new Date(d); x.setUTCDate(x.getUTCDate() - ((x.getUTCDay() + 6) % 7)); return x; };
@@ -390,10 +394,13 @@ async function crewfit(lineId, q) {
     const [o, ob, l, lb, waits, prevWaits] = await Promise.all([orderTotals(r), orderTotals(r.prev), leadTotals(r), leadTotals(r.prev), replyWaits(lineId, r), replyWaits(lineId, r.prev)]);
 
     const perSo = (await db.query(
-        `SELECT COALESCE(NULLIF(TRIM(o.so), ''), '') AS so, COUNT(*)::int AS orders, COALESCE(SUM(o.qty), 0)::int AS units,
-                COALESCE(SUM(o.grand_total), 0)::numeric AS value, COALESCE(SUM(${COLLECTED}), 0)::numeric AS collected
+        `SELECT COALESCE(NULLIF(TRIM(o.so), ''), '') AS so, COUNT(*) FILTER (WHERE ${PAID})::int AS orders,
+                COALESCE(SUM(o.qty) FILTER (WHERE ${PAID}), 0)::int AS units,
+                COALESCE(SUM(o.grand_total) FILTER (WHERE ${PAID}), 0)::numeric AS value,
+                COALESCE(SUM(${COLLECTED}) FILTER (WHERE ${PAID}), 0)::numeric AS collected,
+                COUNT(*) FILTER (WHERE NOT ${PAID})::int AS pending, COALESCE(SUM(o.grand_total) FILTER (WHERE NOT ${PAID}), 0)::numeric AS pending_value
            FROM crewfit_orders o WHERE o.order_date >= $1::date AND o.order_date <= $2::date AND ${ORDER_OK}
-          GROUP BY 1 ORDER BY 3 DESC`, [r.from, r.to])).rows;
+          GROUP BY 1 ORDER BY 3 DESC, 6 DESC`, [r.from, r.to])).rows;
     const chats = (await db.query(
         `SELECT LOWER(m.sender_user) AS who, COUNT(DISTINCT m.conversation_id)::int AS chats, COUNT(*)::int AS sent
            FROM wa_messages m JOIN wa_conversations c ON c.id = m.conversation_id
@@ -406,11 +413,12 @@ async function crewfit(lineId, q) {
         const c = chats.find(y => y.who === who);
         return {
             so: x.so, username, orders: x.orders, units: x.units, value: n(x.value), collected: n(x.collected),
+            pending: x.pending, pending_value: n(x.pending_value),
             avg: x.orders ? Math.round(n(x.value) / x.orders) : null,
             chats: c?.chats || 0, first_reply_secs: who ? waits.byUser.get(who) ?? null : null, calls: who ? callBy.get(who) || 0 : 0,
         };
     });
-    const unattributed = perSo.find(x => !x.so);
+    const unattributed = perSo.find(x => !x.so && x.orders);
 
     const statuses = (await db.query(`SELECT key, name, stage, sort_order FROM wa_lead_statuses ORDER BY sort_order`)).rows;
     const byStatus = (await db.query(
@@ -455,7 +463,7 @@ async function crewfit(lineId, q) {
         brand: 'crewfit', range: { from: r.from, to: r.to, days: r.days, all: r.all, prev_from: r.prev.from, prev_to: r.prev.to },
         people: persons,
         kpis: {
-            orders: { now: o.orders, before: ob.orders }, units: { now: o.units, before: ob.units },
+            orders: { now: o.orders, before: ob.orders, pending: o.pending, pending_value: n(o.pending_value) }, units: { now: o.units, before: ob.units },
             value: { now: n(o.value), before: n(ob.value) }, collected: { now: n(o.collected), before: n(ob.collected) },
             leads: { now: l.leads, before: lb.leads, from_ads: l.from_ads },
             conversion: { now: conv(l), before: conv(lb) },
@@ -476,8 +484,8 @@ async function myPerformance(lineId, username, q) {
     const names = (await db.query(`SELECT DISTINCT TRIM(so) AS so FROM crewfit_orders WHERE NULLIF(TRIM(so), '') IS NOT NULL`)).rows
         .map(x => x.so).filter(so => userForSo(so, list)?.toLowerCase() === u.username.toLowerCase()).map(so => so.toLowerCase());
     const [o, ob, waits, prevWaits] = await Promise.all([
-        names.length ? orderTotals(r, names) : { orders: 0, units: 0, value: 0, collected: 0 },
-        names.length ? orderTotals(r.prev, names) : { orders: 0, units: 0, value: 0, collected: 0 },
+        names.length ? orderTotals(r, names) : { orders: 0, units: 0, value: 0, collected: 0, pending: 0, pending_value: 0 },
+        names.length ? orderTotals(r.prev, names) : { orders: 0, units: 0, value: 0, collected: 0, pending: 0, pending_value: 0 },
         replyWaits(lineId, r), replyWaits(lineId, r.prev),
     ]);
     const who = u.username.toLowerCase();
@@ -502,7 +510,7 @@ async function myPerformance(lineId, username, q) {
         range: { from: r.from, to: r.to, days: r.days, all: r.all, prev_from: r.prev.from, prev_to: r.prev.to },
         work,
         kpis: {
-            orders: { now: o.orders, before: ob.orders }, units: { now: o.units, before: ob.units },
+            orders: { now: o.orders, before: ob.orders, pending: o.pending, pending_value: n(o.pending_value) }, units: { now: o.units, before: ob.units },
             value: { now: n(o.value), before: n(ob.value) }, collected: { now: n(o.collected), before: n(ob.collected) },
             chats: { now: chats }, first_reply_secs: { now: waits.byUser.get(who) ?? null, before: prevWaits.byUser.get(who) ?? null },
         },
@@ -615,7 +623,8 @@ async function teamDay(lineId, q = {}) {
           WHERE c.line_id = $1 AND x.kind = 'status' AND x.actor IS NOT NULL AND x.created_at >= $2 AND x.created_at < $3 GROUP BY 1`,
         [lineId, r.start, r.end])).rows.map(x => [x.who, x.n]));
     const orders = (await db.query(
-        `SELECT COALESCE(NULLIF(TRIM(o.so), ''), '') AS so, COUNT(*)::int AS n, COALESCE(SUM(o.grand_total), 0)::numeric AS value
+        `SELECT COALESCE(NULLIF(TRIM(o.so), ''), '') AS so, COUNT(*) FILTER (WHERE ${PAID})::int AS n,
+                COALESCE(SUM(o.grand_total) FILTER (WHERE ${PAID}), 0)::numeric AS value, COUNT(*) FILTER (WHERE NOT ${PAID})::int AS pending
            FROM crewfit_orders o WHERE o.order_date = $1::date AND ${ORDER_OK} GROUP BY 1`, [r.from])).rows;
     // Customers waiting on each person now: open chats assigned to them whose last word is the customer's.
     const waiting = new Map((await db.query(
@@ -638,10 +647,10 @@ async function teamDay(lineId, q = {}) {
             chats_replied: m?.chats || 0, messages_sent: m?.messages || 0,
             first_reply_secs: waits.byUser.get(who) ?? null,
             leads_moved: moved.get(who) || 0, calls: callBy.get(who) || 0,
-            orders: o?.n || 0, order_value: n(o?.value),
+            orders: o?.n || 0, order_value: n(o?.value), orders_pending: o?.pending || 0,
             waiting_now: w?.n || 0, oldest_waiting: w?.oldest || null,
         };
-    }).filter(x => x.active_minutes || x.messages_sent || x.calls || x.waiting_now || x.orders)
+    }).filter(x => x.active_minutes || x.messages_sent || x.calls || x.waiting_now || x.orders || x.orders_pending)
         .sort((a, b) => b.active_minutes - a.active_minutes || b.messages_sent - a.messages_sent);
     return { day: r.from, rows };
 }

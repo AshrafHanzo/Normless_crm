@@ -400,7 +400,7 @@ function TeamDay() {
             <thead><tr>
               <th scope="col">Person</th><th scope="col">Worked</th><th scope="col">From – to</th><th scope="col">Active hours</th>
               <th scope="col">Chats replied</th><th scope="col">Messages</th><th scope="col">First reply</th><th scope="col">Leads moved</th>
-              <th scope="col">Calls</th><th scope="col">Orders</th><th scope="col">Waiting now</th>
+              <th scope="col">Calls</th><th scope="col" title="Orders whose advance is paid; payment pending below">Orders closed</th><th scope="col">Waiting now</th>
             </tr></thead>
             <tbody>
               {data.rows.length ? data.rows.map(p => (
@@ -418,7 +418,8 @@ function TeamDay() {
                   <td data-label="First reply">{secs(p.first_reply_secs)}</td>
                   <td data-label="Leads moved">{num(p.leads_moved)}</td>
                   <td data-label="Calls">{num(p.calls)}</td>
-                  <td data-label="Orders">{p.orders ? `${p.orders} · ${inr(p.order_value)}` : '—'}</td>
+                  <td data-label="Orders closed">{p.orders ? `${p.orders} · ${inr(p.order_value)}` : '—'}
+                    {!!p.orders_pending && <span className="wdb-sub" title="Orders created today whose advance is not paid yet"> +{p.orders_pending} payment pending</span>}</td>
                   <td data-label="Waiting now">{p.waiting_now
                     ? <span className={overAnHour(p.oldest_waiting) ? 'wdb-bad' : ''}><b>{p.waiting_now}</b>{p.oldest_waiting ? ` · oldest ${ago(p.oldest_waiting)}` : ''}</span> : '—'}</td>
                 </tr>
@@ -495,7 +496,9 @@ function CrewfitDash({ d, brand }) {
   return (
     <>
       <section className="wdb-kpis" aria-label="Headline numbers">
-        <Kpi label="Orders closed" value={num(k.orders.now)}><Delta now={k.orders.now} before={k.orders.before} /> vs the period before</Kpi>
+        <Kpi label="Orders closed" value={num(k.orders.now)} hint="Orders whose advance is paid. Orders still waiting for the advance are payment pending.">
+          <Delta now={k.orders.now} before={k.orders.before} /> {k.orders.pending ? `· ${k.orders.pending} payment pending (${inr(k.orders.pending_value)})` : 'vs the period before'}
+        </Kpi>
         <Kpi label="Units" value={num(k.units.now)}><Delta now={k.units.now} before={k.units.before} /></Kpi>
         <Kpi label="Order value" value={inr(k.value.now)}><Delta now={k.value.now} before={k.value.before} format={inr} /> incl. GST</Kpi>
         <Kpi label="Collected" value={inr(k.collected.now)}><Delta now={k.collected.now} before={k.collected.before} format={inr} /> on these orders</Kpi>
@@ -510,27 +513,28 @@ function CrewfitDash({ d, brand }) {
       <PeopleTable people={d.people || []} range={d.range} brand={brand} />
 
       <section className="was-card wdb-feature">
-        <div className="was-card-head"><h3>Team performance</h3><span className="wdb-sub">Orders count for the salesperson written on the order (SO). Open a person for their own page.</span></div>
+        <div className="was-card-head"><h3>Team performance</h3><span className="wdb-sub">Orders count for the salesperson written on the order (SO), as closed once the advance is paid. Open a person for their own page.</span></div>
         <div className="data-table-wrapper wdb-table">
           <table className="data-table">
             <thead><tr>
-              <th scope="col">Salesperson</th><th scope="col">Orders</th><th scope="col">Units</th><th scope="col">Order value</th><th scope="col">Avg order</th>
+              <th scope="col">Salesperson</th><th scope="col" title="Orders whose advance is paid">Orders closed</th><th scope="col" title="Orders created whose advance is not paid yet">Payment pending</th><th scope="col">Units</th><th scope="col">Order value</th><th scope="col">Avg order</th>
               <th scope="col">Collected</th><th scope="col">Chats</th><th scope="col">First reply</th><th scope="col">Calls</th><th scope="col"><span className="sr-only">Open</span></th>
             </tr></thead>
             <tbody>
               {d.team.length ? d.team.map(p => (
                 <tr key={p.so}>
                   <td data-label=""><span className="wdb-person"><span className="wdb-avatar">{p.so[0]}</span><b>{p.so}</b>{!p.username && <span className="status-badge pending" title="No CRM login matches this name, so their chats and replies can't be counted">no login</span>}</span></td>
-                  <td data-label="Orders"><b>{num(p.orders)}</b></td>
+                  <td data-label="Orders closed"><b>{num(p.orders)}</b></td>
+                  <td data-label="Payment pending">{p.pending ? <span className="status-badge pending" title={`${inr(p.pending_value)} waiting for the advance`}>{p.pending} · {inr(p.pending_value)}</span> : 0}</td>
                   <td data-label="Units"><span className="wdb-inline-bar"><span>{num(p.units)}</span><span className="wdb-track"><span className="c-bot" style={{ width: `${p.units / topUnits * 100}%` }} /></span></span></td>
                   <td data-label="Order value">{inr(p.value)}</td><td data-label="Avg order">{p.avg ? inr(p.avg) : '—'}</td><td data-label="Collected">{inr(p.collected)}</td>
                   <td data-label="Chats">{p.username ? p.chats : '—'}</td><td data-label="First reply">{p.username ? secs(p.first_reply_secs) : '—'}</td><td data-label="Calls">{p.username ? p.calls : '—'}</td>
                   <td data-label="">{p.username && <Link to={`${brand.path}/me?user=${encodeURIComponent(p.username)}&${rangeQs(d.range)}`} className="wdb-link">Open</Link>}</td>
                 </tr>
-              )) : <tr><td colSpan={10} className="wdb-empty">No orders in these dates.</td></tr>}
+              )) : <tr><td colSpan={11} className="wdb-empty">No orders in these dates.</td></tr>}
             </tbody>
             {d.team.length > 1 && (
-              <tfoot><tr><td><b>Team</b></td><td><b>{num(sum('orders'))}</b></td><td><b>{num(sum('units'))}</b></td><td><b>{inr(sum('value'))}</b></td>
+              <tfoot><tr><td><b>Team</b></td><td><b>{num(sum('orders'))}</b></td><td>{num(sum('pending'))}</td><td><b>{num(sum('units'))}</b></td><td><b>{inr(sum('value'))}</b></td>
                 <td>{sum('orders') ? inr(sum('value') / sum('orders')) : '—'}</td><td>{inr(sum('collected'))}</td><td>{num(sum('chats'))}</td><td>{secs(k.first_reply_secs.now)}</td><td>{num(sum('calls'))}</td><td /></tr></tfoot>
             )}
           </table>
@@ -641,7 +645,9 @@ export function WhatsAppMyPerformance() {
           )}
 
           <section className="wdb-kpis wdb-kpis-5" aria-label="Numbers">
-            <Kpi label="Orders closed" value={num(d.kpis.orders.now)}><Delta now={d.kpis.orders.now} before={d.kpis.orders.before} /> vs the period before</Kpi>
+            <Kpi label="Orders closed" value={num(d.kpis.orders.now)} hint="Orders whose advance is paid. Orders still waiting for the advance are payment pending.">
+              <Delta now={d.kpis.orders.now} before={d.kpis.orders.before} /> {d.kpis.orders.pending ? `· ${d.kpis.orders.pending} payment pending (${inr(d.kpis.orders.pending_value)})` : 'vs the period before'}
+            </Kpi>
             <Kpi label="Units" value={num(d.kpis.units.now)}><Delta now={d.kpis.units.now} before={d.kpis.units.before} /></Kpi>
             <Kpi label="Order value" value={inr(d.kpis.value.now)}><Delta now={d.kpis.value.now} before={d.kpis.value.before} format={inr} /></Kpi>
             <Kpi label="Collected" value={inr(d.kpis.collected.now)}><Delta now={d.kpis.collected.now} before={d.kpis.collected.before} format={inr} /></Kpi>
