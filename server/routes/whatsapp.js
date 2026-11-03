@@ -1581,19 +1581,9 @@ function isThanks(m) {
 }
 
 /**
- * A short last word — "ok", "thanks", "okay bro", a thumbs-up — that needs no answer. One or two
- * words, or only emoji; a reaction or a sticker. Anything longer is somebody waiting for a reply.
- */
-function isAcknowledgement(m) {
-    if (['reaction', 'sticker'].includes(m.type)) return true;
-    if (m.type !== 'text' && m.type !== 'button') return false;
-    const words = String(m.body || '').replace(/\u200d|\ufe0f/g, '').replace(/[\p{P}\p{S}\p{Extended_Pictographic}]/gu, ' ').trim().split(/\s+/).filter(Boolean);
-    return words.length <= 2 && words.join(' ').length <= 20;
-}
-
-/**
- * "No reply needed": the customer's messages since we last answered were only a thank-you, so the
- * chat stops counting as waiting — until they write again. Refused for anything longer.
+ * "No reply needed": somebody on the team decided the customer's messages since we last answered
+ * need no answer ("ok noted", a thank-you, a message already dealt with on a call), so the chat
+ * stops counting as waiting — until they write again. The inbox asks the person to confirm first.
  */
 router.post('/conversations/:id/settle', async (req, res) => {
     try {
@@ -1610,15 +1600,12 @@ router.post('/conversations/:id/settle', async (req, res) => {
               ORDER BY COALESCE(m.sent_at, m.created_at), m.id`,
             [conversation.id, conversation.settled_msg_id || null, conversation.settled_at || null])).rows;
         if (!waiting.length) return res.status(400).json({ error: 'Nothing is waiting for a reply in this chat' });
-        if (!waiting.every(isAcknowledgement)) {
-            return res.status(400).json({ error: 'Only for a short thank-you like “ok” or “thanks” — the customer said more than that, so answer them instead' });
-        }
         const last = waiting[waiting.length - 1];
         await db.query(
             `UPDATE wa_conversations SET settled_msg_id = $2, settled_at = $3, settled_by = $4, unread_count = 0, updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
             [conversation.id, last.id, last.at, req.user?.username || null]);
         await orders.logActivity({ conversationId: conversation.id, kind: 'message', actor: req.user?.username,
-            body: `${String(req.user?.username || 'Someone').split('@')[0]} marked “${String(last.body || last.type).slice(0, 40)}” as needing no reply` });
+            body: `${String(req.user?.username || 'Someone').split('@')[0]} marked ${waiting.length === 1 ? `“${String(last.body || last.type).slice(0, 40)}”` : `${waiting.length} messages`} as needing no reply` });
         res.json({ conversation: await loadConversation(req, conversation.id) });
     } catch (err) {
         console.error('whatsapp settle error:', err);

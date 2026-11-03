@@ -3891,10 +3891,11 @@ p.wdb-sub { margin: 0; }
 .wa-tray-name small { display: block; font-size: 10.5px; color: var(--text-muted); }
 .wa-tray-add { display: flex; align-items: center; gap: 4px; height: 38px; padding: 0 10px; border: 1px dashed var(--border-hover); border-radius: 6px; background: none; color: var(--text-secondary); font: inherit; font-size: 12px; cursor: pointer; }
 .wa-settle {
-  display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; padding: 8px 10px;
-  border-radius: var(--radius-md); background: var(--bg-secondary); font-size: 12.5px; color: var(--text-secondary);
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 7px 10px;
+  border-radius: var(--radius-md); background: rgba(245, 158, 11, .12); font-size: 12.5px; color: var(--text-secondary);
 }
-.wa-settle b { color: var(--text-primary); font-weight: 600; }
+.wa-settle .wa-unread { margin: 0; flex: none; }
+.wa-settle-text { flex: 1; min-width: 0; }
 
 /* ---- Crewfit lead: several products ---------------------------------------------------------- */
 .wa-products { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }

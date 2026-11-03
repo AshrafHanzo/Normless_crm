@@ -209,17 +209,6 @@ const ROW_FIELDS = ['lead_status', 'assigned_to', 'mode', 'bot_on', 'bot_answers
   'lead_company', 'product_interest', 'quantity']
 const plainQty = (q) => (/^\s*\d+\s*(pcs|pieces|nos)?\s*$/i.test(String(q || '')) ? parseInt(q, 10) : '')
 
-/**
- * A customer's short last word — "ok", "thanks", "okay bro", a thumbs-up — that needs no answer:
- * one or two words or only emoji, a reaction or a sticker. The server checks the same.
- */
-const isAcknowledgement = (m) => {
-  if (['reaction', 'sticker'].includes(m.type)) return true
-  if (m.type !== 'text' && m.type !== 'button') return false
-  const words = String(m.body || '').replace(/\u200d|\ufe0f/g, '').replace(/[\p{P}\p{S}\p{Extended_Pictographic}]/gu, ' ').trim().split(/\s+/).filter(Boolean)
-  return words.length <= 2 && words.join(' ').length <= 20
-}
-
 const leadFormFrom = (t) => ({
   product_interest: t?.product_interest || '',
   quantity: t?.quantity || '',
@@ -948,25 +937,41 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
     onDrop: (e) => { e.preventDefault(); setDragging(false); stage(e.dataTransfer?.files) },
   } : {}
 
-  // The customer's messages since a person last answered (and since the last "no reply needed"),
-  // when every one of them is only a thank-you: the last of them, for the bar above the reply box.
-  const settleable = (() => {
-    if (!cf || !thread) return null
-    let lastHuman = -1
-    messages.forEach((m, i) => { if (m.direction === 'out' && ['user', 'phone'].includes(m.sender_type)) lastHuman = i })
-    const waiting = messages.slice(lastHuman + 1).filter(m => m.direction === 'in' && (!thread.settled_msg_id || m.id > thread.settled_msg_id))
-    if (!waiting.length || !waiting.every(isAcknowledgement)) return null
-    return waiting[waiting.length - 1]
+  // Crewfit: the chat's red badge — the customer's messages since a person last answered — for the
+  // strip above the reply box. Gone the moment somebody's reply is on screen, before the next poll
+  // brings the count down.
+  const waitingHere = (() => {
+    if (!cf || !thread || !(thread.unreplied > 0)) return 0
+    const last = messages.findLast(m => m.type !== 'reaction')
+    if (last?.direction === 'out' && ['user', 'phone'].includes(last.sender_type)) return 0
+    return thread.unreplied
   })()
 
-  /** "No reply needed": the customer's last word was a thank-you. */
+  /** "No reply needed": the badge comes off this chat until the customer writes again. */
   const settle = async () => {
+    const name = String(thread.display_name || 'The customer').trim()
+    const n = waitingHere
+    if (!await toast.confirm({
+      title: 'No reply needed?',
+      message: `${name}'s ${n === 1 ? 'message' : `${n} messages`} will be marked as needing no reply, and the red badge goes away from the chat list. If they write again, the badge comes back.`,
+      confirmLabel: 'Mark as no reply needed',
+    })) return
     const r = await apiFetch(`${API}/conversations/${thread.id}/settle`, { method: 'POST' })
     if (!r || r.error) return toast.error(r?.error || 'Could not mark that')
     setThread(r.conversation)
     toast.success('Marked — no reply needed')
     loadConversations()
   }
+
+  // Above the reply box, and above the lock when the chat is somebody else's or nobody's: clearing a
+  // badge needs no typing, so a manager or the next person on shift can do it without taking the chat.
+  const settleStrip = waitingHere > 0 && (
+    <div className="wa-settle">
+      <span className="wa-unread wa-unread-waiting" aria-hidden="true">{waitingHere}</span>
+      <span className="wa-settle-text">{String(thread.display_name || 'The customer').split(' ')[0]} is waiting for a reply. Nothing to answer?</span>
+      <button type="button" className="mini-btn" onClick={settle}><Icon name="check" size={12} /> No reply needed</button>
+    </div>
+  )
 
   const onKeyDown = (e) => {
     if (pop === 'snippets' && draft.startsWith('/')) {
@@ -1849,6 +1854,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
               {!thread.is_demo && String(thread.assigned_to || '').toLowerCase() !== String(user?.username || '').toLowerCase()
                 && !(config?.seesAll && thread.assigned_to) ? (
                 <footer className="wa-compose wa-compose-locked">
+                  {settleStrip}
                   <div className="wa-locked">
                     <Icon name="lock" size={15} />
                     <span>{thread.assigned_to
@@ -2051,12 +2057,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                   )}
                 </div>
 
-                {settleable && (
-                  <div className="wa-settle">
-                    <span>The customer said <b>“{settleable.body || '👍'}”</b> — nothing to answer?</span>
-                    <button type="button" className="mini-btn" onClick={settle}><Icon name="check" size={12} /> No reply needed</button>
-                  </div>
-                )}
+                {settleStrip}
                 {thread.window_open && (replyTo || staged.length > 0) && (
                   <div className="wa-tray">
                     {replyTo && (
