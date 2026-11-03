@@ -207,6 +207,34 @@ const isHalf = (f) => Number(f.advance) === Math.round((Number(f.grand_total) ||
 const PAYMENT_LINK_PLACEHOLDER = '[PAYMENT LINK]'
 const dash = (v) => (v === undefined || v === null || v === '' ? '—' : v)
 
+const rs = (v) => `₹${(Number(v) || 0).toLocaleString('en-IN')}`
+
+// The price breakup every payment message carries, the same as the one the CRM sends
+// (breakupLines in server/services/wa-orders.js): each product, the charges before GST, the GST
+// once, and the total.
+function breakupLines(f) {
+  const items = (f.line_items || []).filter(it => it.product || it.qty)
+  const L = ['*— Price Breakup —*']
+  items.forEach(it => {
+    const qty = Number(it.qty) || 0
+    const price = Number(it.unit_price) || 0
+    L.push(`👕 ${dash(it.product)}${it.color ? ` (${it.color})` : ''}: ${qty} × ${rs(price)} = ${rs(Number(it.product_total) || qty * price)}`)
+  })
+  const products = Number(f.product_total) || 0
+  const designer = Number(f.designer_charge) || 0
+  const shipping = Number(f.shipping) || 0
+  const charges = liveCharges(f)
+  const taxable = products + designer + shipping + charges.reduce((n, c) => n + Number(c.amount), 0)
+  if (items.length > 1) L.push(`💰 *Product Subtotal:* ${rs(products)}`)
+  if (designer) L.push(`🧵 *Embroidery Designer Charge:* ${rs(designer)}`)
+  charges.forEach(c => L.push(`➕ *${c.label}:* ${rs(c.amount)}`))
+  if (shipping) L.push(`🚚 *Shipping Charges:* ${rs(shipping)}`)
+  if (taxable !== products) L.push(`🧾 *Total Before GST:* ${rs(taxable)}`)
+  L.push(`🧾 *GST (${f._gstPct ?? 0}%):* ${rs(f.gst_amount)}`)
+  L.push(`💵 *Grand Total:* ${rs(f.grand_total)}`, '')
+  return L
+}
+
 // Client-facing order confirmation, formatted for pasting straight into WhatsApp
 // (single-asterisk *bold*, not markdown's **bold**).
 function buildDescription(f) {
@@ -216,7 +244,6 @@ function buildDescription(f) {
     if (items.length > 1) L.push(`*— Product ${i + 1} —*`)
     L.push(`📦 *Product:* ${dash(it.product)}${it.color ? ` (${it.color})` : ''}`)
     L.push(`👕 *Quantity:* ${dash(it.qty)}`)
-    L.push(`💵 *Price Per Piece:* ₹${it.unit_price || 0}`)
     L.push(`🎨 *Printing:* ${dash(printSpec(it))}`)
     L.push(`📏 *Size Breakdown:* ${dash(it.size_breakdown)}`)
     L.push('')
@@ -228,14 +255,10 @@ function buildDescription(f) {
   L.push(`📞 *Mobile Number:* ${dash(f.billing_mobile)}`)
   L.push(`📧 *Email Address:* ${dash(f.billing_email)}`)
   L.push(`🧾 *GST Number:* ${f.gst_number || 'NA'}`, '')
-  L.push(`💰 *Product Subtotal:* ₹${f.product_total || 0}`)
-  if (Number(f.designer_charge)) L.push(`🧵 *Embroidery Designer Charge:* ₹${f.designer_charge}`)
-  liveCharges(f).forEach(c => L.push(`➕ *${c.label}:* ₹${c.amount}`))
-  L.push(`🚚 *Shipping Charges:* ₹${f.shipping || 0}`)
-  L.push(`🧾 *GST (${f._gstPct ?? 0}%):* ₹${f.gst_amount || 0}`)
-  L.push(`💵 *Grand Total:* ₹${f.grand_total || 0}`, '')
-  L.push(`💳 *Advance Payable${isHalf(f) ? ' (50%)' : ''}:* ₹${f.advance || 0}`)
-  L.push(`💵 *Balance Payable Before Dispatch:* ₹${f.balance || 0}`, '')
+  L.push(...breakupLines(f))
+  L.push('*— Payment Details —*')
+  L.push(`💳 *Advance Payable Now${isHalf(f) ? ' (50%)' : ''}:* ${rs(f.advance)}`)
+  L.push(`💵 *Balance Payable Before Dispatch:* ${rs(f.balance)}`, '')
   L.push('Please complete the advance payment using the link below to begin production:', '')
   // Once an advance link exists it goes straight into the summary; until then the placeholder
   // stays so the SO can still paste a link in by hand.
@@ -267,15 +290,10 @@ function buildBalanceMessage(f, payment) {
     L.push(`📏 *Size Breakdown:* ${dash(it.size_breakdown)}`)
     L.push('')
   })
-  const charges = liveCharges(f)
-  if (charges.length) {
-    L.push('*— Additional Charges —*')
-    charges.forEach(c => L.push(`➕ ${c.label}: ₹${chargeGross(c.amount, f._gstPct).toLocaleString('en-IN')}${f._gstPct ? ' (incl. GST)' : ''}`))
-    L.push('')
-  }
-  L.push(`💵 *Grand Total:* ₹${grand.toLocaleString('en-IN')}`)
-  L.push(`✅ *Advance Already Paid:* ₹${paid.toLocaleString('en-IN')}`)
-  L.push(`💰 *Balance Payable Now:* ₹${balance.toLocaleString('en-IN')}`, '')
+  L.push(...breakupLines(f))
+  L.push('*— Payment Details —*')
+  L.push(`✅ *Advance Paid:* ${rs(paid)}`)
+  L.push(`💰 *Balance Payable Now:* ${rs(balance)}`, '')
   L.push('Kindly complete the balance payment using the secure link below so we can dispatch your order right away:', '')
   L.push(`🔗 ${payment?.razorpay_short_url || PAYMENT_LINK_PLACEHOLDER}`, '')
   L.push(`📍 *Delivery Address:* ${dash(f.delivery_location)}`, '')

@@ -28,7 +28,7 @@ const path = require('path');
 const crypto = require('crypto');
 const db = require('../db/connection');
 const wa = require('./whatsapp');
-const { chargesOf, chargeGross, gstPctOf, advanceLabel } = require('./crewfit-charges');
+const { chargesOf, gstPctOf, advanceLabel } = require('./crewfit-charges');
 
 const safeJson = (v, fallback) => {
     try { return typeof v === 'string' ? (JSON.parse(v || 'null') ?? fallback) : (v || fallback); }
@@ -155,29 +155,65 @@ function summaryText(order, link) {
         if (items.length > 1) L.push(`*— Product ${i + 1} —*`);
         L.push(`📦 *Product:* ${dash(it.product)}${it.color ? ` (${it.color})` : ''}`);
         L.push(`👕 *Quantity:* ${dash(it.qty)}`);
-        L.push(`💵 *Price Per Piece:* ₹${it.unit_price || 0}`);
         L.push(`🎨 *Printing:* ${dash(printSpec(it))}`);
         L.push(`📏 *Size Breakdown:* ${dash(it.size_breakdown)}`);
         L.push('');
     });
     L.push(`📍 *Delivery Address:* ${dash(order.delivery_location)}`, '');
-    L.push(...chargeLines(order));
-    L.push(`💵 *Grand Total:* ${inr(order.grand_total)}`);
-    L.push(`💳 *Advance Payable${advanceLabel(order).includes('50%') ? ' (50%)' : ''}:* ${inr(order.advance)}`);
-    L.push(`💵 *Balance Payable Before Dispatch:* ${inr(order.balance)}`, '');
+    L.push(...breakupLines(order));
+    L.push(...dueLines(order, 'advance'));
     if (link) L.push('Please complete the advance payment using the link below to begin production:', '', `🔗 ${link}`, '');
     L.push('Kindly verify all the above details before making the payment.', '');
     L.push('Production will begin immediately after payment verification. 🚀');
     return L.join('\n');
 }
 
-/** The order's additional charges with their GST on, as message lines, or none. */
-function chargeLines(order) {
-    const list = chargesOf(order);
-    if (!list.length) return [];
-    const pct = gstPctOf(order);
-    return ['*— Additional Charges —*',
-        ...list.map(c => `➕ ${c.label}: ${inr(chargeGross(c.amount, pct))}${pct ? ' (incl. GST)' : ''}`), ''];
+/**
+ * What the customer pays for, line by line: each product at its price, the designer charge,
+ * additional charges and shipping (all before GST), then the GST once on the whole, and the total.
+ * An old order whose stored figures do not add up to its total shows the products and the total
+ * only, rather than a breakup that contradicts itself.
+ */
+function breakupLines(order) {
+    const L = ['*— Price Breakup —*'];
+    const items = itemsOf(order);
+    for (const it of items) {
+        const qty = Number(it.qty) || 0;
+        const price = Number(it.unit_price) || 0;
+        const line = Number(it.product_total) || qty * price;
+        L.push(`👕 ${dash(it.product)}${it.color ? ` (${it.color})` : ''}: ${qty} × ${inr(price)} = ${inr(line)}`);
+    }
+    const grand = Number(order.grand_total) || 0;
+    const products = Number(order.product_total) || 0;
+    const designer = Number(order.designer_charge) || 0;
+    const shipping = Number(order.shipping) || 0;
+    const charges = chargesOf(order);
+    const gst = Number(order.gst_amount) || 0;
+    const taxable = products + designer + shipping + charges.reduce((n, c) => n + Number(c.amount), 0);
+    if (taxable > 0 && Math.abs(taxable + gst - grand) <= 1) {
+        if (items.length > 1) L.push(`💰 *Product Subtotal:* ${inr(products)}`);
+        if (designer) L.push(`🧵 *Embroidery Designer Charge:* ${inr(designer)}`);
+        for (const c of charges) L.push(`➕ *${c.label}:* ${inr(c.amount)}`);
+        if (shipping) L.push(`🚚 *Shipping Charges:* ${inr(shipping)}`);
+        if (taxable !== products) L.push(`🧾 *Total Before GST:* ${inr(taxable)}`);
+        L.push(`🧾 *GST (${gstPctOf(order)}%):* ${inr(gst)}`);
+    }
+    L.push(`💵 *Grand Total:* ${inr(grand)}`, '');
+    return L;
+}
+
+/** The two halves of the payment: what is due now and what is paid or still to come. */
+function dueLines(order, now, balanceNow = Number(order.balance) || 0) {
+    const grand = Number(order.grand_total) || 0;
+    const L = ['*— Payment Details —*'];
+    if (now === 'advance') {
+        L.push(`💳 *Advance Payable Now${advanceLabel(order).includes('50%') ? ' (50%)' : ''}:* ${inr(order.advance)}`);
+        L.push(`💵 *Balance Payable Before Dispatch:* ${inr(order.balance)}`, '');
+    } else {
+        L.push(`✅ *Advance Paid:* ${inr(Math.max(0, grand - balanceNow))}`);
+        L.push(`💰 *Balance Payable Now:* ${inr(balanceNow)}`, '');
+    }
+    return L;
 }
 
 function paymentText(order, payment) {
@@ -185,7 +221,8 @@ function paymentText(order, payment) {
     return [
         `Hi ${firstName(order)}! 👋`, '',
         `Here's the secure payment link for the ${half} of your Crewfit order (Ref: ${ref(order)}):`, '',
-        `💵 *Amount:* ${inr(payment.amount)}`,
+        ...breakupLines(order),
+        ...dueLines(order, payment.kind === 'advance' ? 'advance' : 'balance', Number(payment.amount) || 0),
         `🔗 ${payment.razorpay_short_url}`, '',
         payment.kind === 'balance'
             ? 'Once this is paid we will dispatch your order right away. 🚚'
@@ -195,19 +232,11 @@ function paymentText(order, payment) {
 }
 
 function balanceText(order, payment) {
-    const grand = Number(order.grand_total) || 0;
     const balance = Number(payment.amount) || 0;
     const L = [`Hi ${firstName(order)}! 🎉`, ''];
     L.push(`Great news — your Crewfit order (Ref: ${ref(order)}) is *production complete* and ready for dispatch! ✅`, '');
-    L.push('*— Order Summary —*');
-    for (const it of itemsOf(order)) {
-        L.push(`📦 ${dash(it.product)}${it.color ? ` (${it.color})` : ''} × ${dash(it.qty)}`);
-    }
-    L.push('');
-    L.push(...chargeLines(order));
-    L.push(`💵 *Grand Total:* ${inr(grand)}`);
-    L.push(`✅ *Advance Already Paid:* ${inr(Math.max(0, grand - balance))}`);
-    L.push(`💰 *Balance Payable Now:* ${inr(balance)}`, '');
+    L.push(...breakupLines(order));
+    L.push(...dueLines(order, 'balance', balance));
     L.push('Kindly complete the balance payment using the secure link below so we can dispatch your order right away:', '');
     L.push(`🔗 ${payment.razorpay_short_url}`, '');
     L.push('Once the payment is confirmed, we will dispatch your order and share the tracking details with you. 🚚');
