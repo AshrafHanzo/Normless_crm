@@ -469,10 +469,19 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
   const listKey = useRef('')
   const conversationsRef = useRef([])
   conversationsRef.current = conversations
+  // Each read is numbered. A slow answer to an older read — the chip just left, or a poll from three
+  // seconds ago — must not land over a newer one: that put the last filter's chats back on screen.
+  const listSeq = useRef(0)
+  const listApplied = useRef(0)
+  const wantedKey = useRef('')
+  wantedKey.current = listQuery().toString()
   const loadConversations = async () => {
     const qs = listQuery()
     const key = qs.toString()
+    const seq = ++listSeq.current
     const r = await apiFetch(`${API}/conversations?${qs}`)
+    if (key !== wantedKey.current || seq < listApplied.current) return
+    listApplied.current = seq
     if (r && !r.error) {
       const head = r.conversations || []
       const same = listKey.current === key
@@ -507,7 +516,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
     if (nextPage.before_flag != null) qs.set('before_flag', String(nextPage.before_flag))
     const key = listQuery().toString()
     const r = await apiFetch(`${API}/conversations?${qs}`)
-    if (r && !r.error && listKey.current === key) {
+    if (r && !r.error && listKey.current === key && wantedKey.current === key) {
       setConversations(prev => {
         const have = new Set(prev.map(c => c.id))
         return [...prev, ...(r.conversations || []).filter(c => !have.has(c.id))]
@@ -523,6 +532,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
 
   useEffect(() => {
     setLoading(true)
+    setNextPage(null)
     loadConversations()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filter, term, statusFilter, sort, range, waitingFirst])
@@ -547,48 +557,61 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
 
   /* ── One conversation ────────────────────────────────────────────────────────────────── */
 
+  // The chat whose messages, notes and orders are on screen, and the one asked for last. Every read
+  // for a chat checks it is still that chat when the answer comes back: switching quickly used to
+  // let the last chat's messages, notes or orders land in the new one.
+  const shownId = useRef(null)
+  const wantedId = useRef(null)
   const showThread = (t) => {
+    shownId.current = t?.id ?? null
     setThread(t)
     setLead(leadFormFrom(t))
     setBillingForm(Object.fromEntries(BILLING.map(([k]) => [k, t?.[k] || ''])))
   }
 
   const openConversation = async (id) => {
+    wantedId.current = id
     setOpenId(id)
-    setMessages([])
     setPop(null)
-    lastSeen.current = 0
-    stickToBottom.current = true
     // The chat's own address; an ?order= link has done its job once the chat is open.
     setParams(prev => { const next = new URLSearchParams(prev); next.set('c', String(id)); next.delete('order'); return next },
       { replace: true })
 
-    const r = await apiFetch(`${API}/conversations/${id}`)
-    if (!r || r.error) return toast.error(r?.error || 'Could not open that conversation')
-    showThread(r.conversation)
-    const m = await apiFetch(`${API}/conversations/${id}/messages`)
-    if (m && !m.error) {
-      setMessages(m.messages || [])
-      lastSeen.current = m.messages?.length ? m.messages[m.messages.length - 1].id : 0
+    // Everything the chat needs, read together and put on screen in one go: the last chat stays
+    // (faded) until then, rather than its header sitting over an empty feed and its notes and orders
+    // beside the new one's messages.
+    const get = (path) => apiFetch(`${API}/conversations/${id}${path}`)
+    const [r, m, n, a, o, q, mk] = await Promise.all([
+      get(''), get('/messages'), get('/notes'), get('/activity'),
+      cf ? get('/orders') : null, cf ? get('/quotes') : null, cf ? get('/mockups') : null,
+    ])
+    if (wantedId.current !== id) return
+    if (!r || r.error) {
+      // Back to the chat still on screen.
+      wantedId.current = shownId.current
+      setOpenId(shownId.current)
+      return toast.error(r?.error || 'Could not open that conversation')
     }
+    stickToBottom.current = true
+    showThread(r.conversation)
+    setMessages(m && !m.error ? m.messages || [] : [])
+    lastSeen.current = m?.messages?.length ? m.messages[m.messages.length - 1].id : 0
+    setNotes(n && !n.error ? n.notes || [] : [])
+    setActivity(a && !a.error ? a.activity || [] : [])
+    if (cf) {
+      setOrders(o && !o.error ? o.orders || [] : []); setCanEditOrders(!!o?.canEdit)
+      setQuotes(q && !q.error ? q.quotes || [] : []); setCanQuote(!!q?.canQuote)
+      const list = mk && !mk.error ? mk.mockups || [] : []
+      setMockups(list); setMockPick(list.filter(x => !x.sent_at).map(x => x.id))
+    } else { setShop(null); setFocusOrder(null); loadShop(id) }
     apiFetch(`${API}/conversations/${id}/read`, { method: 'POST' })
     setConversations(list => list.map(c => (c.id === id ? { ...c, unread_count: 0 } : c)))
-    const n = await apiFetch(`${API}/conversations/${id}/notes`)
-    if (n && !n.error) setNotes(n.notes || [])
-    loadActivity(id)
-    if (cf) { loadOrders(id); loadMockups(id) } else { setShop(null); setFocusOrder(null); loadShop(id) }
   }
 
   const loadShop = async (id = thread?.id) => {
     if (!id) return
     const r = await apiFetch(`${API}/conversations/${id}/customer`)
-    if (r && !r.error) setShop(r)
-  }
-
-  const loadMockups = async (id = thread?.id) => {
-    if (!id) return
-    const r = await apiFetch(`${API}/conversations/${id}/mockups`)
-    if (r && !r.error) { setMockups(r.mockups || []); setMockPick((r.mockups || []).filter(m => !m.sent_at).map(m => m.id)) }
+    if (r && !r.error && shownId.current === id) setShop(r)
   }
 
   const uploadMockups = async (files) => {
@@ -658,13 +681,14 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
       apiFetch(`${API}/conversations/${id}/orders`),
       apiFetch(`${API}/conversations/${id}/quotes`),
     ])
+    if (shownId.current !== id) return
     if (r && !r.error) { setOrders(r.orders || []); setCanEditOrders(!!r.canEdit) }
     if (q && !q.error) { setQuotes(q.quotes || []); setCanQuote(!!q.canQuote) }
   }
   const loadActivity = async (id = thread?.id) => {
     if (!id) return
     const r = await apiFetch(`${API}/conversations/${id}/activity`)
-    if (r && !r.error) setActivity(r.activity || [])
+    if (r && !r.error && shownId.current === id) setActivity(r.activity || [])
   }
 
   /* ── Normless: support tickets from the chat ───────────────────────────────────────────── */
@@ -759,8 +783,12 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
   poll.current = async () => {
     if (document.hidden) return
     loadConversations()
-    if (!openId) return
+    // The chat on screen, not one still opening: its messages would be added to this one's.
+    const openId = shownId.current
+    if (!openId || wantedId.current !== openId) return
+    const stillHere = () => shownId.current === openId && wantedId.current === openId
     const m = await apiFetch(`${API}/conversations/${openId}/messages?after=${lastSeen.current}`)
+    if (!stillHere()) return
     if (m && !m.error && m.messages?.length) {
       setMessages(list => {
         const have = new Set(list.map(x => x.id))
@@ -787,7 +815,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
     // refreshed too. The lead form is left alone:
     // somebody may be typing in it.
     const r = await apiFetch(`${API}/conversations/${openId}`)
-    if (r && !r.error) {
+    if (r && !r.error && stillHere()) {
       // Fields the customer just filled in through the chat appear without a reload — but never
       // over something a rep is in the middle of typing.
       const prev = threadRef.current
@@ -813,9 +841,10 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
   // A call's line in the thread changes as the call goes (ringing → 4 min 10 s, or missed), which
   // the poll for new messages cannot see, so the thread is re-read whole when calls change.
   useEffect(() => {
-    if (!openId || !calls.version) return
-    apiFetch(`${API}/conversations/${openId}/messages`).then(all => {
-      if (!all || all.error || !all.messages) return
+    const id = shownId.current
+    if (!id || !calls.version) return
+    apiFetch(`${API}/conversations/${id}/messages`).then(all => {
+      if (!all || all.error || !all.messages || shownId.current !== id) return
       setMessages(list => [...all.messages, ...list.filter(x => x.id > (all.messages.at(-1)?.id || 0))])
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -835,6 +864,8 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
   /* ── Sending ─────────────────────────────────────────────────────────────────────────── */
 
   const appendSent = (message) => {
+    // A send that lands after the person has moved to another chat belongs to the one it went to.
+    if (message?.conversation_id && message.conversation_id !== shownId.current) return loadConversations()
     setMessages(list => [...list, message])
     lastSeen.current = message.id
     stickToBottom.current = true
@@ -850,7 +881,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
   const track = async ({ label, stages = [], run, onDone, retryKey }) => {
     const id = `p${Date.now()}${Math.random().toString(36).slice(2, 6)}`
     stickToBottom.current = true
-    setPending(list => [...list, { id, label, stage: stages[0]?.[1] || 'Sending…', retryKey }])
+    setPending(list => [...list, { id, conv: shownId.current, label, stage: stages[0]?.[1] || 'Sending…', retryKey }])
     const timers = stages.slice(1).map(([ms, text]) => setTimeout(() =>
       setPending(list => list.map(x => (x.id === id && !x.error ? { ...x, stage: text } : x))), ms))
     const r = await run()
@@ -864,7 +895,9 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
     return r
   }
   const dismissPending = (id) => setPending(list => list.filter(x => x.id !== id))
-  const busyWith = (key) => pending.some(x => x.retryKey === key && !x.error)
+  // Sends in flight for the chat on screen; another chat's stay with that chat.
+  const pendingHere = pending.filter(x => x.conv === thread?.id)
+  const busyWith = (key) => pendingHere.some(x => x.retryKey === key && !x.error)
 
   const sendOne = (body, file, quote) => {
     const form = new FormData()
@@ -1511,7 +1544,9 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
             )}
           </div>
 
-          {loading ? (
+          {/* The spinner only while there is nothing to show yet. A change of filter keeps the list on
+              screen, faded, until the new one arrives, so the panel does not blank and jump. */}
+          {loading && !conversations.length ? (
             <div className="loader"><div className="spinner" /></div>
           ) : !conversations.length ? (
             <p className="wa-empty">
@@ -1520,7 +1555,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                 : 'Nothing here yet. A customer messaging the business number starts a thread.'}
             </p>
           ) : (
-            <ul className="wa-threads" onScroll={onListScroll}>
+            <ul className={`wa-threads${loading ? ' wa-threads-stale' : ''}`} onScroll={onListScroll} aria-busy={loading}>
               {conversations.map(c => {
                 const s = statusLook(c.lead_status)
                 return (
@@ -1575,7 +1610,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
         </aside>
 
         {/* The conversation */}
-        <section className="wa-chat" aria-label="Conversation" {...dropProps}>
+        <section className={`wa-chat${thread && openId !== thread.id ? ' wa-chat-switching' : ''}`} aria-label="Conversation" aria-busy={!!thread && openId !== thread.id} {...dropProps}>
           {dragging && <div className="wa-drop" aria-hidden="true"><Icon name="download" size={22} /> Drop files to add them to your reply</div>}
           {!thread ? (
             <div className="wa-chat-empty">
@@ -1790,7 +1825,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                     </div>
                   )
                 })}
-                {pending.map(p => (
+                {pendingHere.map(p => (
                   <div key={p.id} className={`wa-bubble wa-bubble-out wa-bubble-pending${p.error ? ' wa-bubble-bad' : ''}`} aria-live="polite">
                     <div className="wa-text">{p.label}</div>
                     {p.error ? (
