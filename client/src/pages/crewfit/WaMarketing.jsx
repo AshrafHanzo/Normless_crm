@@ -27,6 +27,7 @@ const keyOf = (t) => `${t.name}|${t.language}`
 const SOURCES = {
   normless: [
     ['customers', 'Shopify customers'],
+    ['carts', 'Abandoned carts'],
     ['chatted', 'People who have chatted on WhatsApp'],
     ['numbers', 'Paste numbers'],
   ],
@@ -100,7 +101,7 @@ function BroadcastDrawer({ id, onClose, onChanged, canSend }) {
                 <p className="was-hint">“Healthy ecosystem” means Meta held back marketing to that person because they’ve had many recently — it isn’t charged.</p>
               </div>
             )}
-            <div className="was-hint">Audience: {b.audience?.source || '—'}{b.audience?.opted_out ? ` · ${num(b.audience.opted_out)} left out for saying STOP` : ''}</div>
+            <div className="was-hint">Audience: {b.audience?.source || '—'}{b.audience?.product ? ` · ${b.audience.product}` : ''}{b.audience?.opted_out ? ` · ${num(b.audience.opted_out)} left out for saying STOP` : ''}</div>
           </div>
         )}
         {b && canSend && (
@@ -272,6 +273,17 @@ function NewBroadcast({ data, onClose, onMade }) {
                       <div className="input-group"><label htmlFor="wmk-ow">Ordered in the last … days</label><input id="wmk-ow" type="number" min={0} placeholder="any time" value={aud.ordered_within_days ?? ''} onChange={e => setA({ ordered_within_days: e.target.value, not_ordered_days: '' })} /></div>
                       <div className="input-group"><label htmlFor="wmk-no">Not ordered in … days</label><input id="wmk-no" type="number" min={0} placeholder="win-back" value={aud.not_ordered_days ?? ''} onChange={e => setA({ not_ordered_days: e.target.value, ordered_within_days: '' })} /></div>
                       <div className="input-group"><label htmlFor="wmk-ms">Spent at least ₹</label><input id="wmk-ms" type="number" min={0} value={aud.min_spent ?? ''} onChange={e => setA({ min_spent: e.target.value })} /></div>
+                    </div>
+                  )}
+                  {aud.source === 'carts' && (
+                    <div className="form-row">
+                      <div className="input-group">
+                        <label htmlFor="wmk-cp">Cart had <span className="label-hint">product name, or empty for any cart</span></label>
+                        <input id="wmk-cp" list="wmk-cp-list" value={aud.product ?? ''} placeholder="Dr Doom Hoodie" onChange={e => setA({ product: e.target.value })} />
+                        <datalist id="wmk-cp-list">{products.map(p => <option key={p.title} value={p.title} />)}</datalist>
+                      </div>
+                      <div className="input-group"><label htmlFor="wmk-cd">Left in the last … days</label><input id="wmk-cd" type="number" min={0} placeholder="any time" value={aud.cart_within_days ?? ''} onChange={e => setA({ cart_within_days: e.target.value })} /></div>
+                      <span className="was-hint">Leaves out carts that became orders, and anybody who has ever bought that product.</span>
                     </div>
                   )}
                   {aud.source === 'leads' && (

@@ -7,8 +7,8 @@
  * says how to stop and carries a "Stop promotions" button, which opts the customer out of further
  * marketing on that number (order messages still go).
  *
- * Broadcasts: the audience is worked out when a broadcast is created — Shopify customers, Crewfit
- * leads and order contacts, people who have chatted, or pasted numbers — minus anybody who opted
+ * Broadcasts: the audience is worked out when a broadcast is created — Shopify customers, abandoned
+ * carts, Crewfit leads and order contacts, people who have chatted, or pasted numbers — minus anybody who opted
  * out, once per number. Sending happens in the background at a steady pace, survives a restart,
  * and every message is written into that customer's chat so a reply lands with its context.
  */
@@ -128,7 +128,7 @@ const firstName = (n) => {
 
 /**
  * Who a broadcast goes to. `a` = { source, min_orders, ordered_within_days, not_ordered_days,
- * min_spent, statuses, numbers }. Returns [{ phone, name }] — opted-out numbers and repeats removed.
+ * min_spent, statuses, numbers, product, cart_within_days }. Returns [{ phone, name }] — opted-out numbers and repeats removed.
  */
 async function audience(line, a = {}) {
     const people = [];
@@ -160,6 +160,26 @@ async function audience(line, a = {}) {
                     COALESCE(whatsapp_number, contact_number, billing_mobile) AS phone, COALESCE(contact_person, customer_name) AS name
                FROM crewfit_orders WHERE COALESCE(whatsapp_number, contact_number, billing_mobile, '') <> '' AND COALESCE(status, '') <> 'Cancelled'
               ORDER BY RIGHT(REGEXP_REPLACE(COALESCE(whatsapp_number, contact_number, billing_mobile, ''), '\\D', '', 'g'), 10), order_date DESC`)).rows;
+        people.push(...rows);
+    } else if (source === 'carts' && line.brand === 'normless') {
+        // Checkouts left unpaid (Razorpay's abandoned carts), optionally only those holding a
+        // product. Left out: carts that became an order, and anybody who has since bought that
+        // product (or anything, with no product picked) on another checkout.
+        const params = [line.id];
+        const where = [`k.line_id = $1`, `k.recovered_at IS NULL`, `COALESCE(k.phone, '') <> ''`];
+        const product = String(a.product || '').trim();
+        if (product) { params.push(`%${product}%`); where.push(`k.items ILIKE $${params.length}`); }
+        if (Number(a.cart_within_days) > 0) {
+            params.push(Number(a.cart_within_days));
+            where.push(`k.created_at > NOW() - ($${params.length} || ' days')::interval`);
+        }
+        // With a product: anybody who has ever bought it. Without: anybody who ordered after the cart.
+        const bought = product ? `o.line_items_json ILIKE $${params.indexOf(`%${product}%`) + 1}` : `o.created_at >= k.created_at`;
+        where.push(`NOT EXISTS (SELECT 1 FROM orders o
+                                 WHERE RIGHT(REGEXP_REPLACE(k.phone, '\\D', '', 'g'), 10) = ANY(o.phones)
+                                   AND o.cancelled_at IS NULL AND ${bought})`);
+        const rows = (await db.query(
+            `SELECT k.phone, k.name FROM nl_carts k WHERE ${where.join(' AND ')} ORDER BY k.created_at DESC`, params)).rows;
         people.push(...rows);
     } else if (source === 'chatted') {
         const params = [line.id];
