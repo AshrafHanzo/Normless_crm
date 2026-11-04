@@ -22,9 +22,11 @@ const OFFICE = {
 };
 const mapsLink = () => `https://www.google.com/maps/search/?api=1&query=${OFFICE.latitude},${OFFICE.longitude}`;
 
-// Opens the listing with the review box already up. The "Ask for reviews" link from the Google
-// Business Profile does the same and can be pasted in Settings instead.
-const DEFAULT_REVIEW_LINK = 'https://www.google.com/search?q=Crewfit+office&ludocid=3554332516400421125#lrd=0x3a5261001157979b:0x315386978daad905,3,,,';
+// Opens the listing with the review box already up — the link Google gives when you start a review
+// of the office, without the search session it was copied from. Searching "Crewfit office" instead
+// brought up other businesses on some phones. The "Ask for reviews" link from the Google Business
+// Profile does the same and can be pasted in Settings instead.
+const DEFAULT_REVIEW_LINK = 'https://www.google.com/search?q=crewfit#lrd=0x3a5261001157979b:0x315386978daad905,3,,,,';
 const DEFAULT_REVIEW_TEXT = [
     'Hi {name}! 😊',
     '',
