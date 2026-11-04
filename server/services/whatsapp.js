@@ -186,6 +186,18 @@ async function sendCtaUrl(phone, text, { label, url }) {
     return data?.messages?.[0]?.id || null;
 }
 
+/** A pin on the map — the office, say. The customer taps it for directions. */
+async function sendLocation(phone, { latitude, longitude, name = '', address = '' }) {
+    const data = await graph(`/${PHONE_ID()}/messages`, {
+        method: 'POST',
+        body: {
+            messaging_product: 'whatsapp', recipient_type: 'individual', to: phone, type: 'location',
+            location: { latitude, longitude, name, address },
+        },
+    });
+    return data?.messages?.[0]?.id || null;
+}
+
 /**
  * A photo that is already online — a Shopify product shot or size chart — sent by its address.
  * WhatsApp fetches it itself, so nothing is downloaded or uploaded here.
@@ -506,7 +518,7 @@ function verifySignature(rawBody, header) {
 
 module.exports = {
     configured, checkToken, phoneNumberId: PHONE_ID, wabaId: WABA_ID, graph, GRAPH, normalisePhone, prettyPhone, windowOpen, windowLeftMs,
-    sendText, sendMedia, sendImageLink, sendCtaUrl, sendButtons, sendList, createTemplate, downloadMedia, markRead, verifySignature, CAP,
+    sendText, sendMedia, sendImageLink, sendCtaUrl, sendLocation, sendButtons, sendList, createTemplate, downloadMedia, markRead, verifySignature, CAP,
     fetchTemplates, sendTemplate, renderTemplate, whatsappImage, uploadSample,
     WhatsAppError, MEDIA_ROOT, MAX_MEDIA_MB, WINDOW_HOURS,
 };

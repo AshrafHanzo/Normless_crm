@@ -2355,6 +2355,31 @@ router.post('/conversations/:id/catalogue-pdf', async (req, res) => {
     }
 });
 
+/** The office's pin on the map, or the Google review request — `/office/location`, `/office/review`. */
+router.post('/conversations/:id/office/:what', async (req, res) => {
+    try {
+        const what = req.params.what;
+        if (!['location', 'review'].includes(what)) return res.status(404).json({ error: 'Nothing to send by that name' });
+        if (!wa.configured()) return res.status(503).json({ error: 'WhatsApp is not configured on this server' });
+        const conversation = await loadConversation(req, req.params.id);
+        if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
+        if (!wa.windowOpen(conversation.last_inbound_at)) {
+            return res.status(409).json({ error: 'This chat is past WhatsApp’s 24-hour window — only an approved template can be sent now.' });
+        }
+        const office = require('../services/wa-office');
+        const message = what === 'location'
+            ? await office.sendLocation(conversation, { user: req.user?.username })
+            : await office.sendReview(conversation, { user: req.user?.username });
+        await orders.logActivity({ conversationId: conversation.id, kind: 'message', actor: req.user?.username,
+            body: what === 'location' ? 'Sent the office location' : 'Asked for a Google review' });
+        res.status(201).json({ message });
+    } catch (err) {
+        if (err instanceof wa.WhatsAppError) return res.status(502).json({ error: err.message });
+        console.error('whatsapp office send error:', err);
+        res.status(500).json({ error: 'Could not send that' });
+    }
+});
+
 /** Ask the customer for their billing details, and read the answers into the lead. */
 router.post('/conversations/:id/billing', async (req, res) => {
     try {

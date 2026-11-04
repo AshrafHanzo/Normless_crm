@@ -77,6 +77,7 @@ const money = (v) => (v == null || v === '' ? '' : `₹${Number(v).toLocaleStrin
 const ORDER_SENDS = [
   ['summary', 'Summary'], ['advance_link', 'Advance link'], ['payment_qr', 'Payment QR'], ['mockups', 'Mockups'],
   ['proforma', 'Proforma'], ['photos', 'Photos'], ['balance_link', 'Balance link'], ['invoice', 'Invoice'], ['dispatch', 'Tracking'],
+  ['review', 'Review'],
 ]
 // What the customer owes, by the order's payment status.
 const PAY_LOOK = {
@@ -1036,6 +1037,17 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
     })
   }
 
+  /** The office's pin on the map, or the Google review request with its button. */
+  const sendOffice = async (what) => {
+    if (busyWith(`office:${what}`)) return
+    await track({
+      label: what === 'location' ? '📍 Office location' : '⭐ Google review request', retryKey: `office:${what}`,
+      stages: [[0, 'Sending…']],
+      run: () => apiFetch(`${API}/conversations/${thread.id}/office/${what}`, { method: 'POST' }),
+      onDone: (r) => { appendSent(r.message); loadActivity() },
+    })
+  }
+
   const sendProduct = async (p) => {
     setPop(null)
     await track({
@@ -1057,7 +1069,8 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
     photos: [[0, 'Preparing the photos…'], [3000, 'Uploading them to WhatsApp…'], [9000, 'Still uploading — several photos…']],
     mockups: [[0, 'Preparing the mockups…'], [3000, 'Uploading them to WhatsApp…']],
     payment_qr: [[0, 'Uploading the QR…'], [2500, 'Sending it…']],
-    dispatch: [[0, 'Sending the tracking details…']],
+    dispatch: [[0, 'Sending the tracking details…'], [2500, 'Asking for a Google review…']],
+    review: [[0, 'Sending the review request…']],
   }
 
   /** One order message — a payment link, an invoice, the tracking — straight into this chat. */
@@ -1963,6 +1976,16 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                       {cf && (
                         <button type="button" className="wa-tool" onClick={() => setSamplesOpen(true)} title="Send photos of our work, by product and colour">
                           <Icon name="eye" size={14} /> Samples
+                        </button>
+                      )}
+                      {cf && (
+                        <button type="button" className="wa-tool" onClick={() => sendOffice('location')} title="Send the Crewfit office as a pin they can tap for directions">
+                          <Icon name="pin" size={14} /> Location
+                        </button>
+                      )}
+                      {cf && (
+                        <button type="button" className="wa-tool" onClick={() => sendOffice('review')} title="Ask for a Google review, with a Write a review button">
+                          <Icon name="star" size={14} /> Review
                         </button>
                       )}
                       {cf && <div className="wa-pop-anchor">

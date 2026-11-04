@@ -407,7 +407,7 @@ router.put('/assignment', async (req, res) => {
 
 const VAR_SOURCES = ['first_name', 'name', 'company', 'product', 'quantity', 'quoted_amount', 'balance_due', 'needed_by', 'agent_name',
     'order_ref', 'order_total', 'advance_amount', 'balance_amount', 'payment_link', 'tracking_id', 'tracking_url',
-    'courier', 'due_amount', 'document_link'];
+    'courier', 'due_amount', 'document_link', 'review_link'];
 
 router.get('/templates', async (req, res) => {
     try {
@@ -703,6 +703,38 @@ router.put('/payments/billing-request', async (req, res) => {
 });
 
 const billingSvc = () => require('../services/wa-billing');
+
+/** The Google review request: the link its button opens and the words above it. Blank = default. */
+router.get('/review', async (req, res) => {
+    try {
+        const office = require('../services/wa-office');
+        const s = await getSettings();
+        res.json({
+            link: s.review_link || '', text: s.review_text || '',
+            defaultLink: office.DEFAULT_REVIEW_LINK, defaultText: office.DEFAULT_REVIEW_TEXT, office: office.OFFICE,
+        });
+    } catch (err) {
+        console.error('whatsapp review settings error:', err);
+        res.status(500).json({ error: 'Could not load that' });
+    }
+});
+
+router.put('/review', async (req, res) => {
+    try {
+        const office = require('../services/wa-office');
+        const link = String(req.body?.link || '').trim();
+        const text = String(req.body?.text || '').replace(/\r\n/g, '\n').trim();
+        if (link && !/^https:\/\/\S+$/i.test(link)) return res.status(400).json({ error: 'The review link has to be a full https:// address' });
+        if (text.length > 1000) return res.status(400).json({ error: 'Keep the message under 1,000 characters — WhatsApp cuts a button message there' });
+        // The default is not stored, so a better default later reaches everyone still on it.
+        await putSetting('review_link', link && link !== office.DEFAULT_REVIEW_LINK ? link : null, req.user?.username);
+        await putSetting('review_text', text && text !== office.DEFAULT_REVIEW_TEXT ? text : null, req.user?.username);
+        res.json({ ok: true });
+    } catch (err) {
+        console.error('whatsapp review settings save error:', err);
+        res.status(500).json({ error: 'Could not save that' });
+    }
+});
 
 /** Send all the Crewfit order templates to Meta for approval and link each to its message. */
 router.post('/order-messages/templates', async (req, res) => {

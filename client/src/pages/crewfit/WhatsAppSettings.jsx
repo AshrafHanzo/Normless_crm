@@ -586,6 +586,7 @@ const VAR_SOURCES = [
   ['payment_link', 'Payment link'],
   ['tracking_id', 'Tracking ID'],
   ['tracking_url', 'Tracking link'],
+  ['review_link', 'Google review link'],
 ]
 
 /**
@@ -688,7 +689,7 @@ function OrderMessagesTab() {
   const submitTemplates = async () => {
     if (!await toast.confirm({
       title: 'Send the Crewfit templates to Meta?',
-      message: 'Ten utility templates — order confirmation, payment links, proforma, invoice, dispatch and the rest — go to Meta for review, and each order message is linked to its own. Meta usually decides within a day. Ones already on the account are only linked.',
+      message: 'Eleven utility templates — order confirmation, payment links, proforma, invoice, dispatch, the review request and the rest — go to Meta for review, and each order message is linked to its own. Meta usually decides within a day. Ones already on the account are only linked.',
       confirmLabel: 'Submit for approval',
     })) return
     setSubmitting(true)
@@ -718,7 +719,7 @@ function OrderMessagesTab() {
           {submitting ? 'Submitting to Meta…' : linked === data.messages.length ? 'Re-check templates with Meta' : 'Submit Crewfit templates to Meta'}
         </button>}>
         The messages a Crewfit order sends: the summary, payment links, proforma, invoice, photos and tracking.
-        They go from the chat’s Orders tab, and four of them can go out on their own when the order reaches that step.
+        They go from the chat’s Orders tab, and five of them can go out on their own when the order reaches that step.
         Past WhatsApp’s 24-hour window only an approved template can be sent, so pick one for each message you want to keep working then.
       </Head>
       <section className="was-table-card">
@@ -799,7 +800,70 @@ function OrderMessagesTab() {
         A message sent on its own appears in the chat marked “sent automatically”. If it cannot go — no number, no total, no template —
         the reason is written to that chat’s Activity tab.
       </p>
+      <ReviewCard />
     </>
+  )
+}
+
+/**
+ * The Google review request: sent by a chat's Review button, and on its own after the tracking
+ * details (its row above). Blank fields send the default, so the default can improve later.
+ */
+function ReviewCard() {
+  const apiFetch = useApi()
+  const toast = useToast()
+  const [data, setData] = useState(null)
+  const [link, setLink] = useState('')
+  const [text, setText] = useState('')
+  const [saving, setSaving] = useState(false)
+  useEffect(() => {
+    apiFetch('/api/whatsapp/admin/review').then(r => {
+      if (!r || r.error) return
+      setData(r); setLink(r.link || r.defaultLink); setText(r.text || r.defaultText)
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  if (!data) return null
+  const savedLink = data.link || data.defaultLink
+  const savedText = data.text || data.defaultText
+  const save = async () => {
+    setSaving(true)
+    const r = await apiFetch('/api/whatsapp/admin/review', { method: 'PUT', body: JSON.stringify({ link, text }) })
+    setSaving(false)
+    if (!r || r.error) return toast.error(r?.error || 'Could not save that')
+    setData(d => ({ ...d, link: link === d.defaultLink ? '' : link.trim(), text: text === d.defaultText ? '' : text.trim() }))
+  }
+  return (
+    <div className="was-split was-split-2">
+      <section className="was-card" style={{ flex: '999 1 420px' }}>
+        <div className="was-card-head">
+          <h3>Google review request</h3>
+          <SaveButton dirty={link !== savedLink || text !== savedText} saving={saving} onClick={save} />
+        </div>
+        <p className="was-hint" style={{ margin: 0 }}>
+          Sent from a chat’s Review button, and on its own right after the tracking details (once an order). It goes with a
+          “⭐ Write a review” button that opens the link. <b>{'{name}'}</b> becomes the customer’s first name.
+        </p>
+        <label htmlFor="wa-review-link"><b>Review link</b></label>
+        <input id="wa-review-link" value={link} onChange={e => setLink(e.target.value)} placeholder="https://g.page/r/…/review" />
+        <p className="was-hint" style={{ margin: 0 }}>
+          Opens the Crewfit office listing with the review box up. The “Ask for reviews” link from your Google Business Profile works too — paste it here.
+        </p>
+        <label htmlFor="wa-review-text"><b>Message</b></label>
+        <textarea id="wa-review-text" rows={9} maxLength={1000} value={text} onChange={e => setText(e.target.value)} />
+        {(link !== data.defaultLink || text !== data.defaultText) && (
+          <button type="button" className="mini-btn" style={{ alignSelf: 'flex-start' }}
+            onClick={() => { setLink(data.defaultLink); setText(data.defaultText) }}>Put back the original link and wording</button>
+        )}
+      </section>
+      <section className="was-card" style={{ flex: '1 1 300px', maxWidth: 380 }}>
+        <h3>Office location</h3>
+        <p className="was-hint" style={{ margin: 0 }}>Sent from a chat’s Location button as a pin the customer taps for directions.</p>
+        <p style={{ margin: 0 }}><b>{data.office.name}</b><br />{data.office.address}</p>
+        <a className="mini-btn" style={{ alignSelf: 'flex-start' }} target="_blank" rel="noreferrer"
+          href={`https://www.google.com/maps/search/?api=1&query=${data.office.latitude},${data.office.longitude}`}>Open in Google Maps</a>
+      </section>
+    </div>
   )
 }
 

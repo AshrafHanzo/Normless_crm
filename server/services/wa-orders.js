@@ -14,6 +14,7 @@
  *   production complete → the production photos, then the balance link
  *   balance paid        → the tax invoice
  *   dispatched          → the tracking details
+ *   tracking sent       → a request for a Google review (on unless switched off; once an order)
  *
  * WhatsApp's 24-hour rule still applies. Inside the window the full message goes; outside it,
  * only an approved template can, so each message can name the template to fall back on. With
@@ -29,6 +30,7 @@ const crypto = require('crypto');
 const db = require('../db/connection');
 const wa = require('./whatsapp');
 const { chargesOf, gstPctOf, advanceLabel } = require('./crewfit-charges');
+const office = () => require('./wa-office');
 
 const safeJson = (v, fallback) => {
     try { return typeof v === 'string' ? (JSON.parse(v || 'null') ?? fallback) : (v || fallback); }
@@ -53,6 +55,8 @@ const MESSAGES = {
     balance_link: { label: 'Balance payment link', auto: 'When production is complete' },
     invoice: { label: 'Tax invoice', auto: 'When the balance is paid' },
     dispatch: { label: 'Tracking details', auto: 'When the order is dispatched' },
+    // On unless switched off: the shop asked for it to follow the tracking every time.
+    review: { label: 'Google review request', auto: 'Right after the tracking details', autoDefault: true },
 };
 
 /**
@@ -122,6 +126,12 @@ const TEMPLATES = {
         body: 'Hi {{1}}, your Crewfit order {{2}} has been dispatched via {{3}}. Tracking: {{4}} Thank you for choosing Crewfit!',
         map: ['first_name', 'order_ref', 'courier', 'tracking_url'],
         examples: ['Rahul', 'CF-142', 'ST Courier', 'ST123456'],
+    },
+    review: {
+        name: 'crewfit_review_request',
+        body: 'Hi {{1}}, thank you for choosing Crewfit for your order {{2}}! If you are happy with it, please spare a minute to leave us a Google review: {{3}} It helps other businesses find us.',
+        map: ['first_name', 'order_ref', 'review_link'],
+        examples: ['Rahul', 'CF-142', 'https://g.page/r/crewfit/review'],
     },
 };
 
@@ -438,6 +448,7 @@ function templateValue(source, ctx) {
         case 'product': return itemsOf(order).map(it => it.product).filter(Boolean).join(', ');
         case 'quantity': return String(itemsOf(order).reduce((n, it) => n + (parseInt(it.qty, 10) || 0), 0) || '');
         case 'agent_name': return String(ctx.user || '').split('@')[0];
+        case 'review_link': return ctx.reviewLink || '';
         default: return '';
     }
 }
@@ -478,6 +489,10 @@ async function send(orderId, kind, opts = {}) {
     try {
         const out = await sendOnce(orderId, kind, opts);
         recent.set(key, Date.now());
+        if (kind === 'dispatch') {
+            const review = await reviewAfterTracking(orderId);
+            if (review) out.messages = [...out.messages, ...review.messages];
+        }
         return out;
     } catch (err) {
         recent.delete(key);
@@ -536,6 +551,8 @@ async function sendOnce(orderId, kind, { user = null, auto = false, bare = false
         if (!order.tracking_link && !NO_TRACKING_MOTS.includes(order.mot)) throw new SendError(`${ref(order)} has no tracking ID yet`);
         text = dispatchText(order);
     }
+    // The review request is its own message, with a button (see wa-office.js).
+    const reviewLink = kind === 'review' ? (await office().reviewSettings()).link : null;
 
     const sent = [];
     try {
@@ -551,7 +568,7 @@ async function sendOnce(orderId, kind, { user = null, auto = false, bare = false
                 throw new SendError(`${ref(order)}: the chat is past WhatsApp’s 24-hour window. Pick an approved template for “${MESSAGES[kind].label}” in WhatsApp settings › Order messages, or wait for the customer to write.`, 409);
             }
             const map = safeJson(t.var_map, []);
-            const variables = Array.from({ length: t.variables }, (_, i) => templateValue(map[i], { order, payment, user, fileUrl: files[0]?.url }));
+            const variables = Array.from({ length: t.variables }, (_, i) => templateValue(map[i], { order, payment, user, fileUrl: files[0]?.url, reviewLink }));
             if (variables.some(v => !String(v).trim())) {
                 throw new SendError(`The template “${t.name}” has a gap this order cannot fill — check what each gap is filled from in Settings › Templates`);
             }
@@ -566,6 +583,9 @@ async function sendOnce(orderId, kind, { user = null, auto = false, bare = false
             if (text) {
                 const wamid = await wa.sendText(conv.phone, text);
                 sent.push(await record(conv, { wamid, type: 'text', body: text, user, auto }));
+            }
+            if (kind === 'review') {
+                sent.push(await office().sendReview(conv, { name: order.customer_name, senderType: auto ? 'auto' : 'user', user: auto ? null : user || null }));
             }
         }
     } catch (err) {
@@ -652,6 +672,24 @@ async function approvePhotos(orderId, { user = null } = {}) {
 }
 
 /* ── Sending on its own ──────────────────────────────────────────────────────────────────── */
+
+/**
+ * The tracking went: ask for a review, unless that is switched off or this order already asked.
+ * Sending the tracking again (a corrected AWB) does not ask twice. Never fails the tracking send.
+ */
+async function reviewAfterTracking(orderId) {
+    const s = await settings();
+    if (s.auto_review !== 'true') return null;
+    const asked = (await db.query(`SELECT 1 FROM wa_activity WHERE order_id = $1 AND kind = 'message' AND detail = 'review' LIMIT 1`, [orderId])).rows[0];
+    if (asked) return null;
+    try {
+        return await send(orderId, 'review', { auto: true });
+    } catch (err) {
+        console.error(`whatsapp auto review for order ${orderId}:`, err.message);
+        await logActivity({ orderId, kind: 'error', body: `Could not send “${MESSAGES.review.label}” automatically: ${err.message}` });
+        return null;
+    }
+}
 
 async function autoSend(orderId, kind) {
     const s = await settings();
