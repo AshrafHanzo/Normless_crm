@@ -49,6 +49,49 @@ function Progress({ b }) {
   )
 }
 
+/** "Try it on your phone": sends one, then says what WhatsApp did with it. */
+function TestSend({ payload, disabled }) {
+  const apiFetch = useApi()
+  const toast = useToast()
+  const brand = useWaBrand()
+  const { user } = useAuth()
+  const [phone, setPhone] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [test, setTest] = useState(null)
+  useEffect(() => {
+    if (!test?.wamid || ['delivered', 'read', 'failed'].includes(test.status) || test.tries > 20) return
+    const t = setTimeout(async () => {
+      const r = await apiFetch(`${brand.api}/marketing/test/${encodeURIComponent(test.wamid)}`)
+      setTest(x => ({ ...x, ...(r?.test || {}), tries: (x?.tries || 0) + 1 }))
+    }, 3000)
+    return () => clearTimeout(t)
+  }, [test]) // eslint-disable-line react-hooks/exhaustive-deps
+  const send = async () => {
+    setBusy(true); setTest(null)
+    const me = String(user?.username || '').split('@')[0]
+    const r = await apiFetch(`${brand.api}/marketing/test`, { method: 'POST', body: JSON.stringify({ ...payload(), phone, test_name: me.charAt(0).toUpperCase() + me.slice(1) }) })
+    setBusy(false)
+    if (!r || r.error) return toast.error(r?.error || 'Could not send the test', { duration: 0 })
+    setTest({ wamid: r.wamid, status: 'sent', tries: 0 })
+  }
+  const said = !test ? null
+    : test.status === 'failed' ? <span className="was-bad">Not delivered: {test.error || 'WhatsApp refused it'}</span>
+    : test.status === 'read' ? <span>Delivered and read ✓</span>
+    : test.status === 'delivered' ? <span>Delivered ✓ — check your WhatsApp</span>
+    : test.tries > 20 ? <span className="was-hint">WhatsApp hasn’t confirmed delivery yet. Is that number on WhatsApp?</span>
+    : <span className="was-hint">Sent — waiting for WhatsApp to deliver it…</span>
+  return (
+    <div className="wnc-section">
+      <span className="wnc-label">Try it on your phone first</span>
+      <div className="was-inline">
+        <input aria-label="Your WhatsApp number" inputMode="tel" value={phone} placeholder="Your number" onChange={e => setPhone(e.target.value)} />
+        <button type="button" className="btn btn-secondary btn-sm" disabled={disabled || !phone.trim() || busy} onClick={send}>{busy ? 'Sending…' : 'Send test'}</button>
+      </div>
+      {said && <div className="was-inline" role="status">{said}</div>}
+    </div>
+  )
+}
+
 /** One broadcast's results, live while it sends. */
 function BroadcastDrawer({ id, onClose, onChanged, canSend }) {
   const apiFetch = useApi()
@@ -102,6 +145,18 @@ function BroadcastDrawer({ id, onClose, onChanged, canSend }) {
               </div>
             )}
             <div className="was-hint">Audience: {b.audience?.source || '—'}{b.audience?.product ? ` · ${b.audience.product}` : ''}{b.audience?.opted_out ? ` · ${num(b.audience.opted_out)} left out for saying STOP` : ''}</div>
+            {!!b.components?.length && (() => {
+              const ff = formFrom({ components: b.components })
+              return (
+                <div className="wnc-section">
+                  <span className="wnc-label">The message, as “Meera” gets it</span>
+                  <TemplatePreview header={ff.header} headerExample="" body={ff.body} examples={(b.vars || []).map(v => (v.source === 'first_name' ? 'Meera' : v.value))}
+                    footer={ff.footer} buttons={ff.buttons} image={b.components.some(x => x.type === 'HEADER' && x.format === 'IMAGE') ? (b.header_image || true) : null} />
+                  {b.link_url && <p className="was-hint">The link button opens {b.link_url}</p>}
+                </div>
+              )
+            })()}
+            {canSend && ['draft', 'paused'].includes(b.status) && <TestSend payload={() => ({ broadcast_id: b.id })} />}
           </div>
         )}
         {b && canSend && (
@@ -121,7 +176,6 @@ function NewBroadcast({ data, onClose, onMade }) {
   const apiFetch = useApi()
   const toast = useToast()
   const brand = useWaBrand()
-  const { user } = useAuth()
   const approved = data.approved
   const ours = data.ours
   // The brand's own marketing templates first, in their own order; anything else approved after.
@@ -151,7 +205,6 @@ function NewBroadcast({ data, onClose, onMade }) {
   const [aud, setAud] = useState({ source: SOURCES[brand.key][0][0], min_orders: 1 })
   const [count, setCount] = useState(null)
   const [products, setProducts] = useState([])
-  const [testPhone, setTestPhone] = useState('')
   const [busy, setBusy] = useState('')
   const countKey = useRef('')
 
@@ -175,14 +228,6 @@ function NewBroadcast({ data, onClose, onMade }) {
     if (countKey.current !== key) return
     if (!r || r.error) return toast.error(r?.error || 'Could not count that')
     setCount(r)
-  }
-  const test = async () => {
-    setBusy('test')
-    const me = String(user?.username || '').split('@')[0]
-    const r = await apiFetch(`${brand.api}/marketing/test`, { method: 'POST', body: JSON.stringify({ ...payload(), phone: testPhone, test_name: me.charAt(0).toUpperCase() + me.slice(1) }) })
-    setBusy('')
-    if (!r || r.error) return toast.error(r?.error || 'Could not send the test', { duration: 0 })
-    toast.success('Test sent — check your WhatsApp')
   }
   const save = async () => {
     setBusy('save')
@@ -311,13 +356,7 @@ function NewBroadcast({ data, onClose, onMade }) {
                   </div>
                 </div>
 
-                <div className="wnc-section">
-                  <span className="wnc-label">Try it on your phone first</span>
-                  <div className="was-inline">
-                    <input aria-label="Your WhatsApp number" inputMode="tel" value={testPhone} placeholder="Your number" onChange={e => setTestPhone(e.target.value)} />
-                    <button type="button" className="btn btn-secondary btn-sm" disabled={!ready || !testPhone.trim() || busy === 'test'} onClick={test}>{busy === 'test' ? 'Sending…' : 'Send test'}</button>
-                  </div>
-                </div>
+                <TestSend payload={payload} disabled={!ready} />
               </>
             )}
           </div>

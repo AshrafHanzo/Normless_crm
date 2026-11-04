@@ -300,14 +300,38 @@ async function create(line, input, user) {
     });
 }
 
-/** Send one to a single number (your own) to see it on a phone first. Nothing is recorded. */
+/**
+ * Send one to a single number (your own) to see it on a phone first: from the form's fields, or
+ * from a saved broadcast (`broadcast_id`). It goes into that number's chat like a real one, so
+ * WhatsApp's verdict on it — delivered, or why not — comes back and can be shown.
+ */
 async function testSend(line, input, phone) {
-    const t = await templateRow(line.id, input.template);
+    let src = input;
+    if (input.broadcast_id) {
+        const b = shape((await db.query(`SELECT ${SHAPE} FROM wa_broadcasts WHERE id = $1 AND line_id = $2`, [input.broadcast_id, line.id])).rows[0]);
+        if (!b) throw Object.assign(new Error('No such broadcast'), { status: 404 });
+        src = { template: `${b.template}|${b.language}`, vars: b.vars, link_url: b.link_url, header_image: b.header_image, test_name: input.test_name };
+    }
+    const t = await templateRow(line.id, src.template);
     if (!t || t.status !== 'APPROVED') throw Object.assign(new Error('Pick an approved template first'), { status: 400 });
     const to = wa.normalisePhone(phone);
     if (!to) throw Object.assign(new Error('Which number should the test go to?'), { status: 400 });
-    const m = await message({ vars: JSON.stringify(input.vars || []), link_url: input.link_url, header_image: input.header_image }, t, { name: input.test_name || '' }, 0);
-    return wa.sendTemplate(to, { name: t.name, language: t.language, ...m });
+    const m = await message({ vars: JSON.stringify(src.vars || []), link_url: src.link_url, header_image: src.header_image }, t, { name: src.test_name || '' }, 0);
+    const wamid = await wa.sendTemplate(to, { name: t.name, language: t.language, ...m });
+    const conv = await threadFor(line.id, to, null);
+    await db.query(
+        `INSERT INTO wa_messages (conversation_id, wamid, direction, sender_type, sender_user, type, body, media_url, media_mime, status)
+         VALUES ($1,$2,'out','user',$3,'template',$4,$5,$6,'sent')`,
+        [conv.id, wamid, input.user || null, wa.renderTemplate(t.body_text, m.variables), m.headerImage, m.headerImage ? 'image/jpeg' : null]);
+    await require('./wa-template-look').stamp(wamid, line.id, t.name, t.language);
+    return { wamid, conversation_id: conv.id };
+}
+
+/** Where a test stands: sent, delivered, read, or failed with WhatsApp's reason. */
+async function testStatus(line, wamid) {
+    return (await db.query(
+        `SELECT m.status, m.error FROM wa_messages m JOIN wa_conversations c ON c.id = m.conversation_id
+          WHERE m.wamid = $1 AND c.line_id = $2`, [wamid, line.id])).rows[0] || null;
 }
 
 async function start(lineId, id) {
@@ -344,7 +368,8 @@ async function report(lineId, id) {
     const errors = (await db.query(
         `SELECT error, COUNT(*)::int AS n FROM wa_broadcast_recipients WHERE broadcast_id = $1 AND status = 'failed' GROUP BY 1 ORDER BY 2 DESC LIMIT 5`, [id])).rows;
     const taps = (await db.query(`SELECT COALESCE(SUM(clicks), 0)::int AS n FROM nl_links WHERE kind = 'broadcast' AND (ref = $1 OR ref LIKE $1 || ':%')`, [String(id)])).rows[0].n;
-    return { ...b, counts: { ...counts, taps }, errors };
+    const t = await templateRow(lineId, `${b.template}|${b.language}`);
+    return { ...b, counts: { ...counts, taps }, errors, components: t ? safeJson(t.components, []) : [] };
 }
 
 async function list(lineId) {
@@ -444,5 +469,5 @@ function startWorker() {
 
 module.exports = {
     TEMPLATES, components, listTemplates, submitTemplates, audience,
-    create, testSend, start, pause, cancel, report, list, tick, startWorker,
+    create, testSend, testStatus, start, pause, cancel, report, list, tick, startWorker,
 };

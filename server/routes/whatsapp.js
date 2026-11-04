@@ -1239,9 +1239,14 @@ router.get('/marketing/products', async (req, res) => {
 
 router.post('/marketing/test', settingsOnly, async (req, res) => {
     try {
-        const wamid = await marketing.testSend(req.waLine, req.body || {}, req.body?.phone);
-        res.json({ sent: !!wamid });
+        const r = await marketing.testSend(req.waLine, { ...(req.body || {}), user: req.user?.username }, req.body?.phone);
+        res.json({ sent: !!r.wamid, ...r });
     } catch (err) { mkError(res, err, 'Could not send the test'); }
+});
+
+router.get('/marketing/test/:wamid', async (req, res) => {
+    try { res.json({ test: await marketing.testStatus(req.waLine, req.params.wamid) }); }
+    catch (err) { mkError(res, err, 'Could not check the test'); }
 });
 
 router.post('/marketing/broadcasts', settingsOnly, async (req, res) => {
