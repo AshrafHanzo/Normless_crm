@@ -93,7 +93,7 @@ function TestSend({ payload, disabled }) {
 }
 
 /** One broadcast's results, live while it sends. */
-function BroadcastDrawer({ id, onClose, onChanged, canSend }) {
+function BroadcastDrawer({ id, onClose, onChanged, onEdit, canSend }) {
   const apiFetch = useApi()
   const toast = useToast()
   const brand = useWaBrand()
@@ -161,6 +161,7 @@ function BroadcastDrawer({ id, onClose, onChanged, canSend }) {
         )}
         {b && canSend && (
           <div className="drawer-footer">
+            {b.status === 'draft' && <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => onEdit(b)}><Icon name="edit" size={13} /> Edit</button>}
             {['draft', 'paused'].includes(b.status) && <button type="button" className="btn btn-primary" disabled={busy} onClick={() => act('start')}>{b.status === 'paused' ? 'Carry on sending' : `Send to ${num(b.total)}`}</button>}
             {b.status === 'sending' && <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => act('pause')}>Pause</button>}
             {['draft', 'sending', 'paused'].includes(b.status) && <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => act('cancel')}>Cancel broadcast</button>}
@@ -171,8 +172,8 @@ function BroadcastDrawer({ id, onClose, onChanged, canSend }) {
   )
 }
 
-/** Making a broadcast: template, gaps, photo, link, audience, a test, then save. */
-function NewBroadcast({ data, onClose, onMade }) {
+/** Making a broadcast — or changing a draft (`editing`): template, gaps, photo, link, audience, a test, then save. */
+function NewBroadcast({ data, editing = null, onClose, onMade }) {
   const apiFetch = useApi()
   const toast = useToast()
   const brand = useWaBrand()
@@ -182,6 +183,7 @@ function NewBroadcast({ data, onClose, onMade }) {
   const ownApproved = ours.map(o => approved.find(t => t.name === o.name)).filter(Boolean)
   const otherApproved = approved.filter(t => !ours.some(o => o.name === t.name))
   const [tplKey, setTplKey] = useState(() => {
+    if (editing) return `${editing.template}|${editing.language}`
     const first = ownApproved[0] || approved[0]
     return first ? keyOf(first) : ''
   })
@@ -198,11 +200,16 @@ function NewBroadcast({ data, onClose, onMade }) {
     })
   }
   const labelFor = (key) => { const tt = approved.find(x => keyOf(x) === key); return (tt && ours.find(o => o.name === tt.name)?.label) || tt?.name || '' }
-  const [name, setName] = useState(() => labelFor(tplKey))
-  const [vars, setVars] = useState(() => varsFor(tplKey))
-  const [image, setImage] = useState('')
-  const [link, setLink] = useState(brand.key === 'normless' ? 'https://normless.store' : '')
-  const [aud, setAud] = useState({ source: SOURCES[brand.key][0][0], min_orders: 1 })
+  const [name, setName] = useState(() => editing?.name || labelFor(tplKey))
+  // A draft's own fills over the template's labels, so each gap still says what it is.
+  const [vars, setVars] = useState(() => varsFor(tplKey).map((v, i) => ({ ...v, ...(editing?.vars?.[i] || {}) })))
+  const [image, setImage] = useState(editing?.header_image || '')
+  const [link, setLink] = useState(editing ? editing.link_url || '' : brand.key === 'normless' ? 'https://normless.store' : '')
+  const [aud, setAud] = useState(() => {
+    if (!editing) return { source: SOURCES[brand.key][0][0], min_orders: 1 }
+    const { opted_out, ...a } = editing.audience || {} // eslint-disable-line no-unused-vars
+    return a
+  })
   const [count, setCount] = useState(null)
   const [products, setProducts] = useState([])
   const [busy, setBusy] = useState('')
@@ -231,9 +238,11 @@ function NewBroadcast({ data, onClose, onMade }) {
   }
   const save = async () => {
     setBusy('save')
-    const r = await apiFetch(`${brand.api}/marketing/broadcasts`, { method: 'POST', body: JSON.stringify(payload()) })
+    const r = editing
+      ? await apiFetch(`${brand.api}/marketing/broadcasts/${editing.id}`, { method: 'PUT', body: JSON.stringify(payload()) })
+      : await apiFetch(`${brand.api}/marketing/broadcasts`, { method: 'POST', body: JSON.stringify(payload()) })
     setBusy('')
-    if (!r || r.error) return toast.error(r?.error || 'Could not make that broadcast', { duration: 0 })
+    if (!r || r.error) return toast.error(r?.error || 'Could not save that broadcast', { duration: 0 })
     toast.success(`Saved for ${num(r.broadcast.total)} people — send it when ready`)
     onMade(r.broadcast.id)
   }
@@ -243,9 +252,9 @@ function NewBroadcast({ data, onClose, onMade }) {
 
   return (
     <div className="drawer-overlay" onClick={onClose}>
-      <div className="drawer drawer-wide" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="New broadcast">
+      <div className="drawer drawer-wide" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={editing ? 'Edit broadcast' : 'New broadcast'}>
         <div className="drawer-header">
-          <div><h2>New broadcast</h2><div className="packed-sub">One marketing template to many customers. People who said STOP are left out.</div></div>
+          <div><h2>{editing ? 'Edit broadcast' : 'New broadcast'}</h2><div className="packed-sub">One marketing template to many customers. People who said STOP are left out.</div></div>
           <button type="button" className="btn-icon" aria-label="Close" onClick={onClose}><Icon name="close" size={16} /></button>
         </div>
         <div className="drawer-body nl-tpl-editor">
@@ -295,6 +304,7 @@ function NewBroadcast({ data, onClose, onMade }) {
                       </select>
                     )}
                     <input id="wmk-img" value={image} placeholder="https://… link to a JPG or PNG" onChange={e => setImage(e.target.value)} />
+                    <span className="was-hint">WhatsApp shows it wide, 1.91:1 (1200 × 628 px). A square photo loses its top and bottom.</span>
                   </div>
                 )}
                 {urlBtn && (
@@ -463,8 +473,9 @@ export default function WaMarketing() {
       </section>
 
       {editing && <TemplateEditor template={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load() }} />}
-      {making && <NewBroadcast data={data} onClose={() => setMaking(false)} onMade={(id) => { setMaking(false); load(); setOpen(id) }} />}
-      {open && <BroadcastDrawer id={open} canSend={data.canSend} onClose={() => setOpen(null)} onChanged={load} />}
+      {making && <NewBroadcast key={making === true ? 'new' : making.id} data={data} editing={making === true ? null : making}
+        onClose={() => setMaking(false)} onMade={(id) => { setMaking(false); load(); setOpen(id) }} />}
+      {open && !making && <BroadcastDrawer id={open} canSend={data.canSend} onClose={() => setOpen(null)} onChanged={load} onEdit={(b) => setMaking(b)} />}
     </>
   )
 }

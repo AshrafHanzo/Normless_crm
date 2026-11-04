@@ -1254,6 +1254,11 @@ router.post('/marketing/broadcasts', settingsOnly, async (req, res) => {
     catch (err) { mkError(res, err, 'Could not make that broadcast'); }
 });
 
+router.put('/marketing/broadcasts/:id', settingsOnly, async (req, res) => {
+    try { res.json({ broadcast: await marketing.update(req.waLine, req.params.id, req.body || {}) }); }
+    catch (err) { mkError(res, err, 'Could not change that broadcast'); }
+});
+
 router.get('/marketing/broadcasts/:id', async (req, res) => {
     try {
         const r = await marketing.report(req.waLine.id, req.params.id);

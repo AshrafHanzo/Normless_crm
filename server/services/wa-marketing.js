@@ -268,8 +268,8 @@ async function message(b, t, person, broadcastId) {
     return { variables, headerImage: t.header?.format === 'IMAGE' ? b.header_image : null, buttons };
 }
 
-/** Create a broadcast (a draft) with its recipients worked out now. */
-async function create(line, input, user) {
+/** A broadcast's fields checked, and its recipients worked out now. */
+async function prepare(line, input) {
     const t = await templateRow(line.id, input.template);
     if (!t) throw Object.assign(new Error('That template isn’t on this account — sync templates'), { status: 400 });
     if (t.status !== 'APPROVED') throw Object.assign(new Error(`Meta has that template as ${String(t.status).toLowerCase()}`), { status: 400 });
@@ -283,19 +283,42 @@ async function create(line, input, user) {
     const image = /^https:\/\//.test(String(input.header_image || '')) ? String(input.header_image).slice(0, 1000) : null;
     // Try one message's parts before anything is saved: a gap left empty fails here, not 5,000 times.
     await message({ vars: JSON.stringify(vars), link_url: link, header_image: image }, t, { name: 'Test' }, 0);
+    return { t, people, vars, link, image, name: String(input.name || t.name).slice(0, 120), audience: JSON.stringify({ ...(input.audience || {}), opted_out: people.optedOut || 0 }) };
+}
+
+async function addRecipients(c, id, people) {
+    for (let i = 0; i < people.length; i += 1000) {
+        await c.query(
+            `INSERT INTO wa_broadcast_recipients (broadcast_id, phone, name)
+             SELECT $1, x.phone, x.name FROM json_to_recordset($2::json) AS x(phone text, name text)`,
+            [id, JSON.stringify(people.slice(i, i + 1000))]);
+    }
+}
+
+/** Create a broadcast (a draft) with its recipients worked out now. */
+async function create(line, input, user) {
+    const p = await prepare(line, input);
     return db.transaction(async (c) => {
         const b = (await c.query(
             `INSERT INTO wa_broadcasts (line_id, name, template, language, vars, header_image, link_url, audience, status, total, created_by)
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'draft',$9,$10) RETURNING ${SHAPE}`,
-            [line.id, String(input.name || t.name).slice(0, 120), t.name, t.language, JSON.stringify(vars), image, link,
-                JSON.stringify({ ...(input.audience || {}), opted_out: people.optedOut || 0 }), people.length, user || null])).rows[0];
-        for (let i = 0; i < people.length; i += 1000) {
-            const chunk = people.slice(i, i + 1000);
-            await c.query(
-                `INSERT INTO wa_broadcast_recipients (broadcast_id, phone, name)
-                 SELECT $1, x.phone, x.name FROM json_to_recordset($2::json) AS x(phone text, name text)`,
-                [b.id, JSON.stringify(chunk)]);
-        }
+            [line.id, p.name, p.t.name, p.t.language, JSON.stringify(p.vars), p.image, p.link, p.audience, p.people.length, user || null])).rows[0];
+        await addRecipients(c, b.id, p.people);
+        return shape(b);
+    });
+}
+
+/** Change a draft: anything on it, the audience worked out again. Once sending has begun it stays as it is. */
+async function update(line, id, input) {
+    const p = await prepare(line, input);
+    return db.transaction(async (c) => {
+        const b = (await c.query(
+            `UPDATE wa_broadcasts SET name = $3, template = $4, language = $5, vars = $6, header_image = $7, link_url = $8, audience = $9, total = $10, error = NULL
+              WHERE id = $1 AND line_id = $2 AND status = 'draft' RETURNING ${SHAPE}`,
+            [id, line.id, p.name, p.t.name, p.t.language, JSON.stringify(p.vars), p.image, p.link, p.audience, p.people.length])).rows[0];
+        if (!b) throw Object.assign(new Error('Only a broadcast that hasn’t started sending can be changed'), { status: 409 });
+        await c.query(`DELETE FROM wa_broadcast_recipients WHERE broadcast_id = $1`, [id]);
+        await addRecipients(c, id, p.people);
         return shape(b);
     });
 }
@@ -469,5 +492,5 @@ function startWorker() {
 
 module.exports = {
     TEMPLATES, components, listTemplates, submitTemplates, audience,
-    create, testSend, testStatus, start, pause, cancel, report, list, tick, startWorker,
+    create, update, testSend, testStatus, start, pause, cancel, report, list, tick, startWorker,
 };
