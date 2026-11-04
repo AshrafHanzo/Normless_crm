@@ -14,6 +14,14 @@
 
 const COLLECT = ['split', 'advance', 'balance'];
 
+/**
+ * Embroidery costs more a piece than printing: the catalogue price is the printed price, and an
+ * embroidered piece is this much more (₹499 printed → ₹649 embroidered). "DTF & Embroidery" goes
+ * to the embroiderer too, so it carries it as well. The one-off digitising charge is separate.
+ */
+const EMBROIDERY_EXTRA = 150;
+const isEmbroidered = (printingType) => /embroid/i.test(printingType || '');
+
 function chargesOf(order) {
   const raw = order?.extra_charges;
   let list = raw;
@@ -57,4 +65,4 @@ function sanitiseCharges(list) {
     .filter(c => c.label && c.amount > 0);
 }
 
-module.exports = { COLLECT, chargesOf, chargesTaxable, chargeGross, gstPctOf, advanceLabel, sanitiseCharges };
+module.exports = { EMBROIDERY_EXTRA, isEmbroidered, COLLECT, chargesOf, chargesTaxable, chargeGross, gstPctOf, advanceLabel, sanitiseCharges };

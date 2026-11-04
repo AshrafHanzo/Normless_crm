@@ -19,6 +19,7 @@
 const db = require('../db/connection');
 const wa = require('./whatsapp');
 const rules = require('./cf-lead-rules');
+const { EMBROIDERY_EXTRA } = require('./crewfit-charges');
 
 const CONFIRM = 'mock_ok';
 const CHANGES = 'mock_change';
@@ -113,6 +114,8 @@ async function orderFromLead(conversation, lead) {
         const qty = rules.pieces(it.quantity);
         if (!qty || !/^\s*\d+\s*(pcs|pieces)?\s*$/i.test(String(it.quantity))) { missing.push(`the exact quantity of ${it.product}`); continue; }
         let unit = await unitPrice(it.product, qty);
+        // The catalogue price is the printed one; embroidery is more a piece.
+        if (unit != null && embroidery) unit += EMBROIDERY_EXTRA;
         // One product, priced on request, and somebody already quoted a total: that total it is.
         if (unit == null && items.length === 1 && Number(lead.quoted_amount) > 0) unit = Math.round(Number(lead.quoted_amount) / qty);
         if (unit == null) { missing.push(`a price for ${qty} × ${it.product}`); continue; }

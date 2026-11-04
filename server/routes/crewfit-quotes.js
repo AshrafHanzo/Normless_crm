@@ -5,6 +5,7 @@ const { SHIP_ZONES, SHIP_REGIONS, shippingFor } = require('../data/crewfitShippi
 const { renderQuote } = require('../services/invoice');
 const razorpay = require('../config/razorpay');
 const { isValidMobile } = require('../utils/phone');
+const { EMBROIDERY_EXTRA, isEmbroidered } = require('../services/crewfit-charges');
 const { tableParams, pagination } = require('../utils/table');
 
 const router = express.Router();
@@ -84,6 +85,8 @@ async function computeQuote({ items, zoneId, shippingCharge: shippingOverride })
     const product = products.find(p => p.id === parseInt(it.product_id, 10));
     const qty = Math.max(0, parseInt(it.qty, 10) || 0);
     const suggested = product ? suggestPrice(product.tiers, qty) : { price: null, exact: false };
+    // The tiers are printed prices; an embroidered piece is more.
+    if (suggested.price != null && isEmbroidered(it.printing_type)) suggested.price += EMBROIDERY_EXTRA;
     // The SO can type their own price per piece — e.g. after reviewing a suggested/estimated
     // one, or for a negotiated rate — which always wins over the tier-computed price.
     const manualPrice = it.price_per_piece !== undefined && it.price_per_piece !== null && it.price_per_piece !== '' && !isNaN(Number(it.price_per_piece))

@@ -22,6 +22,7 @@ const MODEL = process.env.WA_AI_MODEL || 'claude-sonnet-5-5';
 const API = 'https://api.anthropic.com/v1/messages';
 const MAX_TURNS = 4;             // tool calls before we stop and let a person take it
 const HISTORY = 16;              // messages of context: enough to follow, cheap to send
+const { EMBROIDERY_EXTRA } = require('./crewfit-charges');
 const DIGITISING_CHARGE = 800;   // a real, fixed Crewfit charge the agent may quote
 
 const safeJson = (v, fallback) => {
@@ -49,8 +50,11 @@ How to write:
 What you may say:
 - Only what the tools tell you. Use get_products before describing what is available, and
   get_price before saying what anything costs. Never state a price the price tool did not return.
-- Embroidery carries a one-off ₹${DIGITISING_CHARGE} digitising charge for the logo. This is the
-  only figure you may give without a tool.
+- get_price gives two prices a piece: printed, and embroidered (₹${EMBROIDERY_EXTRA} more a piece).
+  Quote the one for the branding the customer wants; if they have not said, give the printed
+  price and mention that embroidery is ₹${EMBROIDERY_EXTRA} more a piece.
+- Embroidery also carries a one-off ₹${DIGITISING_CHARGE} digitising charge for the logo. These two
+  figures are the only ones you may give without a tool.
 - Prices are before GST unless the tool says otherwise, and they are estimates until a colleague
   confirms them.
 
@@ -77,7 +81,7 @@ const TOOLS = [
     },
     {
         name: 'get_price',
-        description: 'What a product costs at a given quantity, from the published price tiers. The only source of a price you may quote.',
+        description: 'What a product costs a piece at a given quantity, printed and embroidered, from the published price tiers. The only source of a price you may quote.',
         input_schema: {
             type: 'object',
             properties: {
@@ -118,7 +122,7 @@ const TOOLS = [
 
 /** Every price this turn was allowed to mention, collected as the tools answer. */
 function allowedFigures() {
-    return new Set([DIGITISING_CHARGE]);
+    return new Set([DIGITISING_CHARGE, EMBROIDERY_EXTRA]);
 }
 
 async function runTool(name, input, conversation, allowed) {
@@ -138,14 +142,16 @@ async function runTool(name, input, conversation, allowed) {
         const price = await flow.priceFor(String(input?.product || ''), band);
         if (!price) return { error: 'No such product. Call get_products for the list.' };
         // Anything the model is now allowed to repeat.
-        if (price.low) { allowed.add(price.low); allowed.add(price.high); }
+        const [embLow, embHigh] = [price.low + EMBROIDERY_EXTRA, price.high + EMBROIDERY_EXTRA];
+        if (price.low) for (const n of [price.low, price.high, embLow, embHigh]) allowed.add(n);
         return price.low
             ? {
                 product: price.name, quantity,
-                price_per_piece_low: price.low, price_per_piece_high: price.high,
+                printed_price_per_piece_low: price.low, printed_price_per_piece_high: price.high,
+                embroidered_price_per_piece_low: embLow, embroidered_price_per_piece_high: embHigh,
                 note: price.onRequest
                     ? 'Above the published tiers Crewfit prices each order individually.'
-                    : 'Before GST and branding. An estimate until a colleague confirms it.',
+                    : `Before GST. Printing is included in the printed price; embroidery is ₹${EMBROIDERY_EXTRA} more a piece, plus the one-off digitising charge. An estimate until a colleague confirms it.`,
             }
             : { product: price.name, quantity, on_request: true, note: 'Quoted individually at this quantity — do not guess a figure.' };
     }

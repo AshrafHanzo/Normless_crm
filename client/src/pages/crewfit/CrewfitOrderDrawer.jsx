@@ -22,6 +22,9 @@ const printSpec = (it) => [placementOf(it), it.printing_type].filter(Boolean).jo
 // "Embroidery" and "DTF & Embroidery" both go to the embroiderer, and both need the file and the
 // measurement — so the test is on the word, not on the exact option.
 const isEmbroidered = (it) => /embroidery/i.test(it.printing_type || '')
+// The catalogue price is the printed one; an embroidered piece is this much more (₹499 → ₹649).
+// Same figure as EMBROIDERY_EXTRA in server/services/crewfit-charges.js.
+const EMBROIDERY_EXTRA = 150
 
 // Placement is several answers, not one — a front print and a sleeve print are one garment. Kept
 // as the same comma-joined string the WhatsApp summary, the flat column and old orders all read.
@@ -79,6 +82,11 @@ function priceFor(product, qty) {
     if (qty >= parseInt(n, 10)) price = val
   }
   return price
+}
+/** The catalogue price a piece for this line, with embroidery added when it is embroidered. */
+const linePrice = (product, qty, item) => {
+  const p = priceFor(product, qty)
+  return p == null ? null : p + (isEmbroidered(item) ? EMBROIDERY_EXTRA : 0)
 }
 
 // Courier tariff (By Air), from the tariff sheet: flat rate up to a weight, then per-kg beyond 3kg.
@@ -869,7 +877,7 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
     const item = form.line_items[idx]
     const p = products.find(x => x.name === name)
     const qty = parseInt(item.qty) || 0
-    const pp = priceFor(p, qty)
+    const pp = linePrice(p, qty, item)
     // A one-size product has no breakdown to derive a quantity from, so the line switches to a
     // typed quantity the moment one is picked — rather than leaving the field greyed out under a
     // size grid that cannot be filled in. Switching back to a sized product restores the grid.
@@ -882,12 +890,24 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
     const item = form.line_items[idx]
     const product = products.find(x => x.name === item.product)
     const qty = parseInt(q) || 0
-    const catalogPrice = priceFor(product, qty)
+    const catalogPrice = linePrice(product, qty, item)
     const up = catalogPrice != null ? catalogPrice : (item.unit_price !== undefined && item.unit_price !== '' ? Number(item.unit_price) : null)
     const items = form.line_items.map((it, i) => i === idx ? { ...it, qty: q, ...extra, ...(up != null ? { unit_price: up, product_total: up * qty } : {}) } : it)
     const totalQty = items.reduce((s, it) => s + (parseInt(it.qty) || 0), 0)
     const ship = shippingFor(form.ship_region, totalQty)
     setF({ line_items: items, ...(ship != null ? { shipping: ship } : {}) }, true)
+  }
+  // Embroidery on or off moves the price a piece by the embroidery figure — from the catalogue
+  // when there is one, otherwise from whatever was typed, so a negotiated rate keeps its terms.
+  const onItemPrintingType = (idx, v) => {
+    const item = form.line_items[idx]
+    const next = { ...item, printing_type: v }
+    const qty = parseInt(item.qty) || 0
+    const catalog = linePrice(products.find(x => x.name === item.product), qty, next)
+    const typed = item.unit_price !== undefined && item.unit_price !== '' && item.unit_price !== null ? Number(item.unit_price) : null
+    const delta = (isEmbroidered(next) ? EMBROIDERY_EXTRA : 0) - (isEmbroidered(item) ? EMBROIDERY_EXTRA : 0)
+    const up = catalog != null ? catalog : (typed != null ? typed + delta : null)
+    updateItem(idx, { printing_type: v, ...(up != null ? { unit_price: up, product_total: up * qty } : {}) })
   }
   const onItemUnitPrice = (idx, v) => {
     const item = form.line_items[idx]
@@ -1464,7 +1484,7 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
           {form.line_items.map((item, idx) => {
             const itemProduct = products.find(p => p.name === item.product)
             const itemColorOptions = itemProduct?.colors || null
-            const itemCatalogPrice = priceFor(itemProduct, parseInt(item.qty))
+            const itemCatalogPrice = linePrice(itemProduct, parseInt(item.qty), item)
             const itemOneSize = isOneSize(itemProduct)
             return (
               <div key={idx} ref={el => { itemRefs.current[idx] = el }} className={`line-item-card${flashItem === idx ? ' just-added' : ''}`}>
@@ -1491,7 +1511,7 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
                       title={!itemOneSize && item._sizeMode !== 'manual' ? 'Derived from the size breakdown below' : ''} />
                   </div>
                   <div className="input-group"><label>Printing type *</label>
-                    <select required value={item.printing_type || ''} onChange={e => updateItem(idx, { printing_type: e.target.value })}>
+                    <select required value={item.printing_type || ''} onChange={e => onItemPrintingType(idx, e.target.value)}>
                       <option value="">—</option>{PRINTING_TYPES.map(v => <option key={v}>{v}</option>)}
                     </select>
                   </div>
@@ -1551,7 +1571,7 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
                 </div>
                 )}
                 <div className="form-row">
-                  <div className="input-group"><label>Price per piece (₹) *{itemCatalogPrice ? <span className="unit-hint"> catalog: ₹{itemCatalogPrice}</span> : ''}</label><input required type="number" value={item.unit_price ?? ''} onChange={e => onItemUnitPrice(idx, e.target.value)} placeholder={itemCatalogPrice ? String(itemCatalogPrice) : ''} /></div>
+                  <div className="input-group"><label>Price per piece (₹) *{itemCatalogPrice ? <span className="unit-hint"> catalog: ₹{itemCatalogPrice}{isEmbroidered(item) ? ` (₹${itemCatalogPrice - EMBROIDERY_EXTRA} + ₹${EMBROIDERY_EXTRA} embroidery)` : ''}</span> : ''}</label><input required type="number" value={item.unit_price ?? ''} onChange={e => onItemUnitPrice(idx, e.target.value)} placeholder={itemCatalogPrice ? String(itemCatalogPrice) : ''} /></div>
                   <div className="input-group"><label>Line Total (₹) *</label><input required type="number" value={item.product_total ?? ''} onChange={e => updateItem(idx, { product_total: e.target.value })} /></div>
                 </div>
 

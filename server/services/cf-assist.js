@@ -219,8 +219,8 @@ async function savedAnswers() {
 const DEFAULT_ANSWERS = [
     { on: true, keywords: ['moq', 'minimum order', 'minimum quantity', 'min order'], answer: 'Our minimum order is just 5 pieces per design. The price per piece drops as the quantity goes up — tell us how many you need and we\'ll share the exact rate.' },
     { on: true, keywords: ['sample', 'trial piece', 'one piece'], answer: 'Yes, we can make a sample before the bulk order — it costs ₹250 more than the per-piece price, with your logo printed.' },
-    { on: true, keywords: ['printing charge', 'print charge', 'printing cost', 'including printing'], answer: 'Our prices include printing your logo. Embroidery has a one-off ₹800 digitising charge for the logo.' },
-    { on: true, keywords: ['embroidery', 'embroidered'], answer: 'We do both printing and embroidery. Embroidery has a one-off ₹800 digitising charge for your logo; printing is included in the price.' },
+    { on: true, keywords: ['printing charge', 'print charge', 'printing cost', 'including printing'], answer: 'Our prices include printing your logo. Embroidery is ₹150 more a piece than printing, plus a one-off ₹800 digitising charge for the logo.' },
+    { on: true, keywords: ['embroidery', 'embroidered'], answer: 'We do both printing and embroidery. Printing is included in the price; embroidery is ₹150 more a piece, plus a one-off ₹800 digitising charge for your logo.' },
     { on: true, keywords: ['advance', 'payment terms', 'how to pay', 'payment method'], answer: 'We start production after a 50% advance. The balance is paid before dispatch. We send a secure payment link — UPI, cards and net banking all work.' },
     { on: true, keywords: ['address', 'location', 'where are you', 'office', 'visit'], answer: 'We\'re at Plot no 2, 2nd Floor, Dhanalakshmi Nagar, Moulivakkam, Iyyappanthangal, Chennai, Tamil Nadu 600125.' },
     { on: true, keywords: ['email', 'mail id'], answer: 'You can email us at crewfitfashion@gmail.com.' },

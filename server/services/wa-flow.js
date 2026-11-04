@@ -20,6 +20,7 @@
 
 const db = require('../db/connection');
 const wa = require('./whatsapp');
+const { EMBROIDERY_EXTRA } = require('./crewfit-charges');
 
 const safeJson = (v, fallback) => {
     try { return typeof v === 'string' ? (JSON.parse(v || 'null') ?? fallback) : (v || fallback); }
@@ -258,15 +259,24 @@ async function summaryText(answers) {
     else if (answers.placement) lines.push(`• Logo: ${answers.placement.toLowerCase()}`);
     lines.push(answers.logo ? '• Logo: received, thank you' : '• Logo: please send it here when you can');
 
-    // What each comes to, off the published tiers.
+    // What each comes to, off the published tiers. The tiers are printed prices; embroidered
+    // pieces are quoted with the embroidery added.
+    const embroidery = answers.branding === 'Embroidery';
+    const extra = embroidery ? EMBROIDERY_EXTRA : 0;
     const priced = [];
+    let rated = false;
     for (const it of items) {
         const price = it.quantity ? await priceFor(it.product, it.quantity) : null;
-        if (price?.low) priced.push(`${price.name}: ${price.low === price.high ? `₹${price.low}` : `₹${price.high} down to ₹${price.low}`} a piece${price.onRequest ? ' (larger runs priced on request)' : ''}`);
-        else if (price) priced.push(`${price.name}: quoted individually at that quantity`);
+        if (price?.low) {
+            rated = true;
+            const [low, high] = [price.low + extra, price.high + extra];
+            priced.push(`${price.name}: ${low === high ? `₹${low}` : `₹${high} down to ₹${low}`} a piece${price.onRequest ? ' (larger runs priced on request)' : ''}`);
+        } else if (price) priced.push(`${price.name}: quoted individually at that quantity`);
     }
-    if (priced.length) lines.push('', items.length > 1 ? 'At those quantities:' : 'At that quantity:', ...priced.map(p => `• ${p}`), 'Printing included; GST extra.');
-    if (answers.branding === 'Embroidery') lines.push('Embroidery has a one-off ₹800 digitising charge for the logo.');
+    if (priced.length) lines.push('', items.length > 1 ? 'At those quantities:' : 'At that quantity:', ...priced.map(p => `• ${p}`),
+        embroidery ? 'Embroidery included; GST extra.' : 'Printing included; GST extra.');
+    if (embroidery) lines.push('Embroidery has a one-off ₹800 digitising charge for the logo.');
+    else if (rated && answers.branding !== 'Printing') lines.push(`Embroidery instead of printing is ₹${EMBROIDERY_EXTRA} more a piece.`);
     lines.push('', answers.logo
         ? 'Our designer will now prepare a mockup with your logo and send it here for your approval ✍️'
         : 'This is an estimate — one of our team will go through it with you shortly.');

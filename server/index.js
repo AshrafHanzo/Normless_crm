@@ -935,6 +935,15 @@ async function ensureCrewfitSchema() {
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
 
+            -- Embroidery became ₹150 a piece more than printing. Saved bot answers still word for
+            -- word the old defaults say so too; ones the team rewrote are theirs and left alone.
+            UPDATE wa_settings SET value = replace(replace(value,
+                'Our prices include printing your logo. Embroidery has a one-off ₹800 digitising charge for the logo.',
+                'Our prices include printing your logo. Embroidery is ₹150 more a piece than printing, plus a one-off ₹800 digitising charge for the logo.'),
+                'We do both printing and embroidery. Embroidery has a one-off ₹800 digitising charge for your logo; printing is included in the price.',
+                'We do both printing and embroidery. Printing is included in the price; embroidery is ₹150 more a piece, plus a one-off ₹800 digitising charge for your logo.')
+             WHERE key = 'cf_bot_answers' AND value LIKE '%Embroidery has a one-off%';
+
             -- The stages an enquiry moves through, as rows: the shop names them, colours them
             -- and puts them in order, and the inbox filters by them. A lead stores the key, so
             -- renaming a status relabels every lead in it without touching them.
