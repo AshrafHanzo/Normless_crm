@@ -168,13 +168,24 @@ async function audience(line, a = {}) {
         const params = [line.id];
         const where = [`k.line_id = $1`, `k.recovered_at IS NULL`, `COALESCE(k.phone, '') <> ''`];
         const product = String(a.product || '').trim();
-        if (product) { params.push(`%${product}%`); where.push(`k.items ILIKE $${params.length}`); }
+        let bought = `o.created_at >= k.created_at`;
+        if (product) {
+            // Razorpay's items carry Shopify's ids but rarely the product's name, so the name is
+            // turned into the shop's matching products and their variants first.
+            const matches = (await shopify.fetchProducts()).filter(p => String(p.title || '').toLowerCase().includes(product.toLowerCase()));
+            params.push(matches.map(p => String(p.id)), matches.flatMap(p => p.variants.map(v => String(v.id))), `%${product}%`);
+            const [ids, variants, title] = [params.length - 2, params.length - 1, params.length];
+            const items = (col) => `json_array_elements(CASE WHEN ${col} LIKE '[%' THEN ${col}::json ELSE '[]'::json END)`;
+            where.push(`EXISTS (SELECT 1 FROM ${items('k.items')} e
+                                 WHERE e->>'product_id' = ANY($${ids}) OR e->>'variant_id' = ANY($${variants}) OR e->>'title' ILIKE $${title})`);
+            // With a product: anybody who has ever bought it.
+            bought = `EXISTS (SELECT 1 FROM ${items('o.line_items_json')} e
+                               WHERE e->>'shopify_product_id' = ANY($${ids}) OR e->>'shopify_variant_id' = ANY($${variants}) OR e->>'title' ILIKE $${title})`;
+        }
         if (Number(a.cart_within_days) > 0) {
             params.push(Number(a.cart_within_days));
             where.push(`k.created_at > NOW() - ($${params.length} || ' days')::interval`);
         }
-        // With a product: anybody who has ever bought it. Without: anybody who ordered after the cart.
-        const bought = product ? `o.line_items_json ILIKE $${params.indexOf(`%${product}%`) + 1}` : `o.created_at >= k.created_at`;
         where.push(`NOT EXISTS (SELECT 1 FROM orders o
                                  WHERE RIGHT(REGEXP_REPLACE(k.phone, '\\D', '', 'g'), 10) = ANY(o.phones)
                                    AND o.cancelled_at IS NULL AND ${bought})`);
