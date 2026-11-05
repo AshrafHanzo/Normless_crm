@@ -875,7 +875,8 @@ async function rtoAvailable() {
     const r = await db.query(
         `SELECT variant_id, shopify_product_id, product_title, variant, color, size, blank_type,
                 SUM(qty - qty_used - qty_written_off)::int AS available,
-                MIN(created_at) AS oldest
+                -- Pieces still here only: a garment emptied in October and returned today came back today.
+                COALESCE(MIN(created_at) FILTER (WHERE qty - qty_used - qty_written_off > 0), MIN(created_at)) AS oldest
            FROM inventory_rto
           GROUP BY variant_id, shopify_product_id, product_title, variant, color, size, blank_type
          HAVING SUM(qty - qty_used - qty_written_off) > 0
@@ -1004,13 +1005,52 @@ async function seedingRtoMatches(index) {
 const alertKey = (m) => `${m.source}:${m.order_number}:${m.variant_id || `${m.product_title}|${normVariant(m.variant)}`}`;
 
 /**
+ * Archive notices that no piece on the shelf could ever have answered.
+ *
+ * A notice outlives its order being fulfilled, because a piece that was already here may still be
+ * what went in the box. But once every piece now on the shelf arrived after the order shipped, that
+ * question is settled: the parcel left before the garment came back. Without this, each return woke
+ * every old notice for that garment, listing orders that went out weeks ago.
+ *
+ * Checked against the shelf rather than hooked onto intake, so it holds however a piece returns: a
+ * logged return, a spreadsheet import, a shoot sample. A notice whose garment is not on the shelf is
+ * left alone until one is.
+ *
+ * Archived, not skipped: "not used" counts orders that got a fresh garment while the shelf held one,
+ * which these did not. The row stays because its match key is what stops it being raised again.
+ */
+async function closeNoticesShippedBeforeReturn() {
+    const shipped = (await db.query(
+        `SELECT a.id, a.variant_id, a.product_title, a.variant, o.fulfilled_at
+           FROM inventory_rto_alerts a
+           JOIN orders o ON a.source = 'shop' AND o.order_number = a.order_ref
+          WHERE a.status = 'open' AND ${SHIPPED} AND o.fulfilled_at IS NOT NULL`)).rows;
+    if (!shipped.length) return 0;
+
+    const shelf = await rtoAvailable();
+    const ids = shipped.filter(a => {
+        const pieces = shelf.filter(p => sameGarment(a, p));
+        return pieces.length > 0 && pieces.every(p => new Date(p.oldest) > new Date(a.fulfilled_at));
+    }).map(a => a.id);
+    if (!ids.length) return 0;
+
+    const r = await db.query(
+        `UPDATE inventory_rto_alerts
+            SET status = 'archived', resolved_at = CURRENT_TIMESTAMP,
+                resolution_note = 'Closed automatically — the order shipped before this piece came back'
+          WHERE id = ANY($1) AND status = 'open'`, [ids]);
+    return r.rowCount;
+}
+
+/**
  * Raise a notice for anything newly matched. Idempotent: an order already noticed is left exactly
  * as it is, including one a person has already answered — re-raising a resolved notice would ask
  * the same question forever.
  */
 async function syncRtoAlerts() {
+    const closed = await closeNoticesShippedBeforeReturn();
     const matches = await rtoMatches();
-    if (!matches.length) return { raised: 0 };
+    if (!matches.length) return { raised: 0, closed };
     let raised = 0;
     for (const m of matches) {
         const r = await db.query(
@@ -1024,7 +1064,7 @@ async function syncRtoAlerts() {
                 m.variant || null, m.color || null, m.size || null, m.blank_type || null, m.qty || 1, alertKey(m)]);
         if (r.rows[0]) raised++;
     }
-    return { raised };
+    return { raised, closed };
 }
 
 /**

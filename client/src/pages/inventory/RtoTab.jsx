@@ -421,7 +421,7 @@ export default function RtoTab({ onChanged }) {
           {num(d.dormant_orders)} other order{d.dormant_orders === 1 ? '' : 's'} asked for a piece but
           cannot take one right now — the garment has gone from the shelf, or the order is cancelled
           or on hold{d.parked_orders ? ` (${num(d.parked_orders)} of those)` : ''}. They come back on
-          their own if that changes.
+          their own if that changes, unless the order has shipped by the time a piece returns.
         </p>
       )}
 
@@ -821,8 +821,9 @@ export default function RtoTab({ onChanged }) {
             </div>
 
             <p className="confirm-message" style={{ fontSize: 12.5 }}>
-              Sending it puts its blank back in stock. The orders you do not pick stay on the list, and
-              drop off on their own once no piece is left for them.
+              Sending it puts its blank back in stock. The orders you do not pick stay on the list.
+              If no piece is left they are hidden, and come back when another is returned, unless
+              they have shipped by then.
             </p>
 
             <div className="confirm-actions">
