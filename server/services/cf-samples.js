@@ -88,7 +88,7 @@ async function record(conversationId, { wamid, senderType, user, body, type = 't
     return (await db.query(
         `INSERT INTO wa_messages (conversation_id, wamid, direction, sender_type, sender_user, type, body, media_url, media_mime, status)
          VALUES ($1,$2,'out',$3,$4,$5,$6,$7,$8,'sent')
-         RETURNING id, wamid, direction, sender_type, sender_user, type, body, media_url, media_mime, media_name, status, error, sent_at`,
+         RETURNING id, conversation_id, wamid, direction, sender_type, sender_user, type, body, media_url, media_mime, media_name, status, error, sent_at`,
         [conversationId, wamid, senderType, user, type, body, mediaUrl, mime])).rows[0];
 }
 

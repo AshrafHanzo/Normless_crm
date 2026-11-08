@@ -719,7 +719,7 @@ function OrderMessagesTab() {
           {submitting ? 'Submitting to Meta…' : linked === data.messages.length ? 'Re-check templates with Meta' : 'Submit Crewfit templates to Meta'}
         </button>}>
         The messages a Crewfit order sends: the summary, payment links, proforma, invoice, photos and tracking.
-        They go from the chat’s Orders tab, and five of them can go out on their own when the order reaches that step.
+        They go from the chat’s Orders tab, and four of them can go out on their own when the order reaches that step.
         Past WhatsApp’s 24-hour window only an approved template can be sent, so pick one for each message you want to keep working then.
       </Head>
       <section className="was-table-card">

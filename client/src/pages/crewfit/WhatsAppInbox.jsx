@@ -164,7 +164,11 @@ function notYet(o, kind) {
   }
 }
 
-const todayStr = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` }
+const dayStr = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+const todayStr = () => dayStr(new Date())
+// The inbox opens on the last 30 days (today and the 29 before); the date filter widens it.
+// `auto` marks that default: a search looks through every chat unless dates were picked.
+const last30Days = () => { const d = new Date(); d.setDate(d.getDate() - 29); return { from: dayStr(d), to: todayStr(), auto: true } }
 const ago10 = (phone) => String(phone || '').slice(-10)
 const soName = (username) => { const n = String(username || '').split('@')[0].replace(/[._-]+/g, ' ').trim(); return n ? n.replace(/\b\w/g, c => c.toUpperCase()) : '' }
 
@@ -197,6 +201,17 @@ const productsOf = (t) => {
     if (Array.isArray(list) && list.length) return list.map(p => ({ product: p.product || '', color: p.color || '', quantity: p.quantity || '', sizes: p.sizes || '' }))
   } catch { /* an old lead: one product, below */ }
   return t?.product_interest ? [{ product: t.product_interest, color: '', quantity: t.quantity || '', sizes: '' }] : []
+}
+// The order form's printing type, from the lead's branding ("Embroidery", "Print", "Both"…).
+const orderPrintingType = (v) => {
+  const t = String(v || '').toLowerCase()
+  const emb = /embroid/.test(t)
+  const print = /print|dtf|screen|both/.test(t)
+  if (emb && print) return 'DTF & Embroidery'
+  if (emb) return 'Embroidery'
+  if (print) return 'DTF'
+  if (/^(none|plain|no)\b/.test(t)) return 'None'
+  return ''
 }
 // The order form's placements, from what the menu asked ("Front only", "Front & back").
 const orderPlacement = (v) => {
@@ -384,7 +399,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
   const quoteToLink = useRef(null)                      // the quote an order is being made from
   const [preview, setPreview] = useState(null)          // files being looked at: { items, index }
   // The header's date range, on when each chat last moved. Empty is all time.
-  const [range, setRange] = useState({ from: '', to: '' })
+  const [range, setRange] = useState(last30Days)
   const [health, setHealth] = useState(null)            // is Meta still accepting our token?
   const [cataloguePdf, setCataloguePdf] = useState(null)
   const [snippetQuery, setSnippetQuery] = useState('')
@@ -450,8 +465,10 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
     if (statusFilter) qs.set('lead_status', statusFilter)
     if (sort === 'oldest') qs.set('sort', 'oldest')
     if (onTop) qs.set('first', 'waiting')
-    if (range.from) qs.set('from', range.from)
-    if (range.to) qs.set('to', range.to)
+    if (!(term && range.auto)) {
+      if (range.from) qs.set('from', range.from)
+      if (range.to) qs.set('to', range.to)
+    }
     return qs
   }
   // Which filters the list on screen was loaded for: a refresh with the same ones keeps the pages
@@ -615,6 +632,13 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
     setMockups(r.mockups)
     setMockPick(r.mockups.filter(m => !m.sent_at).map(m => m.id))
     loadActivity()
+  }
+
+  /** Pick a mockup as the order's design: Create order puts the picked ones in its design mock. */
+  const pickForOrder = async (m) => {
+    const r = await apiFetch(`${API}/conversations/${thread.id}/mockups/${m.id}/order`, { method: 'POST', body: JSON.stringify({ on: !m.for_order }) })
+    if (!r || r.error) return toast.error(r?.error || 'Could not change that mockup')
+    setMockups(r.mockups)
   }
 
   const removeMockup = async (m) => {
@@ -853,9 +877,11 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
 
   /* ── Sending ─────────────────────────────────────────────────────────────────────────── */
 
-  const appendSent = (message) => {
-    // A send that lands after the person has moved to another chat belongs to the one it went to.
-    if (message?.conversation_id && message.conversation_id !== shownId.current) return loadConversations()
+  const appendSent = (message, from = null) => {
+    // A send that lands after the person has moved to another chat belongs to the one it went to —
+    // by the message's own chat, or else the chat the send was made from.
+    const owner = message?.conversation_id || from
+    if (owner && owner !== shownId.current) return loadConversations()
     setMessages(list => [...list, message])
     lastSeen.current = message.id
     stickToBottom.current = true
@@ -870,8 +896,9 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
    */
   const track = async ({ label, stages = [], run, onDone, retryKey }) => {
     const id = `p${Date.now()}${Math.random().toString(36).slice(2, 6)}`
+    const conv = shownId.current
     stickToBottom.current = true
-    setPending(list => [...list, { id, conv: shownId.current, label, stage: stages[0]?.[1] || 'Sending…', retryKey }])
+    setPending(list => [...list, { id, conv, label, stage: stages[0]?.[1] || 'Sending…', retryKey }])
     const timers = stages.slice(1).map(([ms, text]) => setTimeout(() =>
       setPending(list => list.map(x => (x.id === id && !x.error ? { ...x, stage: text } : x))), ms))
     const r = await run()
@@ -881,7 +908,10 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
       return null
     }
     setPending(list => list.filter(x => x.id !== id))
-    onDone?.(r)
+    // onDone puts the result on screen (messages, mockups, the lead): only for the chat it was
+    // sent from. Somebody who has moved on sees it there when they go back.
+    if (shownId.current === conv) onDone?.(r)
+    else loadConversations()
     return r
   }
   const dismissPending = (id) => setPending(list => list.filter(x => x.id !== id))
@@ -1134,10 +1164,14 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
       contact_person: thread.contact_person || thread.lead_name || thread.profile_name || '',
       wa_lead_id: thread.lead_id,
       // One line per product on the enquiry.
-      line_items: (productsOf(thread).length ? productsOf(thread) : [{ product: '', quantity: thread.quantity }]).map(p => ({
-        product: p.product || '', color: '', printing_placement: orderPlacement(thread.printing_placement),
-        printing_type: /embroid/i.test(thread.branding || '') ? 'Embroidery' : '',
+      line_items: (productsOf(thread).length ? productsOf(thread) : [{ product: '', quantity: thread.quantity }]).map((p, i) => ({
+        // The catalogue's own spelling of the colour, so the form's colour list shows it chosen.
+        product: p.product || '', color: coloursOf(p.product).find(c => c.toLowerCase() === String(p.color || '').trim().toLowerCase()) || p.color || '',
+        printing_placement: orderPlacement(thread.printing_placement),
+        printing_type: orderPrintingType(thread.branding),
         qty: productsOf(thread).length > 1 ? plainQty(p.quantity) : qty, unit_price: '', product_total: '', size_breakdown: p.sizes || '',
+        // The mockups picked for the order are its design mock (on the first product when there are several).
+        ...(i === 0 && mockups.some(m => m.for_order) ? { mockImages: mockups.filter(m => m.for_order).map(m => m.url) } : {}),
       })),
     })
   }
@@ -1173,7 +1207,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
       shipping: q.shipping_charge,
       notes: `${t.notes ? `${t.notes}\n` : ''}From quote #${q.id}`,
       line_items: (q.line_items || []).map(li => ({
-        product: li.product_name, color: '',
+        product: li.product_name, color: productsOf(thread).find(p => p.product === li.product_name)?.color || '',
         printing_placement: li.printing_placement || 'Front', printing_type: li.printing_type || '',
         qty: li.qty, unit_price: li.price_per_piece, product_total: li.line_total, size_breakdown: '',
       })),
@@ -1504,7 +1538,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
       {guideOpen && <TeamGuide guideKey="crewfit-sales" onClose={() => setGuideOpen(false)} />}
       {samplesOpen && thread && (
         <WaSamplesPicker API={API} apiFetch={apiFetch} toast={toast} fileUrl={fileUrl} conversationId={thread.id}
-          onClose={() => setSamplesOpen(false)} onSent={(msgs) => { setSamplesOpen(false); msgs.forEach(appendSent) }} />
+          onClose={() => setSamplesOpen(false)} onSent={(msgs) => { setSamplesOpen(false); msgs.forEach(m => appendSent(m)) }} />
       )}
 
       {preview && (
@@ -2427,6 +2461,10 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                                 {/^image\//.test(m.mime || '') ? <img src={fileUrl(m.url)} alt={m.file_name || 'Mockup'} /> : <span className="wa-doc-icon wa-doc-pdf">PDF</span>}
                               </label>
                               <span className="wa-mock-meta">{m.pending_at ? 'Goes when the customer replies' : m.sent_at ? `Sent ${day(m.sent_at)}` : 'Not sent yet'}</span>
+                              <button type="button" className={`wa-mock-order${m.for_order ? ' on' : ''}`} aria-pressed={!!m.for_order} onClick={() => pickForOrder(m)}
+                                title="Put this mockup in the order form's design mock when the order is created">
+                                {m.for_order ? '✓ In the order' : 'Use in order'}
+                              </button>
                               <button type="button" className="btn-icon wa-mock-x" aria-label={`Remove ${m.file_name || 'mockup'}`} onClick={() => removeMockup(m)}>
                                 <Icon name="close" size={12} />
                               </button>

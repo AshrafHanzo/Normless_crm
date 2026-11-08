@@ -1581,6 +1581,8 @@ select { cursor: pointer; appearance: none;
   background: var(--surface); transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
 }
 .img-confirm-check input { width: auto; accent-color: var(--success); cursor: pointer; }
+.check-inline { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 500; color: var(--text-secondary); cursor: pointer; margin: 0 0 6px; text-transform: none; letter-spacing: 0; }
+.check-inline input { width: auto; margin: 0; accent-color: var(--primary); cursor: pointer; }
 .img-confirm-check:has(input:checked) { border-color: var(--success); background: color-mix(in srgb, var(--success) 12%, transparent); color: var(--success); }
 
 .image-modal-toolbar { position: absolute; top: -44px; left: 0; display: flex; gap: 8px; }
@@ -3334,6 +3336,9 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .wa-mock-pick img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .wa-mock-pick .wa-doc-icon { width: 100%; height: 100%; border-radius: 0; }
 .wa-mock-meta { display: block; font-size: 10.5px; color: var(--text-muted); padding: 4px 6px; }
+.wa-mock-order { display: block; width: calc(100% - 12px); margin: 0 6px 6px; padding: 4px 6px; border-radius: 6px; border: 1px solid var(--border); background: transparent; color: var(--text-secondary); font-size: 11px; font-weight: 600; cursor: pointer; }
+.wa-mock-order:hover { border-color: var(--primary); color: var(--text-primary); }
+.wa-mock-order.on { border-color: var(--success); background: color-mix(in srgb, var(--success) 14%, transparent); color: var(--success); }
 .wa-mock-x { position: absolute; right: 4px; top: 4px; width: 22px; height: 22px; background: rgba(0,0,0,0.55); color: #fff; border: 0; }
 .wa-mock-send { width: 100%; justify-content: center; margin-bottom: 14px; }
 .row-wa { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 6px; color: #25a46a; background: color-mix(in srgb, #25a46a 14%, transparent); }

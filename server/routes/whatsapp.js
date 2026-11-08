@@ -1553,7 +1553,7 @@ router.post('/conversations/:id/messages', takeFile, async (req, res) => {
             `INSERT INTO wa_messages (conversation_id, wamid, direction, sender_type, sender_user,
                                       type, body, media_url, media_mime, media_name, status, reply_to)
              VALUES ($1,$2,'out','user',$3,$4,$5,$6,$7,$8,'sent',$9)
-             RETURNING id, wamid, direction, sender_type, sender_user, type, body, media_url,
+             RETURNING id, conversation_id, wamid, direction, sender_type, sender_user, type, body, media_url,
                        media_mime, media_name, status, error, sent_at, reply_to,
                        (SELECT json_build_object('id', q.id, 'direction', q.direction, 'sender_type', q.sender_type, 'type', q.type,
                                'body', LEFT(q.body, 300), 'media_name', q.media_name, 'media_mime', q.media_mime, 'media_url', q.media_url)
@@ -1991,7 +1991,7 @@ router.post('/conversations/:id/call-permission', async (req, res) => {
             const row = await db.query(
                 `INSERT INTO wa_messages (conversation_id, wamid, direction, sender_type, sender_user, type, body, status)
                  VALUES ($1,$2,'out','user',$3,'template',$4,'sent')
-                 RETURNING id, wamid, direction, sender_type, sender_user, type, body, status, error, sent_at`,
+                 RETURNING id, conversation_id, wamid, direction, sender_type, sender_user, type, body, status, error, sent_at`,
                 [conversation.id, wamid, req.user?.username || null, body]);
             await db.query(`UPDATE wa_conversations SET last_message_at = CURRENT_TIMESTAMP, last_message_preview = $2 WHERE id = $1`,
                 [conversation.id, '📞 Asked permission to call']);
@@ -2002,7 +2002,7 @@ router.post('/conversations/:id/call-permission', async (req, res) => {
         const row = await db.query(
             `INSERT INTO wa_messages (conversation_id, wamid, direction, sender_type, sender_user, type, body, status)
              VALUES ($1,$2,'out','user',$3,'interactive',$4,'sent')
-             RETURNING id, wamid, direction, sender_type, sender_user, type, body, status, error, sent_at`,
+             RETURNING id, conversation_id, wamid, direction, sender_type, sender_user, type, body, status, error, sent_at`,
             [conversation.id, wamid, req.user?.username || null, `📞 Asked to call: ${text}`]);
         await db.query(`UPDATE wa_conversations SET last_message_at = CURRENT_TIMESTAMP, last_message_preview = $2 WHERE id = $1`,
             [conversation.id, '📞 Asked permission to call']);
@@ -2263,7 +2263,7 @@ router.post('/conversations/:id/product', async (req, res) => {
             `INSERT INTO wa_messages (conversation_id, wamid, direction, sender_type, sender_user, type, body,
                                       media_url, media_mime, status)
              VALUES ($1,$2,'out','user',$3,$4,$5,$6,$7,'sent')
-             RETURNING id, wamid, direction, sender_type, sender_user, type, body, media_url,
+             RETURNING id, conversation_id, wamid, direction, sender_type, sender_user, type, body, media_url,
                        media_mime, media_name, status, error, sent_at`,
             [conversation.id, wamid, req.user?.username || null, hasPhoto ? 'image' : 'text', body,
                 hasPhoto ? p.image_url : null, mime]);
@@ -2432,7 +2432,7 @@ router.post('/conversations/:id/payment-qr', async (req, res) => {
         const row = (await db.query(
             `INSERT INTO wa_messages (conversation_id, wamid, direction, sender_type, sender_user, type, body, media_url, media_mime, status)
              VALUES ($1,$2,'out','user',$3,'image',$4,$5,'image/jpeg','sent')
-             RETURNING id, wamid, direction, sender_type, sender_user, type, body, media_url, media_mime, media_name, status, error, sent_at`,
+             RETURNING id, conversation_id, wamid, direction, sender_type, sender_user, type, body, media_url, media_mime, media_name, status, error, sent_at`,
             [conversation.id, out.wamid, req.user?.username || null, caption, s])).rows[0];
         await db.query(`UPDATE wa_conversations SET last_message_at = CURRENT_TIMESTAMP, last_message_preview = 'Sent the payment QR',
                                assigned_to = COALESCE(assigned_to, $2) WHERE id = $1`, [conversation.id, req.user?.username || null]);
@@ -2524,7 +2524,7 @@ router.post('/conversations/:id/quotes/:quoteId/send', async (req, res) => {
         const row = (await db.query(
             `INSERT INTO wa_messages (conversation_id, wamid, direction, sender_type, sender_user, type, body, media_url, media_mime, media_name, status)
              VALUES ($1,$2,'out','user',$3,'document',$4,$5,'application/pdf',$6,'sent')
-             RETURNING id, wamid, direction, sender_type, sender_user, type, body, media_url, media_mime, media_name, status, error, sent_at`,
+             RETURNING id, conversation_id, wamid, direction, sender_type, sender_user, type, body, media_url, media_mime, media_name, status, error, sent_at`,
             [conversation.id, out.wamid, req.user?.username || null, caption, `/uploads/whatsapp/outgoing/${stored}`, pdf.filename])).rows[0];
         await db.query(`UPDATE wa_conversations SET last_message_at = CURRENT_TIMESTAMP, last_message_preview = $2,
                                assigned_to = COALESCE(assigned_to, $3), updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
@@ -2632,7 +2632,7 @@ const mockUpload = multer({
 });
 
 const mockupRows = async (conversationId) => (await db.query(
-    `SELECT id, url, file_name, mime, uploaded_by, sent_at, sent_by, pending_at, created_at FROM wa_mockups
+    `SELECT id, url, file_name, mime, uploaded_by, sent_at, sent_by, pending_at, for_order, created_at FROM wa_mockups
       WHERE conversation_id = $1 ORDER BY id`, [conversationId])).rows;
 
 router.get('/conversations/:id/mockups', async (req, res) => {
@@ -2671,14 +2671,30 @@ router.post('/conversations/:id/mockups', (req, res, next) => mockUpload.array('
     }
 });
 
+/** Pick a mockup as the order's design (or take it back): Create order puts it in the design mock. */
+router.post('/conversations/:id/mockups/:mockupId/order', async (req, res) => {
+    try {
+        const conversation = await loadConversation(req, req.params.id);
+        if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
+        await db.query('UPDATE wa_mockups SET for_order = $3 WHERE id = $1 AND conversation_id = $2',
+            [req.params.mockupId, conversation.id, !!req.body?.on]);
+        res.json({ mockups: await mockupRows(conversation.id) });
+    } catch (err) {
+        console.error('whatsapp mockup pick error:', err);
+        res.status(500).json({ error: 'Could not change that mockup' });
+    }
+});
+
 router.delete('/conversations/:id/mockups/:mockupId', async (req, res) => {
     try {
         const conversation = await loadConversation(req, req.params.id);
         if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
         const row = (await db.query('DELETE FROM wa_mockups WHERE id = $1 AND conversation_id = $2 RETURNING url',
             [req.params.mockupId, conversation.id])).rows[0];
-        // Removed from the list; the file stays if it was sent, since the thread shows it.
-        if (row && !(await db.query('SELECT 1 FROM wa_messages WHERE media_url = $1 LIMIT 1', [row.url])).rows[0]) {
+        // Removed from the list; the file stays if it was sent, since the thread shows it, or if an
+        // order uses it as its design mock.
+        if (row && !(await db.query('SELECT 1 FROM wa_messages WHERE media_url = $1 LIMIT 1', [row.url])).rows[0]
+            && !(await db.query('SELECT 1 FROM crewfit_orders WHERE line_items LIKE $1 LIMIT 1', [`%${row.url}%`])).rows[0]) {
             fs.promises.unlink(path.join(MOCK_DIR, path.basename(row.url))).catch(() => {});
         }
         res.json({ mockups: await mockupRows(conversation.id) });
@@ -3306,7 +3322,7 @@ router.post('/conversations/:id/template', async (req, res) => {
             `INSERT INTO wa_messages (conversation_id, wamid, direction, sender_type, sender_user,
                                       type, body, status)
              VALUES ($1,$2,'out','user',$3,'template',$4,'sent')
-             RETURNING id, wamid, direction, sender_type, sender_user, type, body, media_url,
+             RETURNING id, conversation_id, wamid, direction, sender_type, sender_user, type, body, media_url,
                        media_mime, media_name, status, error, sent_at`,
             [conversation.id, wamid, req.user?.username || null, body]);
         // Its footer and buttons, so the chat shows it the way the customer sees it.

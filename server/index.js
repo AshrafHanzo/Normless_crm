@@ -1043,6 +1043,8 @@ async function ensureCrewfitSchema() {
             -- Past the 24-hour window the customer is asked to reply first; these wait for it.
             ALTER TABLE wa_mockups ADD COLUMN IF NOT EXISTS pending_at TIMESTAMP;
             ALTER TABLE wa_mockups ADD COLUMN IF NOT EXISTS pending_by TEXT;
+            -- The mockup(s) picked as the design for the order: the order form's design mock.
+            ALTER TABLE wa_mockups ADD COLUMN IF NOT EXISTS for_order BOOLEAN NOT NULL DEFAULT false;
             -- The chat a quote was built in, so the inbox lists it beside the orders.
             ALTER TABLE crewfit_quotes ADD COLUMN IF NOT EXISTS wa_lead_id INTEGER;
             -- Which order message an activity line records, so the inbox can say "already sent".

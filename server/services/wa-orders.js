@@ -52,7 +52,9 @@ const MESSAGES = {
     advance_received: { label: 'Advance received, with proforma', auto: 'When the advance is paid', autoDefault: true },
     proforma: { label: 'Proforma invoice' },
     photos: { label: 'Production photos' },
-    balance_link: { label: 'Balance payment link', auto: 'When production is complete' },
+    // Not on its own: it goes when the team approves the production photos (approvePhotos), not
+    // when the status changes — the team kept getting a summary they hadn't checked the photos for.
+    balance_link: { label: 'Balance payment link' },
     invoice: { label: 'Tax invoice', auto: 'When the balance is paid' },
     dispatch: { label: 'Tracking details', auto: 'When the order is dispatched' },
     // On unless switched off: the shop asked for it to follow the tracking every time.
@@ -458,7 +460,7 @@ async function record(conv, { wamid, type, body, user, auto, media }) {
         `INSERT INTO wa_messages (conversation_id, wamid, direction, sender_type, sender_user, type, body,
                                   media_url, media_mime, media_name, status)
          VALUES ($1,$2,'out',$3,$4,$5,$6,$7,$8,$9,'sent')
-         RETURNING id, wamid, direction, sender_type, sender_user, type, body, media_url,
+         RETURNING id, conversation_id, wamid, direction, sender_type, sender_user, type, body, media_url,
                    media_mime, media_name, status, error, sent_at`,
         [conv.id, wamid, auto ? 'auto' : 'user', auto ? null : user || null, type, body,
             media?.url || null, media?.mime || null, media?.filename || null])).rows[0];
@@ -703,6 +705,31 @@ async function autoSend(orderId, kind) {
     }
 }
 
+/**
+ * The lead follows the money: the advance makes it Partially paid, the balance Paid. Only ever
+ * forward — a Paid lead is not moved back by a later advance on another order. The lead is the
+ * order's own, or else the one on the chat with the order's WhatsApp number.
+ */
+async function leadFollowsPayment(orderId, paymentStatus) {
+    const key = paymentStatus === 'Fully Paid' ? 'paid' : paymentStatus === '50% Paid' ? 'partially_paid' : null;
+    if (!key) return;
+    const status = (await db.query('SELECT name FROM wa_lead_statuses WHERE key = $1', [key])).rows[0];
+    if (!status) return;
+    const o = (await db.query('SELECT sl_no, wa_lead_id, whatsapp_number, contact_number, billing_mobile FROM crewfit_orders WHERE id = $1', [orderId])).rows[0];
+    if (!o) return;
+    let leadId = o.wa_lead_id;
+    if (!leadId) {
+        const phone = wa.normalisePhone(o.whatsapp_number || o.contact_number || o.billing_mobile);
+        leadId = phone ? (await db.query(
+            `SELECT lead_id FROM wa_contacts WHERE phone = $1 AND line_id = (SELECT id FROM wa_lines WHERE brand = 'crewfit')`, [phone])).rows[0]?.lead_id : null;
+    }
+    if (!leadId) return;
+    const moved = await db.query(
+        `UPDATE crewfit_leads SET status = $2, updated_at = CURRENT_TIMESTAMP
+          WHERE id = $1 AND status IS DISTINCT FROM $2 AND ($2 = 'paid' OR status IS DISTINCT FROM 'paid')`, [leadId, key]);
+    if (moved.rowCount) await logActivity({ orderId, kind: 'status', detail: key, body: `Marked ${status.name} — CF-${o.sl_no} is ${paymentStatus === 'Fully Paid' ? 'paid in full' : 'advance paid'}` });
+}
+
 /** An order was created or saved. Called without awaiting by the order routes. */
 function orderChanged(before, after, user) {
     (async () => {
@@ -719,18 +746,13 @@ function orderChanged(before, after, user) {
         // came through Razorpay, and the customer should hear the same thing.
         if (before.payment_status === 'Pending' && after.payment_status === '50% Paid') {
             await logActivity({ orderId: after.id, kind: 'payment', actor: user, body: `Advance recorded for CF-${after.sl_no}` });
+            await leadFollowsPayment(after.id, after.payment_status);
             await autoSend(after.id, 'advance_received');
         }
         if (before.payment_status !== 'Fully Paid' && after.payment_status === 'Fully Paid') {
             await logActivity({ orderId: after.id, kind: 'payment', actor: user, body: `Balance recorded for CF-${after.sl_no}` });
+            await leadFollowsPayment(after.id, after.payment_status);
             await autoSend(after.id, 'invoice');
-        }
-        if (before.status !== 'Ready for Dispatch' && after.status === 'Ready for Dispatch' && after.payment_status !== 'Fully Paid') {
-            const s = await settings();
-            if (s.auto_balance_link === 'true' && photoFiles(after).length) {
-                await send(after.id, 'photos', { auto: true }).catch(err => console.error('whatsapp auto photos:', err.message));
-            }
-            await autoSend(after.id, 'balance_link');
         }
     })().catch(err => console.error('whatsapp order hook:', err.message));
 }
@@ -739,14 +761,15 @@ function orderChanged(before, after, user) {
 function paymentSettled(payment) {
     (async () => {
         if (!payment?.order_id) return;
-        const o = (await db.query('SELECT sl_no FROM crewfit_orders WHERE id = $1', [payment.order_id])).rows[0];
+        const o = (await db.query('SELECT sl_no, payment_status FROM crewfit_orders WHERE id = $1', [payment.order_id])).rows[0];
         await logActivity({
             orderId: payment.order_id, kind: 'payment',
             body: `${inr(payment.amount)} ${payment.kind === 'advance' ? 'advance' : payment.kind === 'balance' ? 'balance' : 'payment'} received for CF-${o?.sl_no}`,
         });
+        await leadFollowsPayment(payment.order_id, o?.payment_status);
         if (payment.kind === 'advance') await autoSend(payment.order_id, 'advance_received');
         if (payment.kind === 'balance') await autoSend(payment.order_id, 'invoice');
     })().catch(err => console.error('whatsapp payment hook:', err.message));
 }
 
-module.exports = { MESSAGES, TEMPLATES, SendError, send, approvePhotos, submitTemplates, orderChanged, paymentSettled, logActivity, threadForOrder };
+module.exports = { MESSAGES, TEMPLATES, SendError, send, approvePhotos, submitTemplates, orderChanged, paymentSettled, leadFollowsPayment, logActivity, threadForOrder };

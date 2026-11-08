@@ -868,6 +868,9 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
 
   // set order-level fields + recompute money
   const setF = (patch, recalc = false) => setForm(f => { const nf = { ...f, ...patch }; return recalc ? { ...nf, ...recompute(nf) } : nf })
+  // Billing follows the delivery address until someone unticks it — on by default when billing is
+  // empty or already the same, which is what a customer who gave one address means.
+  const billingSame = form?._billingSame ?? (!form?.billing_address || form.billing_address === form.delivery_location)
 
   const updateItem = (idx, patch) => {
     const items = form.line_items.map((it, i) => i === idx ? { ...it, ...patch } : it)
@@ -1307,6 +1310,7 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
     payload.description = buildDescription({ ...payload, _advanceLink: advanceLink() })
     delete payload._gstPct
     delete payload._paidAdvance
+    delete payload._billingSame
     payload.extra_charges = liveCharges(payload).filter(c => c.label?.trim())
     // After the advance the charges routes own the list; the server ignores it here anyway.
     if (form._paidAdvance != null) delete payload.extra_charges
@@ -1733,7 +1737,8 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
           )}
 
           <div className="form-section">Delivery &amp; Billing</div>
-          <div className="input-group"><label>Delivery Address *</label><input required value={form.delivery_location || ''} onChange={e => setF({ delivery_location: e.target.value })} /></div>
+          <div className="input-group"><label>Delivery Address *</label><input required value={form.delivery_location || ''}
+            onChange={e => setF({ delivery_location: e.target.value, ...(billingSame ? { billing_address: e.target.value } : {}) })} /></div>
           <div className="form-row">
             <div className="input-group"><label>Billing Name / Company *</label><input required value={form.billing_name || ''} onChange={e => setF({ billing_name: e.target.value })} /></div>
             <div className="input-group"><label>Contact Person *</label><input required value={form.contact_person || ''} onChange={e => setF({ contact_person: e.target.value })} /></div>
@@ -1753,7 +1758,14 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
               <div className="field-hint">Decides CGST+SGST or IGST on the invoice.</div>
             </div>
           </div>
-          <div className="input-group"><label>Complete Billing Address *</label><input required value={form.billing_address || ''} onChange={e => setF({ billing_address: e.target.value })} /></div>
+          <div className="input-group">
+            <label>Complete Billing Address *</label>
+            <label className="check-inline">
+              <input type="checkbox" checked={billingSame} onChange={e => setF({ _billingSame: e.target.checked, ...(e.target.checked ? { billing_address: form.delivery_location || '' } : {}) })} />
+              Same as the delivery address
+            </label>
+            <input required readOnly={billingSame} value={form.billing_address || ''} onChange={e => setF({ billing_address: e.target.value })} />
+          </div>
 
           <div className="form-section">Pipeline</div>
           <div className="form-row">

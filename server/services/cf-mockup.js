@@ -107,7 +107,9 @@ async function orderFromLead(conversation, lead) {
     const items = rules.itemsOf(lead);
     const missing = [];
     if (!items.length) missing.push('the products');
-    const mockups = (await db.query('SELECT url FROM wa_mockups WHERE conversation_id = $1 AND sent_at IS NOT NULL ORDER BY id', [conversation.id])).rows.map(r => r.url);
+    // The design mock: the mockups picked for the order, or failing that every one that was sent.
+    const sent = (await db.query('SELECT url, for_order FROM wa_mockups WHERE conversation_id = $1 AND (sent_at IS NOT NULL OR for_order) ORDER BY id', [conversation.id])).rows;
+    const mockups = (sent.some(r => r.for_order) ? sent.filter(r => r.for_order) : sent).map(r => r.url);
     const embroidery = /embroid/i.test(lead.branding || '');
     const lines = [];
     for (const it of items) {
@@ -121,7 +123,7 @@ async function orderFromLead(conversation, lead) {
         if (unit == null) { missing.push(`a price for ${qty} × ${it.product}`); continue; }
         lines.push({
             product: it.product, color: it.color || '', qty, unit_price: unit, product_total: unit * qty,
-            printing_placement: 'Front', printing_type: embroidery ? 'Embroidery' : 'Printing', size_breakdown: '',
+            printing_placement: 'Front', printing_type: embroidery ? 'Embroidery' : 'DTF', size_breakdown: '',
             mockImages: mockups,
         });
     }
@@ -259,7 +261,7 @@ async function sendMockups(conversation, rows, { user = null } = {}) {
         sent.push((await db.query(
             `INSERT INTO wa_messages (conversation_id, wamid, direction, sender_type, sender_user, type, body, media_url, media_mime, media_name, status)
              VALUES ($1,$2,'out','user',$3,$4,$5,$6,$7,$8,'sent')
-             RETURNING id, wamid, direction, sender_type, sender_user, type, body, media_url, media_mime, media_name, status, error, sent_at`,
+             RETURNING id, conversation_id, wamid, direction, sender_type, sender_user, type, body, media_url, media_mime, media_name, status, error, sent_at`,
             [conversation.id, out.wamid, user, out.kind, caption || null, m.url, m.mime, m.file_name])).rows[0]);
         await db.query('UPDATE wa_mockups SET sent_at = CURRENT_TIMESTAMP, sent_by = $2, pending_at = NULL WHERE id = $1', [m.id, user]);
     }

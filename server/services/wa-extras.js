@@ -44,7 +44,7 @@ async function sendCatalogue(conversation, { senderType = 'user', user = null, c
         `INSERT INTO wa_messages (conversation_id, wamid, direction, sender_type, sender_user, type, body,
                                   media_name, media_mime, media_url, status)
          VALUES ($1,$2,'out',$3,$4,'document',$5,$6,'application/pdf',$7,'sent')
-         RETURNING id, wamid, direction, sender_type, sender_user, type, body, media_url,
+         RETURNING id, conversation_id, wamid, direction, sender_type, sender_user, type, body, media_url,
                    media_mime, media_name, status, error, sent_at`,
         [conversation.id, out.wamid, senderType, user, text, file.filename, `/uploads/whatsapp/outgoing/${copyName}`])).rows[0];
     await db.query(
