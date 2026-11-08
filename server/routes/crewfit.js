@@ -1081,9 +1081,13 @@ async function issueOrderDocument(orderId, type, doc) {
       row = await db.transaction(async (tx) => {
         // A cancelled tax invoice keeps its number, so a reissue is a new line in the series —
         // keyed CF-12/2, not CF-12, or the counter would hand the old number straight back.
+        // Counted by name in the counter, not by this order: a deleted order's number can be
+        // reused, and its invoices are still filed under that name.
+        const base = `CF-${order.sl_no}`;
         const prior = (await tx.query(
-          `SELECT COUNT(*)::int AS n FROM crewfit_invoices WHERE order_id = $1 AND doc_type = 'tax_invoice'`, [order.id])).rows[0].n;
-        const item = { order_name: `CF-${order.sl_no}${prior ? `/${prior + 1}` : ''}`, date: today, kind: 'crewfit', tiebreak: order.id };
+          `SELECT COUNT(*)::int AS n FROM gst_invoice_numbers WHERE order_name = $1 OR order_name LIKE $2`,
+          [base, `${base}/%`])).rows[0].n;
+        const item = { order_name: `${base}${prior ? `/${prior + 1}` : ''}`, date: today, kind: 'crewfit', tiebreak: order.id };
         const numbers = await numbering.issueNormlessNumbers(tx, [item]);
         return (await insert(tx, numbers.get(item.order_name))).rows[0];
       });
