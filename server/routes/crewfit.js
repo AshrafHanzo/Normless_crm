@@ -1024,6 +1024,7 @@ const docRow = async (orderId, type) => (await db.query(
  * 'advance' and 'balance' are accepted as aliases so older links keep working.
  */
 const DOC_ALIAS = { advance: 'proforma', balance: 'final', proforma: 'proforma', final: 'final' };
+const SUPPLY_STATUSES = ['Ready for Dispatch', 'Dispatch Pending', 'Dispatched'];
 const docError = (status, message) => Object.assign(new Error(message), { status });
 
 /**
@@ -1043,8 +1044,11 @@ async function issueOrderDocument(orderId, type, doc) {
   if (type === 'proforma' && order.payment_status === 'Pending') {
     throw docError(400, 'No advance has been recorded yet');
   }
-  if (type === 'final' && order.payment_status !== 'Fully Paid') {
-    throw docError(400, 'A tax invoice is only issued once the order is Fully Paid');
+  // A tax invoice is due at supply: once the balance is paid, or once the order is ready to go out
+  // with the advance in (it then shows the balance as due).
+  if (type === 'final' && order.payment_status !== 'Fully Paid'
+      && !(order.payment_status === '50% Paid' && SUPPLY_STATUSES.includes(order.status))) {
+    throw docError(400, 'A tax invoice is issued once the order is fully paid, or Ready for Dispatch with the advance paid');
   }
 
   const figures = orderFigures(order);

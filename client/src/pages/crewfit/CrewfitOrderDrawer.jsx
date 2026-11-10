@@ -870,6 +870,9 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
   const setF = (patch, recalc = false) => setForm(f => { const nf = { ...f, ...patch }; return recalc ? { ...nf, ...recompute(nf) } : nf })
   // Billing follows the delivery address until someone unticks it — on by default when billing is
   // empty or already the same, which is what a customer who gave one address means.
+  // A tax invoice is due at supply: paid in full, or ready to go out with the advance in.
+  const taxInvoiceDue = form?.payment_status === 'Fully Paid'
+    || (form?.payment_status === '50% Paid' && ['Ready for Dispatch', 'Dispatch Pending', 'Dispatched'].includes(form?.status))
   const billingSame = form?._billingSame ?? (!form?.billing_address || form.billing_address === form.delivery_location)
 
   const updateItem = (idx, patch) => {
@@ -1419,7 +1422,9 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
       '',
       `Please find attached the GST tax invoice for your Crewfit order CF-${form.sl_no}.`,
       `Invoice No: ${taxInvoice?.number || '(see attachment)'}`,
-      `Amount: ${fmt(form.grand_total)} (paid in full)`,
+      form.payment_status === 'Fully Paid'
+        ? `Amount: ${fmt(form.grand_total)} (paid in full)`
+        : `Amount: ${fmt(form.grand_total)} — advance received ${fmt(form.advance)}, balance due ${fmt(form.balance)}`,
       '',
       'Thank you for your order!',
     ].join('\n')
@@ -1721,9 +1726,9 @@ export default function CrewfitOrderDrawer({ target, onClose, onSaved }) {
                     ? (taxInvoice.number.startsWith('NLCF/') ? 'B2B · Crewfit register' : 'B2C · Normless register')
                     : ((form.gst_number || '').trim() ? 'B2B — NLCF series, Crewfit register' : 'B2C — NL series, Normless register')}
                   amount={form.grand_total} invoice={taxInvoice}
-                  busy={invoiceBusy === 'final'} locked={form.payment_status !== 'Fully Paid'}
-                  lockedLabel="Awaiting full payment" onGenerate={() => downloadInvoice('final')}
-                  onShare={taxInvoice || form.payment_status === 'Fully Paid' ? shareTaxInvoice : null}
+                  busy={invoiceBusy === 'final'} locked={!taxInvoiceDue}
+                  lockedLabel="Awaiting full payment, or Ready for Dispatch" onGenerate={() => downloadInvoice('final')}
+                  onShare={taxInvoice || taxInvoiceDue ? shareTaxInvoice : null}
                   onCancel={isOwner ? () => cancelDocument(taxInvoice) : null}
                 />
               </div>

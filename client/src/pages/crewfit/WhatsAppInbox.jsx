@@ -158,7 +158,8 @@ function notYet(o, kind) {
     case 'proforma': return paid === 'Pending' ? 'Record the advance first' : null
     case 'balance_link': return paid === 'Pending' ? 'Collect the advance first' : paid === 'Fully Paid' ? 'Already fully paid' : null
     case 'payment_qr': return paid === 'Fully Paid' ? 'Already fully paid' : null
-    case 'invoice': return paid !== 'Fully Paid' ? 'Issued once the order is fully paid' : null
+    case 'invoice': return paid === 'Fully Paid' || (paid === '50% Paid' && ['Ready for Dispatch', 'Dispatch Pending', 'Dispatched'].includes(o.status))
+      ? null : 'Issued once the order is fully paid, or Ready for Dispatch with the advance paid'
     case 'dispatch': return !o.tracking_link && !NO_TRACKING.includes(o.mot) ? 'Add the tracking ID on the order first' : null
     default: return null
   }

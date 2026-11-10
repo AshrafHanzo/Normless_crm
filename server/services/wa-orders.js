@@ -533,7 +533,9 @@ async function sendOnce(orderId, kind, { user = null, auto = false, bare = false
         files = [file];
         caption = kind === 'proforma'
             ? `Proforma invoice ${file.number} for your Crewfit order ${ref(order)}.`
-            : `Tax invoice ${file.number} for your Crewfit order ${ref(order)} — ${inr(order.grand_total)}, paid in full. Thank you!`;
+            : order.payment_status === 'Fully Paid'
+                ? `Tax invoice ${file.number} for your Crewfit order ${ref(order)} — ${inr(order.grand_total)}, paid in full. Thank you!`
+                : `Tax invoice ${file.number} for your Crewfit order ${ref(order)} — ${inr(order.grand_total)}. Advance received ${inr(order.advance)}; balance due ${inr(order.balance)}.`;
     } else if (kind === 'photos') {
         files = photoFiles(order);
         if (!files.length) throw new SendError(`${ref(order)} has no production photos uploaded yet`);

@@ -213,11 +213,16 @@ function renderProforma(doc, order, proforma) {
 }
 
 /**
- * The tax invoice: one per order, for the full order value, issued when the balance is settled.
+ * The tax invoice: one per order, for the full order value, issued at supply — when the balance
+ * is settled, or from Ready for Dispatch on with the balance shown as due.
  * `invoice` carries the full-value figures; `proforma` is the advance document it supersedes, if
  * there was one, referenced so the customer can tie the two together.
  */
 function renderInvoice(doc, order, invoice, proforma) {
+  // Issued at supply, which can come before the balance: then it states what was received and
+  // what is still due instead of "paid in full".
+  const advance = Number(order.advance) || 0;
+  const due = order.payment_status === 'Fully Paid' ? 0 : Math.max(0, Math.round((Number(invoice.amount) || 0) - advance));
   const { interState } = taxSplit(order);
   let y = documentHeader(doc, order, {
     title: 'TAX INVOICE', numberLabel: 'Invoice No', number: invoice.number, date: invoice.date,
@@ -233,16 +238,24 @@ function renderInvoice(doc, order, invoice, proforma) {
     t.row(`SGST @ ${(invoice.gst_pct / 2).toFixed(1)}%`, money(invoice.gst_amount / 2));
   }
   t.row('Invoice Total', money(invoice.amount), true);
+  if (due > 0) {
+    t.row('Advance Received', money(advance));
+    t.row('Balance Due', money(due), true);
+  }
   if (proforma) t.note(`Advance received against proforma ${proforma.number}`);
-  t.note('Amount Paid in Full — no balance outstanding');
+  if (due > 0) {
+    t.note('The balance is payable before dispatch.');
+  } else {
+    t.note('Amount Paid in Full — no balance outstanding');
 
-  // A paid-in-full stamp, angled across the totals so it reads as a status rather than a line item.
-  doc.save();
-  doc.rotate(-14, { origin: [130, t.y + 20] })
-    .fontSize(30).font('Helvetica-Bold').fillColor('#16a34a').opacity(0.16)
-    .text('PAID', 60, t.y, { width: 200, align: 'center' });
-  doc.restore();
-  doc.opacity(1).font('Helvetica');
+    // A paid-in-full stamp, angled across the totals so it reads as a status rather than a line item.
+    doc.save();
+    doc.rotate(-14, { origin: [130, t.y + 20] })
+      .fontSize(30).font('Helvetica-Bold').fillColor('#16a34a').opacity(0.16)
+      .text('PAID', 60, t.y, { width: 200, align: 'center' });
+    doc.restore();
+    doc.opacity(1).font('Helvetica');
+  }
 
   doc.fontSize(8).fillColor('#999')
     .text('This is a computer-generated invoice and does not require a physical signature.', 40, 780, { width: 515, align: 'center' });
