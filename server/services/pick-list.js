@@ -13,6 +13,7 @@
 
 const db = require('../db/connection');
 const inv = require('./inventory');
+const myxture = require('./myxture');
 
 // The blank names the warehouse uses, in the words the floor uses for them.
 const TYPE_LABEL = {
@@ -62,12 +63,15 @@ async function openOrders(from, to) {
 async function build({ from, to } = {}) {
     const orders = await openOrders(from, to);
     const index = await inv.productIndex();
+    // Made by Myxture and delivered finished — nothing for our print floor to do.
+    const outsourced = await myxture.productIds();
 
     const groups = new Map();
     for (const order of orders) {
         for (const item of inv.safeItems(order)) {
             const qty = parseInt(item.quantity, 10) || 0;
             if (qty <= 0) continue;
+            if (outsourced.has(String(item.shopify_product_id))) continue;
             const product = index.get(String(item.shopify_product_id));
             const parts = inv.splitVariant(item.variant);
             const type = TYPE_LABEL[inv.blankTypeFor(product)] || 'Other';

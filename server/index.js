@@ -319,6 +319,7 @@ app.use('/api/scanner', authMiddleware, require('./routes/packing'));
 app.use('/api/banking', authMiddleware, require('./routes/banking'));
 // Customer support: returns, replacements and refunds arranged by hand.
 app.use('/api/support', authMiddleware, require('./routes/support'));
+app.use('/api/myxture', authMiddleware, require('./routes/myxture'));
 // WhatsApp. The webhook is public because Meta calls it with no credentials of ours — it proves
 // itself with a signature over the raw body instead, which is why it is mounted here, after the
 // JSON parser that stashes those bytes but ahead of the sign-in the inbox routes sit behind.
@@ -526,6 +527,9 @@ async function ensureCrewfitSchema() {
                 -- that shows what the business earns and what it pays out, down to the rupee.
                 ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_banking BOOLEAN DEFAULT false;
                 ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_edit_banking BOOLEAN DEFAULT false;
+                -- Myxture print-on-demand: exporting jersey orders to their portal and checking
+                -- what they deliver back into the warehouse.
+                ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_myxture BOOLEAN DEFAULT false;
             `);
             await db.query(`UPDATE admin_users SET can_access_normless=true, can_access_crewfit=true,
                 can_view_crewfit_followups=true, can_view_crewfit_orders=true, can_view_crewfit_catalog=true,
@@ -534,7 +538,7 @@ async function ensureCrewfitSchema() {
                 can_view_crewfit_vendors=true, can_view_crewfit_invoices=true, can_edit_crewfit_orders=true,
                 can_view_marketing=true, can_dispatch_marketing=true, can_view_marketing_reports=true,
                 can_view_inventory=true, can_edit_inventory=true, can_approve_marketing=true,
-                can_import_rto=true
+                can_import_rto=true, can_view_myxture=true
                 WHERE role IN ('owner','admin')`);
         } catch (e) { console.error('admin perms ensure:', e.message); }
 
@@ -2099,6 +2103,76 @@ async function ensureSupportSchema() {
     }
 }
 
+async function ensureMyxtureSchema() {
+    try {
+        await db.exec(`
+            -- Which Shopify products Myxture makes for us, and what their portal calls them. A
+            -- product not listed here never reaches a Myxture file.
+            CREATE TABLE IF NOT EXISTS myxture_products (
+                shopify_product_id BIGINT PRIMARY KEY,
+                title TEXT,
+                -- The template's Product type and Variant 1 columns.
+                product_type TEXT NOT NULL,
+                fabric TEXT,
+                -- The template's Design file. May hold {color}, filled from the variant's colour,
+                -- for a product sold in several colours of the same design.
+                design_file TEXT NOT NULL,
+                active BOOLEAN DEFAULT true,
+                updated_by TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            -- One downloaded file = one batch. Lines in a batch that is not voided count as sent,
+            -- which is what keeps an order from going to the portal twice.
+            CREATE TABLE IF NOT EXISTS myxture_batches (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                batch_no INTEGER NOT NULL UNIQUE,
+                -- 'export' from the tab, 'import' for a file uploaded to the portal before the tab.
+                source TEXT DEFAULT 'export',
+                note TEXT,
+                created_by TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                voided_at TIMESTAMP,
+                voided_by TEXT
+            );
+
+            -- What was sent, as it was written into the file — a snapshot, so re-downloading a batch
+            -- gives back the same sheet even after the product mapping changes.
+            CREATE TABLE IF NOT EXISTS myxture_batch_lines (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                batch_id INTEGER NOT NULL REFERENCES myxture_batches(id) ON DELETE CASCADE,
+                order_shopify_id TEXT NOT NULL,
+                order_number TEXT,
+                -- Variant id, or product:variant title when Shopify gave no variant id.
+                line_key TEXT NOT NULL,
+                shopify_product_id BIGINT,
+                shopify_variant_id BIGINT,
+                title TEXT,
+                variant TEXT,
+                color TEXT,
+                size TEXT,
+                qty INTEGER NOT NULL,
+                product_type TEXT,
+                fabric TEXT,
+                design_file TEXT,
+                -- QC at the warehouse: how many actually arrived, and anything wrong with them.
+                received_qty INTEGER,
+                received_at TIMESTAMP,
+                received_by TEXT,
+                qc_note TEXT,
+                -- A sent line whose order was later cancelled or cut down, once someone has dealt
+                -- with it on the portal.
+                attention_cleared_at TIMESTAMP,
+                attention_cleared_by TEXT
+            );
+            CREATE INDEX IF NOT EXISTS myxture_lines_batch_idx ON myxture_batch_lines (batch_id);
+            CREATE INDEX IF NOT EXISTS myxture_lines_order_idx ON myxture_batch_lines (order_shopify_id, line_key);
+        `);
+    } catch (err) {
+        console.error('ensureMyxtureSchema error:', err.message);
+    }
+}
+
 async function ensureSalesSchema() {
     try {
         await db.exec(`
@@ -2336,6 +2410,8 @@ app.listen(PORT, async () => {
     await ensureSalesSchema();
     // Customer support tickets: returns, replacements and refunds handled by hand
     await ensureSupportSchema();
+    // Myxture print-on-demand: the batches exported to their portal
+    await ensureMyxtureSchema();
     // Bank statements and the transactions parsed out of them
     await ensureBankingSchema();
     await ensureSyncSchema();

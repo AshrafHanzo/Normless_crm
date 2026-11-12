@@ -1,12 +1,49 @@
 import { useState, useEffect, Fragment } from 'react'
-import { useApi } from '../App'
+import { useSearchParams } from 'react-router-dom'
+import { useApi, useAuth } from '../App'
 import useServerTable from '../hooks/useServerTable'
 import DateRangeFilter from '../components/DateRangeFilter'
 import PickListExport from '../components/PickListExport'
 import SortTh from '../components/SortTh'
 import Pagination from '../components/Pagination'
+import MyxtureTab from './orders/MyxtureTab'
 
+/**
+ * Orders, and beside them the Myxture tab: jersey orders sent to the print-on-demand vendor.
+ * The tab lives in the URL (?tab=myxture) so it survives a reload and can be linked to.
+ */
 export default function Orders() {
+  const { user } = useAuth()
+  const [params, setParams] = useSearchParams()
+  const canMyxture = user?.role === 'owner' || user?.role === 'admin' || !!user?.can_view_myxture
+  const tab = canMyxture && params.get('tab') === 'myxture' ? 'myxture' : 'all'
+  const setTab = (t) => setParams(t === 'all' ? {} : { tab: t }, { replace: true })
+
+  const tabs = canMyxture && (
+    <div className="scan-tabs" style={{ marginBottom: 18 }}>
+      <button className={tab === 'all' ? 'active' : ''} onClick={() => setTab('all')}>All orders</button>
+      <button className={tab === 'myxture' ? 'active' : ''} onClick={() => setTab('myxture')}>Myxture POD</button>
+    </div>
+  )
+
+  if (tab === 'myxture') {
+    return (
+      <div className="page-enter">
+        <div className="dash-toolbar">
+          <div>
+            <h1>Orders</h1>
+            <p style={{ color: 'var(--text-muted)' }}>Jersey orders made by Myxture — send them to the portal, check them in when they arrive</p>
+          </div>
+        </div>
+        {tabs}
+        <MyxtureTab />
+      </div>
+    )
+  }
+  return <AllOrders tabs={tabs} />
+}
+
+function AllOrders({ tabs }) {
   const apiFetch = useApi()
   const [orders, setOrders] = useState([])
   // order_number → the RTO shelf lines that could fill it, from the list response.
@@ -90,6 +127,8 @@ export default function Orders() {
           <PickListExport from={from} to={to} />
         </div>
       </div>
+
+      {tabs}
 
       {/* Filters */}
       <div className="filters-row">
