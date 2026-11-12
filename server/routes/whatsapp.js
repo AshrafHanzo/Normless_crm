@@ -314,6 +314,9 @@ async function receiveMessage(message, profileName) {
                     AND created_at > NOW() - INTERVAL '2 hours' LIMIT 1`, [conversation.id])).rows.length;
         if (fresh?.mode === 'billing') {
             await billing.handle(fresh, { body: describe(message) });
+        } else if (fresh?.mode === 'order_details') {
+            // Collecting the delivery address and sizes after the mockup was confirmed.
+            await require('../services/cf-mockup').handleDetails(fresh, { body: describe(message) });
         } else if (keyword) {
             await flow.start(fresh);
         } else if (greetAgain) {

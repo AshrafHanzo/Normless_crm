@@ -1626,7 +1626,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                         <span className="wa-thread-line">{c.last_message_preview || 'No messages yet'}</span>
                         <span className="wa-thread-foot">
                           {cf && <span className="wa-pill" style={pillStyle(s.color)}>{s.name}</span>}
-                          {cf && (c.mode === 'flow' || c.mode === 'billing' || c.bot_answers) && c.status !== 'closed' && (
+                          {cf && (c.mode === 'flow' || c.mode === 'billing' || c.mode === 'order_details' || c.bot_answers) && c.status !== 'closed' && (
                             <span className="wa-pill" style={pillStyle('#b3a9ff')} title={c.mode === 'flow' ? 'The menu is answering' : 'The bot answers questions in this chat'}>Bot</span>
                           )}
                           {cf && c.backup_waiting && <span className="wa-pill" style={pillStyle('#f87171')}>Waiting for reply</span>}
@@ -1754,10 +1754,10 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                   {/* Whoever is answering, and the one click it takes to change that. A rep
                       taking over has to be instant — a customer going round in circles with a
                       menu will not wait for it to finish its question. */}
-                  {thread.mode === 'flow' || thread.mode === 'ai' || thread.mode === 'billing' ? (
+                  {thread.mode === 'flow' || thread.mode === 'ai' || thread.mode === 'billing' || thread.mode === 'order_details' ? (
                     <>
                       <span className="wa-mode wa-mode-bot">
-                        {thread.mode === 'ai' ? (cf ? 'assistant is answering' : 'Bot is answering') : thread.mode === 'billing' ? 'collecting billing details' : 'menu is answering'}
+                        {thread.mode === 'ai' ? (cf ? 'assistant is answering' : 'Bot is answering') : thread.mode === 'billing' ? 'collecting billing details' : thread.mode === 'order_details' ? 'collecting address & sizes' : 'menu is answering'}
                       </span>
                       <button type="button" className="mini-btn" onClick={() => setMode('human')}>Take over</button>
                     </>

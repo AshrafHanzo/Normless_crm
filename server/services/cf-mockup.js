@@ -6,8 +6,11 @@
  * window the approved template crewfit_mockup_confirm carries the first mockup and the same two
  * buttons instead.
  *
- * Confirm: the order is raised from what the lead holds — each product with its colour, quantity
- * and the catalogue price for that quantity, the branding, the billing details — and the customer
+ * Confirm: first the details only the customer can give — a delivery address, and each product's
+ * size breakdown adding up to its quantity. Whatever is missing the bot asks for, one thing at a
+ * time (the chat is in mode 'order_details' meanwhile). Then the order is raised from what the
+ * lead holds — each product with its colour, quantity, sizes and the catalogue price for that
+ * quantity, the branding, the billing details, shipping at the Tamil Nadu rate — and the customer
  * gets the order summary with the 50% advance link. If something can't be priced or counted (a
  * quantity given as a range, a product priced on request), nothing is guessed: the customer is
  * thanked and the chat waits for a person, with a note saying what is missing.
@@ -20,6 +23,11 @@ const db = require('../db/connection');
 const wa = require('./whatsapp');
 const rules = require('./cf-lead-rules');
 const { EMBROIDERY_EXTRA } = require('./crewfit-charges');
+const sizes = require('./cf-sizes');
+const { shippingFor } = require('../data/crewfitShipping');
+
+// Shipping is worked out for Tamil Nadu unless a person changes the region on the order.
+const SHIP_REGION = 'Tamil Nadu';
 
 const CONFIRM = 'mock_ok';
 const CHANGES = 'mock_change';
@@ -123,7 +131,7 @@ async function orderFromLead(conversation, lead) {
         if (unit == null) { missing.push(`a price for ${qty} × ${it.product}`); continue; }
         lines.push({
             product: it.product, color: it.color || '', qty, unit_price: unit, product_total: unit * qty,
-            printing_placement: 'Front', printing_type: embroidery ? 'Embroidery' : 'DTF', size_breakdown: '',
+            printing_placement: 'Front', printing_type: embroidery ? 'Embroidery' : 'DTF', size_breakdown: it.sizes || '',
             mockImages: mockups,
         });
     }
@@ -131,8 +139,10 @@ async function orderFromLead(conversation, lead) {
 
     const productTotal = lines.reduce((n, l) => n + l.product_total, 0);
     const designer = embroidery ? DIGITISING : 0;
-    const gst = Math.round((productTotal + designer) * GST_PCT / 100);
-    const grand = productTotal + designer + gst;
+    const shipping = shippingFor(SHIP_REGION, lines.reduce((n, l) => n + l.qty, 0)) || 0;
+    // Shipping is taxed with the goods, as the order form does.
+    const gst = Math.round((productTotal + designer + shipping) * GST_PCT / 100);
+    const grand = productTotal + designer + shipping + gst;
     const advance = Math.round(grand / 2);
     const phone10 = String(conversation.phone || '').slice(-10);
     return {
@@ -147,8 +157,9 @@ async function orderFromLead(conversation, lead) {
             line_items: lines,
             product: lines.map(l => l.product).join(', '), color: lines.map(l => l.color).filter(Boolean).join(', '),
             qty: lines.reduce((n, l) => n + l.qty, 0), unit_price: lines.length === 1 ? lines[0].unit_price : '',
-            printing_type: embroidery ? 'Embroidery' : 'Printing',
-            product_total: productTotal, designer_charge: designer, shipping: 0, gst_amount: gst,
+            printing_type: embroidery ? 'Embroidery' : 'DTF',
+            size_breakdown: lines.map(l => `${l.product}: ${l.size_breakdown}`).join(' | '),
+            product_total: productTotal, designer_charge: designer, shipping, gst_amount: gst,
             grand_total: grand, total_cost: grand, advance, balance: grand - advance,
             layout_status: 'Done', status: 'Awaiting Payment', payment_status: 'Pending',
             so: soName(conversation.assigned_to),
@@ -158,7 +169,97 @@ async function orderFromLead(conversation, lead) {
     };
 }
 
-/** ✅ Confirm: raise the order and send its summary with the advance link. */
+/* ── Before the order: what only the customer can tell us ─────────────────────────────────── */
+
+/** The products' quantity as a number, or 0 when it is not one exact count. */
+const exactQty = (q) => (/^\s*\d+\s*(pcs|pieces|nos)?\s*$/i.test(String(q ?? '')) ? parseInt(q, 10) : 0);
+
+/**
+ * What the customer still has to give before the order can be raised, as [{ key, index? }]: the
+ * delivery address, then each product's sizes (adding up to its quantity, when that is exact).
+ */
+function stillNeeded(lead) {
+    const out = [];
+    if (!String(lead.delivery_address || '').trim()) out.push({ key: 'delivery_address' });
+    rules.itemsOf(lead).forEach((it, index) => {
+        const split = sizes.parse(it.sizes);
+        const qty = exactQty(it.quantity);
+        if (!split.length || (qty && sizes.total(split) !== qty)) out.push({ key: 'sizes', index });
+    });
+    return out;
+}
+
+/** The question for one missing thing. */
+function question(lead, need, { first = false } = {}) {
+    if (need.key === 'delivery_address') return 'Please share the *delivery address* for this order, with the pincode. 📦';
+    const it = rules.itemsOf(lead)[need.index] || {};
+    const qty = exactQty(it.quantity);
+    const name = [it.product, it.color].filter(Boolean).join(' — ') || 'your order';
+    const got = sizes.parse(it.sizes);
+    const off = got.length && qty && sizes.total(got) !== qty ? ` (the sizes you sent add up to ${sizes.total(got)})` : '';
+    return `Please share the *size breakdown* for ${name}${qty ? ` — ${qty} pieces in all${off}` : ''}.\n`
+        + `For example: S-${first ? 10 : 5}, M-20, L-20, XL-10`;
+}
+
+async function botText(conversation, text) {
+    await record(conversation.id, { wamid: await wa.sendText(conversation.phone, text), body: text, senderType: 'bot' });
+}
+
+/**
+ * A reply while the bot is collecting the order details (mode 'order_details'). Reads sizes and
+ * the address from it, saves them on the lead, and asks for the next missing thing — or, when
+ * nothing is missing, raises the order and sends the summary. Returns true when handled.
+ */
+async function handleDetails(conversation, message) {
+    if (conversation.mode !== 'order_details') return false;
+    const lead = (await db.query('SELECT * FROM crewfit_leads WHERE id = $1', [conversation.lead_id])).rows[0];
+    if (!lead) return false;
+    const text = String(message.body || '').trim();
+    const need = stillNeeded(lead)[0];
+    if (need?.key === 'sizes') {
+        const split = sizes.parse(text);
+        if (split.length) {
+            const items = rules.itemsOf(lead).map((it, i) => (i === need.index ? { ...it, sizes: sizes.format(split) } : it));
+            await db.query('UPDATE crewfit_leads SET products = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1', [lead.id, JSON.stringify(items)]);
+            lead.products = JSON.stringify(items);
+        }
+    } else if (need?.key === 'delivery_address' && text) {
+        // The reply is the address: read with the billing reader so a pasted "Address: …" is cleaned.
+        const found = await require('./wa-billing').readReply(text, { asking: 'delivery_address' });
+        // "Same" means the billing address, when there is one; otherwise it is asked again.
+        const address = found.delivery_address === 'SAME' ? (lead.billing_address || '') : String(found.delivery_address || text).slice(0, 1000);
+        if (address) await db.query('UPDATE crewfit_leads SET delivery_address = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1', [lead.id, address]);
+        lead.delivery_address = address;
+    }
+    const next = stillNeeded(lead)[0];
+    if (next) {
+        await botText(conversation, question(lead, next));
+        return true;
+    }
+    await db.query(`UPDATE wa_conversations SET mode = 'human', flow_step = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $1`, [conversation.id]);
+    await note(conversation.id, 'The customer gave the delivery address and sizes');
+    await raiseAndSend(conversation, lead);
+    return true;
+}
+
+/** Raise the order from the lead and send its summary with the advance link. */
+async function raiseAndSend(conversation, lead) {
+    const built = await orderFromLead(conversation, lead);
+    if (built.missing) {
+        const text = 'Thank you! 🙌 Our team will send you the order details and the payment link shortly.';
+        await botText(conversation, text);
+        await note(conversation.id, `Couldn't raise the order automatically — needs ${built.missing.join(', ')}. Create it from the chat.`);
+        return;
+    }
+    const { createOrder } = require('../routes/crewfit');
+    const { order } = await createOrder(built.body, 'whatsapp');
+    await db.query(`INSERT INTO wa_activity (conversation_id, order_id, kind, body) VALUES ($1,$2,'order',$3)`,
+        [conversation.id, order.id, `Order CF-${order.sl_no} raised automatically when the customer confirmed the mockup — ₹${Number(order.grand_total).toLocaleString('en-IN')}`]);
+    // The summary carries the 50% advance link.
+    await require('./wa-orders').send(order.id, 'summary', { user: 'whatsapp', auto: true });
+}
+
+/** ✅ Confirm: collect what is missing, then raise the order and send its summary. */
 async function confirm(conversation) {
     const lead = (await db.query('SELECT * FROM crewfit_leads WHERE id = $1', [conversation.lead_id])).rows[0];
     if (!lead) return;
@@ -168,23 +269,27 @@ async function confirm(conversation) {
     const existing = (await db.query(
         `SELECT id, sl_no FROM crewfit_orders WHERE wa_lead_id = $1 AND status <> 'Cancelled' AND created_at > NOW() - INTERVAL '30 days' ORDER BY id DESC LIMIT 1`,
         [lead.id])).rows[0];
-    let orderId = existing?.id;
-    if (!orderId) {
-        const built = await orderFromLead(conversation, lead);
-        if (built.missing) {
-            const text = 'Thank you for confirming the mockup! 🙌 Our team will send you the order details and the payment link shortly.';
-            await record(conversation.id, { wamid: await wa.sendText(conversation.phone, text), body: text, senderType: 'bot' });
-            await note(conversation.id, `Couldn't raise the order automatically — needs ${built.missing.join(', ')}. Create it from the chat.`);
-            return;
-        }
-        const { createOrder } = require('../routes/crewfit');
-        const { order } = await createOrder(built.body, 'whatsapp');
-        orderId = order.id;
-        await db.query(`INSERT INTO wa_activity (conversation_id, order_id, kind, body) VALUES ($1,$2,'order',$3)`,
-            [conversation.id, order.id, `Order CF-${order.sl_no} raised automatically when the customer confirmed the mockup — ₹${Number(order.grand_total).toLocaleString('en-IN')}`]);
+    if (existing) {
+        await require('./wa-orders').send(existing.id, 'summary', { user: 'whatsapp', auto: true });
+        return;
     }
-    // The summary carries the 50% advance link.
-    await require('./wa-orders').send(orderId, 'summary', { user: 'whatsapp', auto: true });
+    const needed = stillNeeded(lead);
+    if (needed.length) {
+        const ask = ['Thank you for confirming the mockup! 🙌', '',
+            'Before we send the order summary and payment link, we need a couple of details:', ''];
+        if (needed.some(n => n.key === 'delivery_address')) ask.push('• Delivery address (with pincode)');
+        for (const n of needed.filter(x => x.key === 'sizes')) {
+            const it = rules.itemsOf(lead)[n.index] || {};
+            ask.push(`• Size breakdown for ${[it.product, it.color].filter(Boolean).join(' — ') || 'the order'}${exactQty(it.quantity) ? ` (${exactQty(it.quantity)} pcs)` : ''}`);
+        }
+        ask.push('', question(lead, needed[0], { first: true }));
+        await botText(conversation, ask.join('\n'));
+        await db.query(`UPDATE wa_conversations SET mode = 'order_details', flow_step = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
+            [conversation.id, needed[0].key]);
+        await note(conversation.id, `Waiting for ${needed.map(n => (n.key === 'sizes' ? 'sizes' : 'the delivery address')).filter((v, i, a) => a.indexOf(v) === i).join(' and ')} before the order is raised`);
+        return;
+    }
+    await raiseAndSend(conversation, lead);
 }
 
 /** ✏️ Need changes: back to the designer. */
@@ -326,5 +431,5 @@ async function sendPending(conversationId, tapped = null) {
     return true;
 }
 
-module.exports = { askForApproval, onReply, orderFromLead, unitPrice, detailsReceived, sendMockups, askToReply, sendPending,
+module.exports = { askForApproval, onReply, handleDetails, stillNeeded, orderFromLead, unitPrice, detailsReceived, sendMockups, askToReply, sendPending,
     readyTemplate, CONFIRM, CHANGES, TEMPLATE, READY_TEMPLATE, SEND_PENDING };
