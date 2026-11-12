@@ -1,21 +1,28 @@
 import { useState, useEffect, useMemo } from 'react'
+import { createPortal } from 'react-dom'
 import { useApi } from '../../App'
 import { useToast } from '../../components/Toast'
 import Icon from '../../components/Icon'
 import DateRangeFilter from '../../components/DateRangeFilter'
+import SearchSelect from '../../components/SearchSelect'
 
 /**
- * Myxture print-on-demand. Jersey orders go to their portal as a downloaded sheet; every download
- * is a recorded batch, so a line that has gone once never shows up as ready again. When the
- * parcel comes in, the batch is opened and checked line by line.
+ * Myxture print-on-demand. Jersey orders go to their portal as rows of their bulk-order sheet —
+ * copied and pasted, or as a file; every copy or download is a recorded batch, so a line that has
+ * gone once never shows up as ready again. When the parcel comes in, the batch is opened and
+ * checked line by line.
  */
 
-const SIZE_ORDER = ['XXS', 'XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL']
+const SIZE_ORDER = ['XXS', 'XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL', '6XL', '7XL', '8XL']
 const sizeRank = (s) => { const i = SIZE_ORDER.indexOf(s); return i === -1 ? 99 : i }
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—'
 const fmtDateTime = (d) => d ? new Date(d).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }) : '—'
 const keyOf = (l) => `${l.order_shopify_id}|${l.line_key}`
 const STATUS_CLASS = { Sent: 'pending', 'Partly received': 'partial', Received: 'fulfilled', Voided: 'refunded' }
+const PAY_CLASS = { Prepaid: 'fulfilled', COD: 'pending' }
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`
+
+/* ------------------------------------------ helpers ------------------------------------------ */
 
 function useDownload() {
   const apiFetch = useApi()
@@ -31,6 +38,84 @@ function useDownload() {
     return true
   }
 }
+
+const escHtml = (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+
+/**
+ * Put sheet rows on the clipboard the way a spreadsheet does — tab-separated text, plus an HTML
+ * table for pages that read that instead — so they paste into the portal's grid cell by cell.
+ */
+const toTsv = (rows) => rows.map(r => r.map(c => String(c ?? '').replace(/[\t\r\n]+/g, ' ')).join('\t')).join('\n')
+
+async function copyRows(rows) {
+  const tsv = toTsv(rows)
+  const html = `<table>${rows.map(r => `<tr>${r.map(c => `<td>${escHtml(c)}</td>`).join('')}</tr>`).join('')}</table>`
+  try {
+    if (window.ClipboardItem && navigator.clipboard?.write) {
+      await navigator.clipboard.write([new window.ClipboardItem({
+        'text/plain': new Blob([tsv], { type: 'text/plain' }),
+        'text/html': new Blob([html], { type: 'text/html' }),
+      })])
+      return true
+    }
+  } catch { /* fall through */ }
+  try { await navigator.clipboard.writeText(tsv); return true } catch { /* fall through */ }
+  const ta = document.createElement('textarea')
+  ta.value = tsv
+  ta.style.cssText = 'position:fixed;opacity:0;top:0;left:0'
+  document.body.appendChild(ta)
+  ta.select()
+  let ok = false
+  try { ok = document.execCommand('copy') } catch { ok = false }
+  ta.remove()
+  return ok
+}
+
+// Shopify's CDN resizes on request: a 160px copy for the list, the full photo for the popup.
+const sized = (src, w) => src ? `${src}${src.includes('?') ? '&' : '?'}width=${w}` : src
+
+/** A product photo that opens full size. Clicks stop here, so a thumbnail in a row doesn't select it. */
+function Thumb({ src, alt = '', size = 44 }) {
+  const [open, setOpen] = useState(false)
+  useEffect(() => {
+    if (!open) return
+    // Captured and stopped, so Escape closes the photo and not the drawer behind it.
+    const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); setOpen(false) } }
+    document.addEventListener('keydown', onKey, true)
+    return () => document.removeEventListener('keydown', onKey, true)
+  }, [open])
+  if (!src) return <div className="mx-thumb mx-thumb-empty" style={{ width: size, height: size }} aria-hidden="true">👕</div>
+  return (
+    <>
+      <button type="button" className="mx-thumb" style={{ width: size, height: size }} title="View photo"
+        onClick={e => { e.stopPropagation(); setOpen(true) }}>
+        <img src={sized(src, 160)} alt={alt} loading="lazy" />
+      </button>
+      {/* Portalled to the body: the drawer's blurred overlay would otherwise trap a fixed-position
+          popup inside the drawer. */}
+      {open && createPortal(
+        <div className="image-modal-overlay" onClick={e => { e.stopPropagation(); setOpen(false) }}>
+          <img src={sized(src, 1200)} alt={alt} className="full-image" />
+        </div>,
+        document.body,
+      )}
+    </>
+  )
+}
+
+function ProductCell({ line, primary, secondary }) {
+  return (
+    <div className="mx-product">
+      <Thumb src={line.image} alt={line.title} />
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontWeight: 500 }}>{primary}</div>
+        {secondary && <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{secondary}</div>}
+      </div>
+    </div>
+  )
+}
+
+/* -------------------------------------------- tab -------------------------------------------- */
 
 export default function MyxtureTab() {
   const apiFetch = useApi()
@@ -49,7 +134,7 @@ export default function MyxtureTab() {
     { icon: '📤', value: stats?.ready_orders ?? 0, sub: `${stats?.ready_units ?? 0} pcs`, label: 'Ready to send', warn: (stats?.ready_orders ?? 0) > 0, view: 'ready' },
     { icon: '🗓️', value: stats?.week_orders ?? 0, sub: `${stats?.week_units ?? 0} pcs`, label: `Sent this week · ${stats?.month_orders ?? 0} orders this month`, view: 'batches' },
     { icon: '🚚', value: stats?.awaiting_units ?? 0, sub: 'pcs', label: stats?.overdue_units ? `Awaiting delivery · ${stats.overdue_units} over ${stats.overdue_days} days` : 'Awaiting delivery', warn: (stats?.overdue_units ?? 0) > 0, view: 'batches' },
-    { icon: '✅', value: stats?.received_units ?? 0, sub: `of ${stats?.total_units ?? 0} sent`, label: stats?.short_lines ? `Received · ${stats.short_lines} line${stats.short_lines === 1 ? '' : 's'} short` : 'Received at warehouse', warn: (stats?.short_lines ?? 0) > 0, view: 'batches' },
+    { icon: '✅', value: stats?.received_units ?? 0, sub: `of ${stats?.total_units ?? 0} sent`, label: stats?.short_lines ? `Received · ${plural(stats.short_lines, 'line')} short` : 'Received at warehouse', warn: (stats?.short_lines ?? 0) > 0, view: 'batches' },
     { icon: '⚠️', value: stats?.attention ?? 0, label: 'Changed after sending', warn: (stats?.attention ?? 0) > 0, view: 'attention' },
   ]
 
@@ -84,7 +169,7 @@ export default function MyxtureTab() {
         ))}
       </div>
 
-      {view === 'ready' && <ReadyView onSent={(b) => { loadStats(); setOpenBatch(b) }} goProducts={() => setView('products')} />}
+      {view === 'ready' && <ReadyView onChange={loadStats} onSent={(b) => { loadStats(); setOpenBatch(b) }} goProducts={() => setView('products')} />}
       {view === 'batches' && <BatchesView onOpen={setOpenBatch} refreshKey={stats} />}
       {view === 'attention' && <AttentionView onChange={loadStats} onOpenBatch={setOpenBatch} />}
       {view === 'products' && <ProductsView onChange={loadStats} />}
@@ -96,11 +181,12 @@ export default function MyxtureTab() {
 
 /* ------------------------------------------ ready ------------------------------------------ */
 
-function ReadyView({ onSent, goProducts }) {
+function ReadyView({ onSent, onChange, goProducts }) {
   const apiFetch = useApi()
   const toast = useToast()
   const download = useDownload()
   const [lines, setLines] = useState([])
+  const [sources, setSources] = useState([])
   const [mapped, setMapped] = useState(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState('')
@@ -110,12 +196,13 @@ function ReadyView({ onSent, goProducts }) {
   const [size, setSize] = useState('')
   const [search, setSearch] = useState('')
   const [picked, setPicked] = useState(new Set())
+  const [adding, setAdding] = useState(false)
 
   const load = async () => {
     setLoading(true)
     const q = new URLSearchParams({ ...(from && to && { from, to }) }).toString()
     const r = await apiFetch(`/api/myxture/ready${q ? `?${q}` : ''}`)
-    if (r && !r.error) { setLines(r.lines); setMapped(r.mapped) }
+    if (r && !r.error) { setLines(r.lines); setMapped(r.mapped); setSources(r.sources || []) }
     else toast.error(r?.error || 'Could not load the orders')
     setLoading(false)
   }
@@ -128,7 +215,7 @@ function ReadyView({ onSent, goProducts }) {
   const shown = useMemo(() => {
     const s = search.trim().replace(/^#/, '').toLowerCase()
     return lines.filter(l => (!design || l.design_file === design) && (!size || l.size === size)
-      && (!s || String(l.order_number).toLowerCase().includes(s)))
+      && (!s || String(l.order_number).toLowerCase().replace(/^#/, '').includes(s)))
   }, [lines, design, size, search])
 
   // Only what is on screen is ever sent: a line picked and then filtered away stays behind.
@@ -140,23 +227,48 @@ function ReadyView({ onSent, goProducts }) {
   const toggle = (k) => setPicked(p => { const n = new Set(p); n.has(k) ? n.delete(k) : n.add(k); return n })
   const toggleAll = () => setPicked(allPicked ? new Set() : new Set(shown.map(keyOf)))
 
-  const send = async (ext) => {
+  const HOW = {
+    copy: { confirm: 'Create batch and copy rows', after: 'The rows are copied — paste them into the Myxture portal.' },
+    xlsx: { confirm: 'Create batch and download', after: 'The Excel file downloads now — upload it to the Myxture portal.' },
+    csv: { confirm: 'Create batch and download', after: 'The CSV file downloads now — upload it to the Myxture portal.' },
+  }
+
+  const send = async (mode) => {
     if (!chosen.length) return
     if (!await toast.confirm({
-      title: `Send ${orders} order${orders === 1 ? '' : 's'} to Myxture?`,
-      message: `${chosen.length} lines, ${units} pieces go into a new batch and are marked as sent, so nobody can send them again. The ${ext === 'xlsx' ? 'Excel' : 'CSV'} file downloads now — upload it to the Myxture portal. If you end up not uploading it, void the batch to put the lines back.`,
-      confirmLabel: 'Create batch and download', cancelLabel: 'Cancel',
+      title: `Send ${plural(orders, 'order')} to Myxture?`,
+      message: `${plural(chosen.length, 'line')}, ${units} pieces go into a new batch and are marked as sent, so nobody can send them again. ${HOW[mode].after} If they never reach the portal, void the batch to put the lines back.`,
+      confirmLabel: HOW[mode].confirm, cancelLabel: 'Cancel',
     })) return
-    setBusy(ext)
+    setBusy(mode)
     const r = await apiFetch('/api/myxture/batches', { method: 'POST', body: JSON.stringify({ lines: chosen.map(l => ({ order_shopify_id: l.order_shopify_id, line_key: l.line_key })) }) })
     if (!r || r.error) { setBusy(''); toast.error(r?.error || 'Could not create the batch'); load(); return }
     const batch = { id: r.batch.id, ref: r.ref }
-    await download(batch, ext)
+    const skipped = r.skipped ? ` (${r.skipped} already sent by someone else, left out)` : ''
+    if (mode === 'copy') {
+      const full = await apiFetch(`/api/myxture/batches/${batch.id}`)
+      const ok = full && !full.error && await copyRows(full.sheet_rows)
+      if (ok) toast.success(`${r.ref} created and ${plural(r.lines, 'row')} copied — paste them into the portal${skipped}`)
+      else toast.error(`${r.ref} created, but the copy didn't go through — use Copy rows in the batch`)
+    } else {
+      await download(batch, mode)
+      toast.success(`${r.ref} created — ${plural(r.lines, 'line')}, ${r.units} pcs${skipped}`)
+    }
     setBusy('')
-    toast.success(`${r.ref} created — ${r.lines} lines, ${r.units} pcs${r.skipped ? ` (${r.skipped} already sent by someone else, left out)` : ''}`)
     setPicked(new Set())
     load()
     onSent(batch)
+  }
+
+  const removeManual = async (l) => {
+    if (!await toast.confirm({
+      title: `Remove ${l.order_number}?`,
+      message: `${l.title} (${l.variant}) × ${l.qty} comes off Ready to send. It hasn't gone to Myxture.`,
+      confirmLabel: 'Remove', cancelLabel: 'Keep it', danger: true,
+    })) return
+    const r = await apiFetch(`/api/myxture/manual/${l.manual_id}`, { method: 'DELETE' })
+    if (!r || r.error) { toast.error(r?.error || 'Could not remove it'); return }
+    toast.success('Removed'); load(); onChange()
   }
 
   if (mapped === 0) {
@@ -189,6 +301,9 @@ function ReadyView({ onSent, goProducts }) {
         </select>
         <DateRangeFilter startDate={from} endDate={to}
           onApply={(s, e) => { setFrom(s); setTo(e) }} onClear={() => { setFrom(''); setTo('') }} />
+        <button className="btn btn-secondary" onClick={() => setAdding(true)}>
+          <Icon name="plus" size={15} /> Add manual order
+        </button>
       </div>
 
       <div className="data-table-wrapper">
@@ -204,7 +319,7 @@ function ReadyView({ onSent, goProducts }) {
               <thead>
                 <tr>
                   <th style={{ width: 36 }}><input type="checkbox" checked={allPicked} onChange={toggleAll} aria-label="Select all" /></th>
-                  <th>Order</th><th>Date</th><th>Payment</th><th>Product</th><th>Size</th><th>Qty</th><th>Design file</th>
+                  <th>Order</th><th>Product</th><th>Size</th><th>Qty</th><th>Design file</th><th>Type</th><th>Date</th><th></th>
                 </tr>
               </thead>
               <tbody>
@@ -213,19 +328,28 @@ function ReadyView({ onSent, goProducts }) {
                   return (
                     <tr key={k} onClick={() => toggle(k)} style={{ cursor: 'pointer' }}>
                       <td onClick={e => e.stopPropagation()}><input type="checkbox" checked={picked.has(k)} onChange={() => toggle(k)} /></td>
-                      <td data-label="Order" style={{ fontWeight: 600, color: 'var(--primary-light)' }}>{l.order_number}</td>
-                      <td data-label="Date" style={{ color: 'var(--text-secondary)' }}>{fmtDate(l.order_date)}</td>
-                      <td data-label="Payment"><span className={`status-badge ${l.payment === 'Prepaid' ? 'fulfilled' : 'pending'}`}>{l.payment}</span></td>
-                      <td data-label="Product" className="cell-primary">
-                        <div style={{ fontWeight: 500 }}>{l.title}</div>
-                        <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{l.product_type}{l.fabric ? ` · ${l.fabric}` : ''}</div>
+                      <td data-label="Order" style={{ fontWeight: 600, color: 'var(--primary-light)' }}>
+                        {l.order_number}
+                        {l.note && <div style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 400 }}>{l.note}</div>}
+                      </td>
+                      <td data-label="Product">
+                        <ProductCell line={l} primary={l.title} secondary={l.variant} />
                       </td>
                       <td data-label="Size" style={{ fontWeight: 600 }}>{l.size || '—'}</td>
                       <td data-label="Qty">
                         {l.qty}
                         {l.already_sent > 0 && <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{l.already_sent} sent before</div>}
                       </td>
-                      <td data-label="Design file">{l.design_file}</td>
+                      <td data-label="Design file">{l.design_file || '—'}</td>
+                      <td data-label="Type"><span className={`status-badge ${PAY_CLASS[l.payment] || 'partial'}`}>{l.payment}</span></td>
+                      <td data-label="Date" style={{ color: 'var(--text-secondary)' }}>{fmtDate(l.order_date)}</td>
+                      <td onClick={e => e.stopPropagation()}>
+                        {l.manual && l.already_sent === 0 && (
+                          <button className="btn-icon" title="Remove this manual line" onClick={() => removeManual(l)}>
+                            <Icon name="trash" size={15} />
+                          </button>
+                        )}
+                      </td>
                     </tr>
                   )
                 })}
@@ -237,22 +361,142 @@ function ReadyView({ onSent, goProducts }) {
       {chosen.length > 0 && (
         <div className="bulk-bar">
           <div>
-            <strong>{orders} order{orders === 1 ? '' : 's'} · {chosen.length} lines · {units} pcs</strong>
-            <div className="bulk-hint">Downloading creates a batch and marks these as sent to Myxture.</div>
+            <strong>{plural(orders, 'order')} · {plural(chosen.length, 'line')} · {units} pcs</strong>
+            <div className="bulk-hint">Copying or downloading creates a batch and marks these as sent to Myxture.</div>
           </div>
           <div className="bulk-modes">
             <button className="btn btn-secondary btn-sm" onClick={() => setPicked(new Set())}>Clear</button>
             <button className="btn btn-secondary btn-sm" disabled={!!busy} onClick={() => send('csv')}>
-              {busy === 'csv' ? 'Creating…' : 'Download CSV'}
+              {busy === 'csv' ? 'Creating…' : 'CSV'}
             </button>
-            <button className="btn btn-primary btn-sm" disabled={!!busy} onClick={() => send('xlsx')}>
+            <button className="btn btn-secondary btn-sm" disabled={!!busy} onClick={() => send('xlsx')}>
               <Icon name="download" size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
-              {busy === 'xlsx' ? 'Creating…' : 'Download Excel'}
+              {busy === 'xlsx' ? 'Creating…' : 'Excel'}
+            </button>
+            <button className="btn btn-primary btn-sm" disabled={!!busy} onClick={() => send('copy')}>
+              <Icon name="copy" size={14} style={{ marginRight: 6, verticalAlign: '-2px' }} />
+              {busy === 'copy' ? 'Creating…' : 'Create batch & copy rows'}
             </button>
           </div>
         </div>
       )}
+
+      {adding && <ManualDrawer sources={sources} onClose={() => setAdding(false)}
+        onSaved={() => { setAdding(false); load(); onChange() }} />}
     </>
+  )
+}
+
+/** A jersey for an order that never came through the store — seeding, an offline sale. */
+function ManualDrawer({ sources, onClose, onSaved }) {
+  const apiFetch = useApi()
+  const toast = useToast()
+  const [catalogue, setCatalogue] = useState(null)
+  const [mapped, setMapped] = useState([])
+  const [f, setF] = useState({ order_ref: '', source: sources[0] || 'Marketing', product: '', variant: '', qty: 1, note: '' })
+  const [busy, setBusy] = useState(false)
+  const set = (patch) => setF(x => ({ ...x, ...patch }))
+
+  const load = async () => {
+    const [c, m] = await Promise.all([apiFetch('/api/myxture/catalogue'), apiFetch('/api/myxture/products')])
+    setCatalogue(c && !c.error ? c.products : [])
+    setMapped(m && !m.error ? m.products.filter(p => p.active) : [])
+  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { load() }, [])
+
+  // Only products Myxture makes; the catalogue supplies their variants and photos.
+  const products = useMemo(() => {
+    const byId = new Map((catalogue || []).map(p => [p.id, p]))
+    return mapped.map(m => byId.get(String(m.shopify_product_id))
+      || { id: String(m.shopify_product_id), title: m.title || m.shop_title, image: m.image, variants: [] })
+  }, [catalogue, mapped])
+  const product = products.find(p => p.id === f.product)
+  const variants = useMemo(() => [...(product?.variants || [])].sort((a, b) =>
+    String(a.color).localeCompare(String(b.color)) || sizeRank(a.size) - sizeRank(b.size)), [product])
+  const variant = variants.find(v => v.id === f.variant)
+
+  const save = async (e) => {
+    e.preventDefault()
+    if (!product) { toast.error('Pick the product'); return }
+    if (!variant) { toast.error('Pick the colour and size'); return }
+    setBusy(true)
+    const r = await apiFetch('/api/myxture/manual', {
+      method: 'POST',
+      body: JSON.stringify({ order_ref: f.order_ref, source: f.source, shopify_product_id: product.id, shopify_variant_id: variant.id,
+        title: product.title, variant: variant.title, qty: f.qty, note: f.note }),
+    })
+    setBusy(false)
+    if (!r || r.error) { toast.error(r?.error || 'Could not add it'); return }
+    toast.success(`${f.order_ref} added to Ready to send`); onSaved()
+  }
+
+  return (
+    <div className="drawer-overlay" onClick={onClose}>
+      <div className="drawer" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true">
+        <div className="drawer-header">
+          <h2 style={{ fontSize: 18 }}>Add manual order</h2>
+          <button type="button" className="btn-icon" onClick={onClose}><Icon name="close" size={16} /></button>
+        </div>
+        <form id="myxture-manual-form" className="drawer-body" onSubmit={save}>
+          <p style={{ fontSize: 13, color: 'var(--text-muted)', margin: 0 }}>
+            For jerseys that aren't a store order — influencer seeding, offline sales, replacements. It goes into the next batch like any other line.
+          </p>
+          <div className="form-row">
+            <div className="input-group">
+              <label>Reference</label>
+              <input className="input" value={f.order_ref} placeholder="e.g. MKT-24 or @creator" required
+                onChange={e => set({ order_ref: e.target.value })} />
+            </div>
+            <div className="input-group">
+              <label>For</label>
+              <select value={f.source} onChange={e => set({ source: e.target.value })}>
+                {sources.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </div>
+          </div>
+          <div className="input-group">
+            <label>Product</label>
+            {catalogue === null ? <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>Loading products…</div> : (
+              <SearchSelect value={f.product} placeholder="Search Myxture products…" emptyText="No Myxture product matches"
+                options={products.map(p => ({ value: p.id, label: p.title }))}
+                onChange={(v) => set({ product: v || '', variant: '' })} />
+            )}
+          </div>
+          {product && (
+            <div className="input-group">
+              <label>Colour / size</label>
+              {variants.length ? (
+                <SearchSelect value={f.variant} placeholder="Search e.g. beige xl…"
+                  options={variants.map(v => ({ value: v.id, label: v.title }))}
+                  onChange={(v) => set({ variant: v || '' })} />
+              ) : <div style={{ fontSize: 13, color: 'var(--warning)' }}>Couldn't load this product's variants from Shopify — try again in a minute.</div>}
+            </div>
+          )}
+          {(variant || product) && (
+            <div className="mx-product">
+              <Thumb src={variant?.image || product?.image} alt={product?.title} size={72} />
+              <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{product?.title}{variant ? ` — ${variant.title}` : ''}</div>
+            </div>
+          )}
+          <div className="form-row">
+            <div className="input-group">
+              <label>Quantity</label>
+              <input className="input" type="number" min="1" value={f.qty} required
+                onChange={e => set({ qty: Math.max(1, parseInt(e.target.value, 10) || 1) })} />
+            </div>
+            <div className="input-group">
+              <label>Note <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>(not sent to Myxture)</span></label>
+              <input className="input" value={f.note} placeholder="Who it's for" onChange={e => set({ note: e.target.value })} />
+            </div>
+          </div>
+        </form>
+        <div className="drawer-footer">
+          <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
+          <button type="submit" form="myxture-manual-form" className="btn btn-primary" disabled={busy}>{busy ? 'Adding…' : 'Add to Ready to send'}</button>
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -320,6 +564,9 @@ function BatchDrawer({ id, onClose, onChange }) {
   const [b, setB] = useState(null)
   const [edits, setEdits] = useState({})
   const [busy, setBusy] = useState(false)
+  const [copied, setCopied] = useState(false)
+  // Where the browser refuses the clipboard, the rows are shown selected for a Ctrl+C instead.
+  const [manualCopy, setManualCopy] = useState(null)
 
   const load = async () => {
     const r = await apiFetch(`/api/myxture/batches/${id}`)
@@ -332,6 +579,13 @@ function BatchDrawer({ id, onClose, onChange }) {
   const valOf = (l, k) => edits[l.id]?.[k] !== undefined ? edits[l.id][k] : l[k]
   const dirty = Object.keys(edits).length > 0
   const voided = !!b?.voided_at
+
+  const copy = async () => {
+    if (await copyRows(b.sheet_rows)) {
+      setCopied(true); setTimeout(() => setCopied(false), 2500)
+      toast.success(`${plural(b.sheet_rows.length, 'row')} copied — paste them into the Myxture portal`)
+    } else setManualCopy(toTsv(b.sheet_rows))
+  }
 
   const save = async (entries) => {
     setBusy(true)
@@ -357,7 +611,7 @@ function BatchDrawer({ id, onClose, onChange }) {
   const voidIt = async () => {
     if (!await toast.confirm({
       title: `Void ${b.ref}?`,
-      message: 'Only if this file was never uploaded to the Myxture portal. Its lines go back to Ready to send.',
+      message: 'Only if these rows never reached the Myxture portal. Its lines go back to Ready to send.',
       confirmLabel: 'Void batch', cancelLabel: 'Keep it', danger: true,
     })) return
     const r = await apiFetch(`/api/myxture/batches/${id}/void`, { method: 'POST' })
@@ -389,18 +643,24 @@ function BatchDrawer({ id, onClose, onChange }) {
           {!b ? <div className="loader"><div className="spinner"></div></div> : (
             <>
               {b.note && <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{b.note}</div>}
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', flexShrink: 0 }}>
+                <button className="btn btn-primary btn-sm" onClick={copy} disabled={voided}
+                  title="Copies the sheet rows, ready to paste into the Myxture portal">
+                  <Icon name={copied ? 'check' : 'copy'} size={14} /> {copied ? 'Copied' : `Copy ${plural(b.sheet_rows.length, 'row')}`}
+                </button>
                 <button className="btn btn-secondary btn-sm" onClick={() => download(b, 'xlsx')}><Icon name="download" size={14} /> Excel</button>
                 <button className="btn btn-secondary btn-sm" onClick={() => download(b, 'csv')}><Icon name="download" size={14} /> CSV</button>
                 {!voided && totals.open > 0 && (
-                  <button className="btn btn-primary btn-sm" disabled={busy || dirty} onClick={receiveAll}
+                  <button className="btn btn-secondary btn-sm" disabled={busy || dirty} onClick={receiveAll}
                     title={dirty ? 'Save your changes first' : ''}>
-                    Mark all {totals.open} remaining as received
+                    <Icon name="check" size={14} /> Mark all {totals.open} remaining as received
                   </button>
                 )}
               </div>
 
-              <div className="data-table-wrapper">
+              {/* flex-shrink: 0 — inside the drawer's flex column the table would otherwise be
+                  squeezed to the drawer's height and clipped, and nothing would scroll. */}
+              <div className="data-table-wrapper" style={{ flexShrink: 0, overflowX: 'auto' }}>
                 <table className="data-table">
                   <thead>
                     <tr><th>Order</th><th>Product</th><th>Size</th><th>Sent</th><th>Received</th><th>QC note</th><th></th></tr>
@@ -416,9 +676,8 @@ function BatchDrawer({ id, onClose, onChange }) {
                             {l.order_number}
                             {gone && <div style={{ fontSize: 11, color: 'var(--danger)' }}>cancelled</div>}
                           </td>
-                          <td data-label="Product" className="cell-primary">
-                            <div style={{ fontWeight: 500 }}>{l.design_file}</div>
-                            <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{l.title}{l.variant ? ` (${l.variant})` : ''}</div>
+                          <td data-label="Product">
+                            <ProductCell line={l} primary={l.design_file} secondary={`${l.title}${l.variant ? ` (${l.variant})` : ''}`} />
                           </td>
                           <td data-label="Size" style={{ fontWeight: 600 }}>{l.size}</td>
                           <td data-label="Sent">{l.qty}</td>
@@ -448,6 +707,23 @@ function BatchDrawer({ id, onClose, onChange }) {
             </>
           )}
         </div>
+
+        {manualCopy && (
+          <div className="confirm-overlay" onClick={() => setManualCopy(null)}>
+            <div className="confirm-card" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" style={{ maxWidth: 720, width: '92vw' }}>
+              <h3 style={{ marginBottom: 6 }}>Copy the rows</h3>
+              <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 10 }}>
+                The browser didn't allow copying by button. The rows are selected below — press Ctrl+C (⌘C on a Mac), then paste them into the portal.
+              </p>
+              <textarea readOnly value={manualCopy} rows={10} onFocus={e => e.target.select()}
+                ref={el => { if (el && document.activeElement !== el) { el.focus(); el.select() } }}
+                style={{ width: '100%', fontFamily: 'monospace', fontSize: 12, whiteSpace: 'pre', overflow: 'auto' }} />
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12 }}>
+                <button type="button" className="btn btn-secondary" onClick={() => setManualCopy(null)}>Done</button>
+              </div>
+            </div>
+          </div>
+        )}
 
         <div className="drawer-footer">
           {b && !voided && b.status === 'Sent' && (
@@ -497,7 +773,7 @@ function AttentionView({ onChange, onOpenBatch }) {
                 {rows.map(l => (
                   <tr key={l.id}>
                     <td data-label="Order" style={{ fontWeight: 600 }}>{l.order_number}</td>
-                    <td data-label="Product">{l.design_file}</td>
+                    <td data-label="Product"><ProductCell line={l} primary={l.design_file} secondary={l.variant} /></td>
                     <td data-label="Size">{l.size}</td>
                     <td data-label="Qty sent">{l.qty}</td>
                     <td data-label="Batch"><button className="mini-btn" onClick={() => onOpenBatch({ id: l.batch_id })}>{l.ref}</button></td>
@@ -532,7 +808,7 @@ function ProductsView({ onChange }) {
   return (
     <>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
-        <p style={{ color: 'var(--text-muted)', fontSize: 13, margin: 0 }}>
+        <p style={{ color: 'var(--text-muted)', fontSize: 13, margin: 0, flex: '1 1 320px' }}>
           The Shopify products Myxture makes, and what goes in their sheet for each. Only these products appear in Ready to send, and they are left out of the print pick list.
         </p>
         <button className="btn btn-primary" onClick={() => setEdit(blankProduct())}><Icon name="plus" size={15} /> Add product</button>
@@ -547,9 +823,8 @@ function ProductsView({ onChange }) {
               <tbody>
                 {rows.map(p => (
                   <tr key={p.shopify_product_id} onClick={() => setEdit({ ...p })} style={{ cursor: 'pointer', opacity: p.active ? 1 : 0.55 }}>
-                    <td data-label="Shopify product" className="cell-primary">
-                      <div style={{ fontWeight: 500 }}>{p.title || p.shop_title || p.shopify_product_id}</div>
-                      <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{p.shopify_product_id}</div>
+                    <td data-label="Shopify product">
+                      <ProductCell line={p} primary={p.title || p.shop_title || p.shopify_product_id} secondary={String(p.shopify_product_id)} />
                     </td>
                     <td data-label="Product type">{p.product_type}</td>
                     <td data-label="Variant 1">{p.fabric || '—'}</td>
@@ -561,29 +836,33 @@ function ProductsView({ onChange }) {
             </table>
           )}
       </div>
-      {edit && <ProductDrawer value={edit} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); load(); onChange() }} />}
+      {edit && <ProductDrawer value={edit} taken={(rows || []).map(r => String(r.shopify_product_id))}
+        onClose={() => setEdit(null)} onSaved={() => { setEdit(null); load(); onChange() }} />}
     </>
   )
 }
 
-function ProductDrawer({ value, onClose, onSaved }) {
+function ProductDrawer({ value, taken, onClose, onSaved }) {
   const apiFetch = useApi()
   const toast = useToast()
   const [f, setF] = useState(value)
-  const [q, setQ] = useState('')
-  const [options, setOptions] = useState([])
+  const [catalogue, setCatalogue] = useState(null)
   const [busy, setBusy] = useState(false)
   const set = (patch) => setF(x => ({ ...x, ...patch }))
 
-  useEffect(() => {
-    if (!f.isNew) return
-    const t = setTimeout(async () => {
-      const r = await apiFetch(`/api/myxture/shop-products?q=${encodeURIComponent(q)}`)
-      if (r && !r.error) setOptions(r.products)
-    }, 250)
-    return () => clearTimeout(t)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q, f.isNew])
+  const load = async () => {
+    const r = await apiFetch('/api/myxture/catalogue')
+    setCatalogue(r && !r.error ? r.products : [])
+  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { load() }, [])
+
+  const options = useMemo(() => (catalogue || [])
+    .filter(p => !taken.includes(p.id) || p.id === String(f.shopify_product_id))
+    .map(p => ({ value: p.id, label: p.title, hint: `${p.variants.length} variants` })), [catalogue, taken, f.shopify_product_id])
+  const product = (catalogue || []).find(p => p.id === String(f.shopify_product_id))
+  const colours = useMemo(() => [...new Set((product?.variants || []).map(v => v.color).filter(Boolean))], [product])
+  const preview = colours.map(c => f.design_file ? f.design_file.replace(/\{colou?r\}/gi, c) : '').filter(Boolean)
 
   const save = async (e) => {
     e.preventDefault()
@@ -591,11 +870,22 @@ function ProductDrawer({ value, onClose, onSaved }) {
     setBusy(true)
     const r = await apiFetch(`/api/myxture/products/${f.shopify_product_id}`, {
       method: 'PUT',
-      body: JSON.stringify({ title: f.title, product_type: f.product_type, fabric: f.fabric, design_file: f.design_file, active: f.active }),
+      body: JSON.stringify({ title: f.title || product?.title, product_type: f.product_type, fabric: f.fabric, design_file: f.design_file, active: f.active }),
     })
     setBusy(false)
     if (!r || r.error) { toast.error(r?.error || 'Could not save'); return }
     toast.success('Saved'); onSaved()
+  }
+
+  const remove = async () => {
+    if (!await toast.confirm({
+      title: `Delete ${f.title || 'this product'}?`,
+      message: 'Its new orders stop showing in Ready to send, and it goes back on the print pick list. Batches already sent keep their rows. To stop it only for a while, untick Active instead.',
+      confirmLabel: 'Delete', cancelLabel: 'Keep it', danger: true,
+    })) return
+    const r = await apiFetch(`/api/myxture/products/${f.shopify_product_id}`, { method: 'DELETE' })
+    if (!r || r.error) { toast.error(r?.error || 'Could not delete it'); return }
+    toast.success('Deleted'); onSaved()
   }
 
   return (
@@ -606,21 +896,29 @@ function ProductDrawer({ value, onClose, onSaved }) {
           <button type="button" className="btn-icon" onClick={onClose}><Icon name="close" size={16} /></button>
         </div>
         <form id="myxture-product-form" className="drawer-body" onSubmit={save}>
-          {f.isNew ? (
-            <div className="input-group">
-              <label>Shopify product</label>
-              <input className="input" placeholder="Search products…" value={q} onChange={e => setQ(e.target.value)} />
-              <select size={6} value={f.shopify_product_id} style={{ marginTop: 8, width: '100%' }}
-                onChange={e => { const p = options.find(o => String(o.shopify_id) === e.target.value); set({ shopify_product_id: e.target.value, title: p?.title || '' }) }}>
-                {options.map(o => <option key={o.shopify_id} value={o.shopify_id}>{o.title}</option>)}
-              </select>
-            </div>
-          ) : (
-            <div className="input-group">
-              <label>Shopify product</label>
+          <div className="input-group">
+            <label>Shopify product</label>
+            {f.isNew ? (
+              catalogue === null ? <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>Loading products…</div> : (
+                <SearchSelect value={f.shopify_product_id} placeholder="Search products…" autoFocus
+                  emptyText="No product matches — or it's already a Myxture product"
+                  options={options}
+                  onChange={(v, o) => set({ shopify_product_id: v || '', title: o?.label || '' })} />
+              )
+            ) : (
               <input className="input" value={`${f.title || f.shop_title || ''} (${f.shopify_product_id})`} disabled />
+            )}
+          </div>
+
+          {(product || f.image) && (
+            <div className="mx-product">
+              <Thumb src={product?.image || f.image} alt={f.title} size={72} />
+              <div style={{ fontSize: 12.5, color: 'var(--text-muted)' }}>
+                {product ? <>{plural(product.variants.length, 'variant')}{colours.length ? ` · ${colours.join(', ')}` : ''}</> : null}
+              </div>
             </div>
           )}
+
           <div className="form-row">
             <div className="input-group">
               <label>Product type</label>
@@ -635,8 +933,11 @@ function ProductDrawer({ value, onClose, onSaved }) {
             <label>Design file</label>
             <input className="input" value={f.design_file} placeholder="GTA-6-{color}" onChange={e => set({ design_file: e.target.value })} required />
             <small style={{ color: 'var(--text-muted)', fontSize: 12 }}>
-              Exactly as it is named on the Myxture portal. Write {'{color}'} where the variant's colour goes, for a product sold in more than one colour — GTA-6-{'{color}'} becomes GTA-6-Beige or GTA-6-Black.
+              Exactly as it is named on the Myxture portal. Write {'{color}'} where the variant's colour goes — GTA-6-{'{color}'} becomes GTA-6-Beige or GTA-6-Black.
             </small>
+            {preview.length > 0 && /\{colou?r\}/i.test(f.design_file) && (
+              <small style={{ fontSize: 12, color: 'var(--text-secondary)' }}>In the sheet: {preview.join(', ')}</small>
+            )}
           </div>
           <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13.5 }}>
             <input type="checkbox" checked={f.active !== false} onChange={e => set({ active: e.target.checked })} />
@@ -644,6 +945,9 @@ function ProductDrawer({ value, onClose, onSaved }) {
           </label>
         </form>
         <div className="drawer-footer">
+          {!f.isNew && (
+            <button type="button" className="btn btn-secondary" style={{ flex: '0 0 auto', color: 'var(--danger)' }} onClick={remove}>Delete</button>
+          )}
           <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
           <button type="submit" form="myxture-product-form" className="btn btn-primary" disabled={busy}>{busy ? 'Saving…' : 'Save'}</button>
         </div>

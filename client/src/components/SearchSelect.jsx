@@ -22,7 +22,7 @@ export default function SearchSelect({
 
   const selected = options.find(o => String(o.value) === String(value)) || null
 
-  const matches = useMemo(() => {
+  const { matches, hidden } = useMemo(() => {
     const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
     const hit = (o) => {
       if (!words.length) return true
@@ -31,7 +31,9 @@ export default function SearchSelect({
     }
     // Capped: a thousand rendered rows is slower than it is useful, and nobody scrolls past
     // fifty — they type another word instead.
-    return options.filter(hit).slice(0, 50)
+    const all = options.filter(hit)
+    // How many matched but were cut off — not how many didn't match at all.
+    return { matches: all.slice(0, 50), hidden: Math.max(0, all.length - 50) }
   }, [options, query])
 
   // The highlight resets wherever the query is set, rather than in an effect watching it — same
@@ -92,8 +94,8 @@ export default function SearchSelect({
               {o.hint && <span className="ss-option-hint">{o.hint}</span>}
             </button>
           ))}
-          {options.length > matches.length && (
-            <div className="ss-empty">{options.length - matches.length} more — keep typing to narrow it down</div>
+          {hidden > 0 && (
+            <div className="ss-empty">{hidden} more — keep typing to narrow it down</div>
           )}
         </div>
       )}

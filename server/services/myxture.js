@@ -28,13 +28,14 @@ const SHEET_NAME = 'Bulk order';
 // Deliveries normally take two or three days; past this a batch is worth chasing.
 const OVERDUE_DAYS = 3;
 
-const SIZE_ORDER = ['XXS', 'XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL'];
+const SIZE_ORDER = ['XXS', 'XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL', '6XL', '7XL', '8XL'];
 const SIZE_ALIASES = { XXL: '2XL', XXXL: '3XL', XXXXL: '4XL' };
 const normSize = (s) => {
     const u = String(s || '').trim().toUpperCase().replace(/\s+/g, '');
     return SIZE_ALIASES[u] || u;
 };
-const isSize = (s) => SIZE_ORDER.includes(normSize(s));
+// Any NXL counts, so a new extended size (Shopify already sells 6XL) never lands in the sheet blank.
+const isSize = (s) => SIZE_ORDER.includes(normSize(s)) || /^[2-9]XL$/.test(normSize(s));
 
 const batchRef = (no) => `MYX-${String(no).padStart(4, '0')}`;
 const plainOrderNo = (n) => String(n || '').replace(/^#/, '');
@@ -97,6 +98,11 @@ async function sentIndex(client = db, orderIds = null) {
  * fulfilled, cancelled, refunded, voided or on hold — and both COD and prepaid count.
  */
 async function readyLines({ client = db, from, to } = {}) {
+    const [shop, manual] = await Promise.all([shopReadyLines({ client, from, to }), manualReadyLines({ client, from, to })]);
+    return [...manual, ...shop];
+}
+
+async function shopReadyLines({ client = db, from, to } = {}) {
     const maps = await mappings();
     if (!maps.length) return [];
     const byProduct = new Map(maps.map(m => [String(m.shopify_product_id), m]));
@@ -151,6 +157,118 @@ async function readyLines({ client = db, from, to } = {}) {
         }
     }
     return out;
+}
+
+/* --------------------------------------- manual lines --------------------------------------- */
+
+// Orders that never came through the Shopify store — influencer seeding, offline sales — added by
+// hand. They go through the same batches, keyed `manual:<id>`, so they can't be sent twice either.
+const MANUAL_SOURCES = ['Marketing', 'Offline', 'Replacement', 'Other'];
+const manualKey = (id) => `manual:${id}`;
+
+async function manualReadyLines({ client = db, from, to } = {}) {
+    const where = ['m.deleted_at IS NULL'];
+    const vals = [];
+    if (from) { vals.push(from); where.push(`m.created_at::date >= $${vals.length}`); }
+    if (to) { vals.push(to); where.push(`m.created_at::date <= $${vals.length}`); }
+    const rows = (await client.query(
+        `SELECT m.*, p.product_type, p.fabric, p.design_file
+           FROM myxture_manual_lines m
+           JOIN myxture_products p ON p.shopify_product_id = m.shopify_product_id AND p.active = true
+          WHERE ${where.join(' AND ')} ORDER BY m.created_at DESC`, vals)).rows;
+    if (!rows.length) return [];
+    const sent = await sentIndex(client, rows.map(r => manualKey(r.id)));
+    const out = [];
+    for (const r of rows) {
+        const already = sent.get(`${manualKey(r.id)}|manual`) || 0;
+        const qty = r.qty - already;
+        if (qty <= 0) continue;
+        const { color, size } = splitVariant(r.variant);
+        out.push({
+            order_shopify_id: manualKey(r.id),
+            order_number: r.order_ref,
+            order_date: r.created_at,
+            payment: r.source || 'Manual',
+            manual: true, manual_id: r.id, note: r.note, created_by: r.created_by,
+            line_key: 'manual',
+            shopify_product_id: r.shopify_product_id, shopify_variant_id: r.shopify_variant_id,
+            title: r.title, variant: r.variant,
+            color, size, qty, ordered: r.qty, already_sent: already,
+            product_type: r.product_type || '',
+            fabric: r.fabric || '',
+            design_file: r.design_file ? designFileFor(r, color) : '',
+        });
+    }
+    return out;
+}
+
+async function addManualLine(body, user) {
+    const ref = String(body.order_ref || '').trim();
+    const qty = parseInt(body.qty, 10) || 0;
+    const pid = String(body.shopify_product_id || '').replace(/\D/g, '');
+    if (!ref) throw Object.assign(new Error('Give it a reference, e.g. the influencer or the offline sale number'), { status: 400 });
+    if (!pid) throw Object.assign(new Error('Pick the product'), { status: 400 });
+    if (qty <= 0) throw Object.assign(new Error('Quantity must be at least 1'), { status: 400 });
+    const m = (await db.query('SELECT 1 FROM myxture_products WHERE shopify_product_id = $1', [pid])).rows[0];
+    if (!m) throw Object.assign(new Error('That product is not set up as a Myxture product'), { status: 400 });
+    const { size } = splitVariant(body.variant);
+    if (!size) throw Object.assign(new Error('Pick the size'), { status: 400 });
+    const source = MANUAL_SOURCES.includes(body.source) ? body.source : 'Other';
+    const r = await db.query(
+        `INSERT INTO myxture_manual_lines (order_ref, source, shopify_product_id, shopify_variant_id, title, variant, qty, note, created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+        [ref, source, pid, String(body.shopify_variant_id || '').replace(/\D/g, '') || null,
+            body.title || null, String(body.variant || '').trim(), qty, String(body.note || '').trim() || null, user]);
+    return r.rows[0];
+}
+
+/** Only while nothing of it has gone — after that it lives in a batch and is voided there. */
+async function deleteManualLine(id, user) {
+    const sent = await sentIndex(db, [manualKey(id)]);
+    if (sent.get(`${manualKey(id)}|manual`)) {
+        throw Object.assign(new Error('Already sent to Myxture — void its batch instead'), { status: 400 });
+    }
+    await db.query('UPDATE myxture_manual_lines SET deleted_at = NOW(), deleted_by = $2 WHERE id = $1', [id, user]);
+}
+
+/* ------------------------------------------ images ------------------------------------------ */
+
+/**
+ * Product photos, from the Shopify catalogue the rest of the CRM already caches for five minutes.
+ * The variant's own photo where it has one (the colour being made), else the product's. Never
+ * fatal: without Shopify the products still list, just without pictures.
+ */
+async function catalogue() {
+    try {
+        const products = await require('./shopify').fetchProducts();
+        return products.map(p => ({
+            id: String(p.id), title: p.title, image: p.image,
+            variants: p.variants.map(v => ({ id: String(v.id), title: v.title, image: v.image, ...splitVariant(v.title) })),
+        }));
+    } catch {
+        const rows = await inv.catalogue();
+        return rows.map(p => ({
+            id: String(p.shopify_id), title: p.title, image: null,
+            variants: p.variants.map(v => ({ id: String(v.variant_id), title: v.variant, image: null, ...splitVariant(v.variant) })),
+        }));
+    }
+}
+
+async function imageIndex() {
+    const byVariant = new Map();
+    const byProduct = new Map();
+    try {
+        for (const p of await catalogue()) {
+            if (p.image) byProduct.set(p.id, p.image);
+            for (const v of p.variants) if (v.image) byVariant.set(v.id, v.image);
+        }
+    } catch { /* no pictures */ }
+    return (pid, vid) => byVariant.get(String(vid || '')) || byProduct.get(String(pid || '')) || null;
+}
+
+async function withImages(rows) {
+    const img = await imageIndex();
+    return rows.map(r => ({ ...r, image: img(r.shopify_product_id, r.shopify_variant_id) }));
 }
 
 /**
@@ -217,7 +335,7 @@ async function getBatch(id) {
            FROM myxture_batch_lines l LEFT JOIN orders o ON o.shopify_id = l.order_shopify_id
           WHERE l.batch_id = $1`, [id])).rows;
     lines.sort(fileOrder);
-    return { ...b, ref: batchRef(b.batch_no), lines };
+    return { ...b, ref: batchRef(b.batch_no), lines: await withImages(lines), sheet_rows: fileRows(lines) };
 }
 
 // Newest order first, as the portal sheet was filled in; within an order, the order's own line order.
@@ -368,4 +486,5 @@ module.exports = {
     COLUMNS, SHIPPING, SHEET_NAME, batchRef, plainOrderNo, splitVariant, designFileFor, lineKeyOf, normSize,
     mappings, productIds, readyLines, createBatch, insertLine, listBatches, getBatch, batchXlsx, batchCsv, fileName,
     voidBatch, receiveLines, attentionLines, clearAttention, stats, fileOrder,
+    MANUAL_SOURCES, addManualLine, deleteManualLine, catalogue, withImages,
 };

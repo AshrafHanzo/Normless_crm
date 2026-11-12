@@ -2167,6 +2167,25 @@ async function ensureMyxtureSchema() {
             );
             CREATE INDEX IF NOT EXISTS myxture_lines_batch_idx ON myxture_batch_lines (batch_id);
             CREATE INDEX IF NOT EXISTS myxture_lines_order_idx ON myxture_batch_lines (order_shopify_id, line_key);
+
+            -- Jerseys for orders that never came through the store — influencer seeding, offline
+            -- sales — added by hand to Ready to send. Sent through batches like any other line.
+            CREATE TABLE IF NOT EXISTS myxture_manual_lines (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                -- What goes in the sheet's Order number column: the influencer, the sale number.
+                order_ref TEXT NOT NULL,
+                source TEXT,
+                shopify_product_id BIGINT NOT NULL,
+                shopify_variant_id BIGINT,
+                title TEXT,
+                variant TEXT,
+                qty INTEGER NOT NULL,
+                note TEXT,
+                created_by TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                deleted_at TIMESTAMP,
+                deleted_by TEXT
+            );
         `);
     } catch (err) {
         console.error('ensureMyxtureSchema error:', err.message);

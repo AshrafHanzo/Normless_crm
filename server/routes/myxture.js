@@ -36,9 +36,26 @@ router.get('/ready', async (req, res) => {
     try {
         const from = DATE_RE.test(req.query.from || '') ? req.query.from : null;
         const to = DATE_RE.test(req.query.to || '') ? req.query.to : null;
-        const lines = await mx.readyLines({ from, to });
-        res.json({ lines, mapped: (await mx.mappings()).length });
+        const lines = await mx.withImages(await mx.readyLines({ from, to }));
+        res.json({ lines, mapped: (await mx.mappings()).length, sources: mx.MANUAL_SOURCES });
     } catch (err) { fail(res, err, 'load the orders ready for Myxture'); }
+});
+
+// POST /api/myxture/manual — a line for an order that didn't come through the store.
+router.post('/manual', async (req, res) => {
+    try { res.json(await mx.addManualLine(req.body || {}, who(req))); }
+    catch (err) { fail(res, err, 'add the line'); }
+});
+
+router.delete('/manual/:id', async (req, res) => {
+    try { await mx.deleteManualLine(parseInt(req.params.id, 10), who(req)); res.json({ ok: true }); }
+    catch (err) { fail(res, err, 'remove the line'); }
+});
+
+// The store's products with their variants and photos — for the product and variant pickers.
+router.get('/catalogue', async (req, res) => {
+    try { res.json({ products: await mx.catalogue() }); }
+    catch (err) { fail(res, err, 'load the product catalogue'); }
 });
 
 // POST /api/myxture/batches { lines: [{ order_shopify_id, line_key }], note }
@@ -97,7 +114,7 @@ router.post('/batches/:id/receive', async (req, res) => {
 });
 
 router.get('/attention', async (req, res) => {
-    try { res.json({ lines: await mx.attentionLines() }); } catch (err) { fail(res, err, 'load the changed orders'); }
+    try { res.json({ lines: await mx.withImages(await mx.attentionLines()) }); } catch (err) { fail(res, err, 'load the changed orders'); }
 });
 
 router.post('/attention/:lineId/clear', async (req, res) => {
@@ -108,19 +125,8 @@ router.post('/attention/:lineId/clear', async (req, res) => {
 /* ---------------------------------- product mapping ---------------------------------- */
 
 router.get('/products', async (req, res) => {
-    try { res.json({ products: await mx.mappings({ activeOnly: false }) }); }
+    try { res.json({ products: await mx.withImages(await mx.mappings({ activeOnly: false })) }); }
     catch (err) { fail(res, err, 'load the Myxture products'); }
-});
-
-// Shopify products to choose from when adding one.
-router.get('/shop-products', async (req, res) => {
-    try {
-        const q = String(req.query.q || '').trim();
-        const r = await db.query(
-            `SELECT shopify_id, title, product_type FROM shopify_products
-              ${q ? 'WHERE title ILIKE $1' : ''} ORDER BY title LIMIT 50`, q ? [`%${q}%`] : []);
-        res.json({ products: r.rows });
-    } catch (err) { fail(res, err, 'load the Shopify products'); }
 });
 
 router.put('/products/:productId', async (req, res) => {
@@ -140,6 +146,18 @@ router.put('/products/:productId', async (req, res) => {
                 String(design_file).trim(), active !== false, who(req)]);
         res.json({ ok: true });
     } catch (err) { fail(res, err, 'save the product'); }
+});
+
+// Stops new orders for it reaching the tab. Batches already sent keep their own copy of the
+// product's details, so their files don't change.
+router.delete('/products/:productId', async (req, res) => {
+    try {
+        const id = String(req.params.productId).replace(/\D/g, '');
+        const open = (await db.query(
+            'SELECT COUNT(*)::int AS n FROM myxture_manual_lines WHERE shopify_product_id = $1 AND deleted_at IS NULL', [id])).rows[0].n;
+        await db.query('DELETE FROM myxture_products WHERE shopify_product_id = $1', [id]);
+        res.json({ ok: true, manual_lines: open });
+    } catch (err) { fail(res, err, 'delete the product'); }
 });
 
 module.exports = router;
