@@ -1,8 +1,10 @@
 /**
- * The Crewfit office, sent into a chat: its pin on the map, and a request for a Google review.
+ * The Crewfit office, sent into a chat: its address with a directions button, and a request for a
+ * Google review.
  *
- * The pin is WhatsApp's own location message, so the customer taps it and their maps app opens
- * with directions. The review request is a message with one "Write a review" button that opens
+ * The address goes with one "Get directions" button that opens Google Maps routed to the office.
+ * Not WhatsApp's own location pin: its coordinates dropped the customer at the wrong spot, and the
+ * team's link routes to the office itself. The review request is a message with one "Write a review" button that opens
  * Google's review box for the office. Its link and wording are in Settings › Order messages; the
  * defaults below are what goes until somebody changes them.
  *
@@ -13,14 +15,14 @@
 const db = require('../db/connection');
 const wa = require('./whatsapp');
 
-// From the office's Google Maps listing ("Crewfit office").
+// Directions to the office as the team gave them: Google Maps routed to its listing.
 const OFFICE = {
     name: 'Crewfit office',
     address: 'Plot no 2, 2nd Floor, Dhanalakshmi Nagar, Moulivakkam, Iyyappanthangal, Chennai, Tamil Nadu 600125',
-    latitude: 13.0166349,
-    longitude: 80.1565994,
+    directions: 'https://www.google.com/maps?um=1&ie=UTF-8&fb=1&gl=in&sa=X&geocode=KQHrpfCJYVI6MSzD0FzDI3vw'
+        + '&daddr=Plot+no+2,+Dhanalakshmi+Nagar,+Moulivakkam,+Iyyappanthangal,+Mowlivakkam,+Tamil+Nadu+600125',
 };
-const mapsLink = () => `https://www.google.com/maps/search/?api=1&query=${OFFICE.latitude},${OFFICE.longitude}`;
+const DIRECTIONS_BUTTON = '📍 Get directions';
 
 // The "Ask for reviews" link from the office's Google Business Profile: opens the review box on
 // any phone, in the Maps app where it is installed. Settings can point it somewhere else.
@@ -57,13 +59,13 @@ async function record(conversation, { wamid, type, body, senderType, user, paylo
     return row;
 }
 
-/** The office's pin. Returns the message row. */
+/** The office's address with its directions button. Returns the message row. */
 async function sendLocation(conversation, { senderType = 'user', user = null } = {}) {
-    const wamid = await wa.sendLocation(conversation.phone, OFFICE);
+    const text = `📍 *${OFFICE.name}*\n${OFFICE.address}\n\nTap below for directions.`;
+    const wamid = await wa.sendCtaUrl(conversation.phone, text, { label: DIRECTIONS_BUTTON, url: OFFICE.directions });
     return record(conversation, {
-        wamid, type: 'location', senderType, user,
-        body: `📍 ${OFFICE.name}\n${OFFICE.address}\n${mapsLink()}`,
-        payload: { kind: 'location', latitude: OFFICE.latitude, longitude: OFFICE.longitude, name: OFFICE.name, address: OFFICE.address },
+        wamid, type: 'interactive', senderType, user, body: text,
+        payload: { kind: 'cta_url', label: DIRECTIONS_BUTTON, url: OFFICE.directions },
     });
 }
 

@@ -858,10 +858,10 @@ function ReviewCard() {
       </section>
       <section className="was-card" style={{ flex: '1 1 300px', maxWidth: 380 }}>
         <h3>Office location</h3>
-        <p className="was-hint" style={{ margin: 0 }}>Sent from a chat’s Location button as a pin the customer taps for directions.</p>
+        <p className="was-hint" style={{ margin: 0 }}>Sent from a chat’s Location button: the address, with a “Get directions” button that opens Google Maps.</p>
         <p style={{ margin: 0 }}><b>{data.office.name}</b><br />{data.office.address}</p>
         <a className="mini-btn" style={{ alignSelf: 'flex-start' }} target="_blank" rel="noreferrer"
-          href={`https://www.google.com/maps/search/?api=1&query=${data.office.latitude},${data.office.longitude}`}>Open in Google Maps</a>
+          href={data.office.directions}>Open the directions</a>
       </section>
     </div>
   )

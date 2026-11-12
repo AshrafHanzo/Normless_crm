@@ -2014,7 +2014,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                         </button>
                       )}
                       {cf && (
-                        <button type="button" className="wa-tool" onClick={() => sendOffice('location')} title="Send the Crewfit office as a pin they can tap for directions">
+                        <button type="button" className="wa-tool" onClick={() => sendOffice('location')} title="Send the Crewfit office address with a Get directions button">
                           <Icon name="pin" size={14} /> Location
                         </button>
                       )}
