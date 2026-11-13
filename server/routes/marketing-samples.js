@@ -34,6 +34,9 @@ const canApprove = (req) => hasPermission(req, 'can_approve_marketing');
 // the barter for the shoot. Both spend the blank; only one leaves anything behind.
 const STATUSES = ['Pending Approval', 'Approved', 'In Production', 'With Marketing', 'Returned', 'Given as barter', 'Cancelled'];
 const BARTER = 'Given as barter';
+// Finished one way or another. Its details can still be corrected, but not its garments: the stock
+// for them has already been settled — credited back, put on the shelf, or written off.
+const FINISHED = ['Returned', BARTER, 'Cancelled'];
 const AWAITING = 'Pending Approval';
 
 const trim = (v) => { const t = String(v ?? '').trim(); return t || null; };
@@ -174,7 +177,8 @@ router.put('/:id', async (req, res) => {
     const b = req.body || {};
     const current = (await db.query('SELECT * FROM marketing_samples WHERE id = $1', [req.params.id])).rows[0];
     if (!current) return res.status(404).json({ error: 'Request not found' });
-    const items = b.items ? cleanItems(b.items) : safeJson(current.items, []);
+    const finished = FINISHED.includes(current.status);
+    const items = b.items && !finished ? cleanItems(b.items) : safeJson(current.items, []);
     if (!items.length) return res.status(400).json({ error: 'Add at least one product with a quantity' });
 
     const r = await db.query(
@@ -183,7 +187,7 @@ router.put('/:id', async (req, res) => {
       [trim(b.purpose) || current.purpose, b.shoot_date || null, trim(b.requested_for),
         JSON.stringify(items), totalQty(items), trim(b.notes), req.params.id]);
     // Editing the items of a request already in production moves stock by the difference.
-    const stock = await applyStock(r.rows[0]);
+    const stock = finished ? null : await applyStock(r.rows[0]);
     res.json({ ...hydrate(r.rows[0]), inventory: stock });
   } catch (err) {
     console.error('sample update error:', err);

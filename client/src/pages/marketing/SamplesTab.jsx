@@ -277,7 +277,9 @@ export default function SamplesTab({ onChanged }) {
                 const shelf = onShelf[x.id] || []
                 const next = nextStage(x.status)
                 return (
-                  <tr key={x.id}>
+                  // The row opens the request for editing; its buttons keep their own clicks.
+                  <tr key={x.id} style={{ cursor: 'pointer' }}
+                    onClick={(e) => { if (!e.target.closest('button')) openForm(x) }}>
                     <td className="cell-primary">
                       <span className="badge-primary">{x.ref}</span>
                       {x.from_rto && <span className="rto-pill">from the shelf</span>}
@@ -323,10 +325,7 @@ export default function SamplesTab({ onChanged }) {
                         {['In Production', 'With Marketing'].includes(x.status) && (
                           <button className="mini-btn" onClick={() => move(x, BARTER)}>Given as barter</button>
                         )}
-                        {/* A finished request is a record of what happened; only open ones change. */}
-                        {!TERMINAL.includes(x.status) && (
-                          <button className="mini-btn" onClick={() => openForm(x)}>Edit</button>
-                        )}
+                        <button className="mini-btn" onClick={() => openForm(x)}>Edit</button>
                         {!TERMINAL.includes(x.status) && (
                           <button className="mini-btn" onClick={() => move(x, 'Cancelled')}>Cancel</button>
                         )}
@@ -378,6 +377,20 @@ export default function SamplesTab({ onChanged }) {
                 <div className="form-section">Garments
                   <span className="unit-hint">Checked against the RTO shelf before anything is printed</span>
                 </div>
+                {/* A finished request's garments are settled — returned to the shelf, kept, or never
+                    made — so they show as they were, and only the details above can change. */}
+                {form.id && TERMINAL.includes(form.status) ? (
+                  <div style={{ fontSize: 13 }}>
+                    {form.items.map((it, i) => (
+                      <div key={i} style={{ padding: '4px 0' }}>
+                        {it.product} <span style={{ color: 'var(--text-muted)' }}>{it.variant} × {it.qty}</span>
+                      </div>
+                    ))}
+                    <p className="img-upload-hint" style={{ marginTop: 6 }}>
+                      {form.status} — the garments can't change any more, because their stock is already settled.
+                    </p>
+                  </div>
+                ) : <>
                 {form.items.map((it, i) => {
                   const p = product(it.shopify_product_id)
                   return (
@@ -415,6 +428,7 @@ export default function SamplesTab({ onChanged }) {
                 })}
                 <button type="button" className="mini-btn form-item-add"
                   onClick={() => setF({ items: [...form.items, blankItem()] })}>+ Another product</button>
+                </>}
 
                 <div className="form-section">Anything else</div>
                 <div className="input-group">
@@ -424,6 +438,7 @@ export default function SamplesTab({ onChanged }) {
                 <p className="img-upload-hint">
                   {!form.id
                     ? 'It goes to an admin for approval. Nothing is printed and no blank moves until production starts.'
+                    : TERMINAL.includes(form.status) ? 'Changes here are to the record only.'
                     : ['In Production', 'With Marketing'].includes(form.status)
                       ? 'Already in production: changing the garments moves blank stock by the difference.'
                       : 'Nothing has been printed yet, so changing the garments moves no stock.'}

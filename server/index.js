@@ -2228,6 +2228,9 @@ async function ensureMyxtureSchema() {
             ALTER TABLE myxture_batch_lines ADD COLUMN IF NOT EXISTS edited_by TEXT;
             ALTER TABLE myxture_batch_lines ADD COLUMN IF NOT EXISTS edited_at TIMESTAMP;
         `);
+        // Myxture products never touch our blank stock, so any "unmapped" warnings the inventory
+        // raised for them before they were set up as Myxture products are noise.
+        await require('./services/myxture').clearInventoryNoise();
     } catch (err) {
         console.error('ensureMyxtureSchema error:', err.message);
     }

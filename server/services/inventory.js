@@ -136,7 +136,16 @@ async function refreshProductCache() {
 /** shopify_id → cached product row. */
 async function productIndex() {
     const r = await db.query('SELECT shopify_id, title, product_type, sku_prefix, blank_type FROM shopify_products');
-    return new Map(r.rows.map(p => [String(p.shopify_id), p]));
+    const index = new Map(r.rows.map(p => [String(p.shopify_id), p]));
+    // Print-on-demand products (Myxture) arrive finished from the vendor: no blank is ever taken
+    // off our shelf for them, so they're neither deducted nor reported as unmapped.
+    try {
+        const m = await db.query('SELECT shopify_product_id FROM myxture_products');
+        index.outsourced = new Set(m.rows.map(x => String(x.shopify_product_id)));
+    } catch {
+        index.outsourced = new Set();
+    }
+    return index;
 }
 
 function safeItems(order) {
@@ -156,6 +165,7 @@ function deductionsFor(order, index) {
     for (const it of safeItems(order)) {
         const qty = parseInt(it.quantity, 10) || 0;
         if (qty <= 0) continue;
+        if (index.outsourced?.has(String(it.shopify_product_id))) continue;
         const ref = `${order.shopify_id}:${it.shopify_variant_id || it.title}`;
         const product = index.get(String(it.shopify_product_id));
         const key = stockKeyFor(product, it.variant);

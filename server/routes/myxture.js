@@ -181,6 +181,8 @@ router.put('/products/:productId', async (req, res) => {
                 updated_by = excluded.updated_by, updated_at = NOW()`,
             [id, title || null, String(product_type).trim(), String(fabric || '').trim() || null,
                 String(design_file).trim(), active !== false, who(req)]);
+        // Now it's print-on-demand, its old inventory warnings go too.
+        await mx.clearInventoryNoise();
         res.json({ ok: true });
     } catch (err) { fail(res, err, 'save the product'); }
 });

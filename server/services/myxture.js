@@ -658,7 +658,25 @@ async function stats() {
     };
 }
 
+/**
+ * Drop inventory "unmapped" warnings for Myxture products — they're print-on-demand, there's no
+ * blank on our shelf to map them to. The warning rows carry the product title, not its id.
+ */
+async function clearInventoryNoise() {
+    try {
+        const r = await db.query(
+            `DELETE FROM inventory_unmapped u USING myxture_products m
+              WHERE m.title IS NOT NULL AND u.product_title = m.title`);
+        if (r.rowCount) console.log(`Myxture: cleared ${r.rowCount} inventory warnings for print-on-demand products`);
+        return r.rowCount;
+    } catch (err) {
+        console.error('myxture clearInventoryNoise:', err.message);
+        return 0;
+    }
+}
+
 module.exports = {
+    clearInventoryNoise,
     COLUMNS, SHIPPING, SHEET_NAME, batchRef, plainOrderNo, splitVariant, designFileFor, lineKeyOf, normSize,
     mappings, productIds, readyLines, createBatch, insertLine, listBatches, getBatch, batchXlsx, batchCsv, fileName,
     voidBatch, receiveLines, attentionLines, clearAttention, stats, fileOrder,
