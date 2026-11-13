@@ -52,6 +52,43 @@ router.delete('/manual/:id', async (req, res) => {
     catch (err) { fail(res, err, 'remove the line'); }
 });
 
+router.put('/manual/:id', async (req, res) => {
+    try { await mx.editManualLine(parseInt(req.params.id, 10), req.body || {}, who(req)); res.json({ ok: true }); }
+    catch (err) { fail(res, err, 'save the line'); }
+});
+
+// PUT /api/myxture/ready/edit { order_shopify_id, line_key, shopify_product_id, shopify_variant_id, variant, qty, note }
+router.put('/ready/edit', async (req, res) => {
+    try { await mx.editReadyLine(req.body || {}, who(req)); res.json({ ok: true }); }
+    catch (err) { fail(res, err, 'save the change'); }
+});
+
+// Undo a change made here; the line follows Shopify again.
+router.post('/ready/edit/clear', async (req, res) => {
+    try { await mx.clearReadyEdit(String(req.body?.order_shopify_id || ''), String(req.body?.line_key || '')); res.json({ ok: true }); }
+    catch (err) { fail(res, err, 'undo the change'); }
+});
+
+// POST /api/myxture/ready/remove { order_shopify_id, line_key, order_number, title, variant, qty, reason }
+router.post('/ready/remove', async (req, res) => {
+    try { await mx.removeReadyLine(req.body || {}, who(req)); res.json({ ok: true }); }
+    catch (err) { fail(res, err, 'remove the line'); }
+});
+
+router.put('/batches/:id/lines/:lineId', async (req, res) => {
+    try {
+        await mx.editBatchLine(parseInt(req.params.id, 10), parseInt(req.params.lineId, 10), req.body || {}, who(req));
+        res.json(await mx.getBatch(parseInt(req.params.id, 10)));
+    } catch (err) { fail(res, err, 'save the line'); }
+});
+
+router.post('/batches/:id/lines/:lineId/remove', async (req, res) => {
+    try {
+        await mx.removeBatchLine(parseInt(req.params.id, 10), parseInt(req.params.lineId, 10), req.body || {}, who(req));
+        res.json(await mx.getBatch(parseInt(req.params.id, 10)));
+    } catch (err) { fail(res, err, 'remove the line'); }
+});
+
 // The store's products with their variants and photos — for the product and variant pickers.
 router.get('/catalogue', async (req, res) => {
     try { res.json({ products: await mx.catalogue() }); }

@@ -4346,3 +4346,8 @@ p.wdb-sub { margin: 0; }
 .mx-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .mx-thumb:hover { border-color: var(--primary); }
 .mx-thumb-empty { display: grid; place-items: center; font-size: 18px; cursor: default; opacity: 0.6; }
+.mx-dtr { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: -6px 0 16px; font-size: 13px; color: var(--text-secondary); }
+.mx-dtr label { display: flex; align-items: center; gap: 6px; }
+.mx-dtr input, .mx-dtr select { width: auto; flex: 0 0 auto; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--text-primary); font-size: 13px; }
+.mx-edited { margin-top: 4px; font-size: 11.5px; color: var(--warning); }
+.mx-link { background: none; border: none; padding: 0; color: var(--primary-light); font-size: inherit; cursor: pointer; text-decoration: underline; }

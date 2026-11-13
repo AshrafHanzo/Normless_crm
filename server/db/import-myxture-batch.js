@@ -2,8 +2,8 @@
  * Record a Myxture bulk-order sheet that was uploaded to their portal by hand, as a batch, so its
  * orders count as sent and never show up as ready again.
  *
- *   node server/db/import-myxture-batch.js "<sheet.csv>"            # dry run: shows the matching
- *   node server/db/import-myxture-batch.js "<sheet.csv>" --apply    # writes it
+ *   node server/db/import-myxture-batch.js "<sheet.csv|.xlsx>"            # dry run: shows the matching
+ *   node server/db/import-myxture-batch.js "<sheet.csv|.xlsx>" --apply    # writes it
  *
  * Each row is matched to an order line by order number and size, the colour in the Design file
  * (GTA-6-Beige → Beige) deciding between two lines of the same size. A product the sheet names
@@ -21,12 +21,31 @@ const { parseCsv } = require('../utils/csv');
 
 const file = process.argv[2];
 const APPLY = process.argv.includes('--apply');
-if (!file) { console.error('Usage: node server/db/import-myxture-batch.js <sheet.csv> [--apply]'); process.exit(1); }
+if (!file) { console.error('Usage: node server/db/import-myxture-batch.js <sheet.csv|.xlsx> [--apply]'); process.exit(1); }
 
 const norm = (s) => String(s || '').trim().toLowerCase();
 
+/** The first sheet of a workbook as rows of strings, the same shape parseCsv gives. */
+async function readXlsx(p) {
+    const ExcelJS = require('exceljs');
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.readFile(p);
+    const ws = wb.worksheets[0];
+    const width = ws.getRow(1).cellCount;
+    const out = [];
+    ws.eachRow({ includeEmpty: false }, (row) => {
+        const v = [];
+        for (let i = 1; i <= width; i++) {
+            const c = row.getCell(i).value;
+            v.push(c == null ? '' : (typeof c === 'object' ? (c.text ?? c.result ?? '') : c).toString());
+        }
+        out.push(v);
+    });
+    return out;
+}
+
 (async () => {
-    const rows = parseCsv(fs.readFileSync(path.resolve(file), 'utf8'));
+    const rows = /\.xlsx$/i.test(file) ? await readXlsx(path.resolve(file)) : parseCsv(fs.readFileSync(path.resolve(file), 'utf8'));
     const head = rows.shift().map(h => h.trim());
     const col = (name) => head.indexOf(name);
     for (const c of ['Order number', 'Product type', 'Variant 1', 'Variant 2', 'Qty', 'Design file']) {

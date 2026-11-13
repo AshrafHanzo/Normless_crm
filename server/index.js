@@ -2186,6 +2186,47 @@ async function ensureMyxtureSchema() {
                 deleted_at TIMESTAMP,
                 deleted_by TEXT
             );
+            ALTER TABLE myxture_manual_lines ADD COLUMN IF NOT EXISTS updated_by TEXT;
+            ALTER TABLE myxture_manual_lines ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP;
+
+            -- A store order line changed here before it was sent — the customer asked for another
+            -- size. Replaces what Shopify says for that line until it goes into a batch.
+            CREATE TABLE IF NOT EXISTS myxture_overrides (
+                order_shopify_id TEXT NOT NULL,
+                line_key TEXT NOT NULL,
+                shopify_product_id BIGINT NOT NULL,
+                shopify_variant_id BIGINT,
+                title TEXT,
+                variant TEXT,
+                qty INTEGER NOT NULL,
+                note TEXT,
+                updated_by TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (order_shopify_id, line_key)
+            );
+
+            -- Store order lines taken off Myxture's list for good. A record, so a removed line
+            -- can't come back on the next sync.
+            CREATE TABLE IF NOT EXISTS myxture_removed (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                order_shopify_id TEXT NOT NULL,
+                line_key TEXT NOT NULL,
+                order_number TEXT,
+                title TEXT,
+                variant TEXT,
+                qty INTEGER,
+                reason TEXT,
+                -- Set when it was taken out of a batch rather than off the ready list.
+                batch_no INTEGER,
+                removed_by TEXT,
+                removed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS myxture_removed_order_idx ON myxture_removed (order_shopify_id);
+
+            -- A sent line changed afterwards keeps what it said when it went.
+            ALTER TABLE myxture_batch_lines ADD COLUMN IF NOT EXISTS original TEXT;
+            ALTER TABLE myxture_batch_lines ADD COLUMN IF NOT EXISTS edited_by TEXT;
+            ALTER TABLE myxture_batch_lines ADD COLUMN IF NOT EXISTS edited_at TIMESTAMP;
         `);
     } catch (err) {
         console.error('ensureMyxtureSchema error:', err.message);

@@ -122,33 +122,46 @@ async function shopReadyLines({ client = db, from, to } = {}) {
     where.push(`o.line_items_json LIKE ANY($${vals.length})`);
 
     const orders = (await client.query(
-        `SELECT o.shopify_id, o.order_number, o.financial_status, o.created_at, o.line_items_json
+        `SELECT o.shopify_id, o.order_number, o.financial_status, o.created_at, o.line_items_json,
+                TO_CHAR(o.created_at, 'YYYY-MM-DD"T"HH24:MI') AS order_at
            FROM orders o WHERE ${where.join(' AND ')}
           ORDER BY o.created_at DESC`, vals)).rows;
     if (!orders.length) return [];
 
-    const sent = await sentIndex(client, orders.map(o => String(o.shopify_id)));
+    const orderIds = orders.map(o => String(o.shopify_id));
+    const [sent, removed, edits] = await Promise.all([
+        sentLinesByOrder(client, orderIds), removedKeys(client, orderIds), overridesFor(client, orderIds)]);
+    const allMaps = new Map((await mappings({ activeOnly: false })).map(m => [String(m.shopify_product_id), m]));
     const out = [];
     for (const o of orders) {
         for (const item of inv.safeItems(o)) {
-            const m = byProduct.get(String(item.shopify_product_id));
-            if (!m) continue;
-            const ordered = parseInt(item.quantity, 10) || 0;
+            if (!byProduct.get(String(item.shopify_product_id))) continue;
             const key = lineKeyOf(item);
-            const already = sent.get(`${o.shopify_id}|${key}`) || 0;
+            if (removed.has(`${o.shopify_id}|${key}`)) continue;
+            // Changed here before sending — a size swap the customer asked for, say. The change
+            // replaces what Shopify says until the line goes into a batch.
+            const ov = edits.get(`${o.shopify_id}|${key}`);
+            const pid = ov ? String(ov.shopify_product_id) : String(item.shopify_product_id);
+            const m = allMaps.get(pid) || byProduct.get(String(item.shopify_product_id));
+            const variant = ov ? ov.variant : item.variant;
+            const ordered = ov?.qty ?? (parseInt(item.quantity, 10) || 0);
+            const already = sentFor(sent.get(String(o.shopify_id)), key);
             const qty = ordered - already;
             if (qty <= 0) continue;
-            const { color, size } = splitVariant(item.variant);
+            const { color, size } = splitVariant(variant);
             out.push({
                 order_shopify_id: String(o.shopify_id),
                 order_number: o.order_number,
                 order_date: o.created_at,
+                order_at: o.order_at,
                 payment: /PAID/i.test(o.financial_status || '') && !/PARTIAL/i.test(o.financial_status || '') ? 'Prepaid' : 'COD',
                 line_key: key,
-                shopify_product_id: item.shopify_product_id || null,
-                shopify_variant_id: item.shopify_variant_id || null,
-                title: item.title,
-                variant: item.variant,
+                shopify_product_id: ov ? ov.shopify_product_id : (item.shopify_product_id || null),
+                shopify_variant_id: ov ? ov.shopify_variant_id : (item.shopify_variant_id || null),
+                title: ov?.title || item.title,
+                variant,
+                edited: ov ? { by: ov.updated_by, at: ov.updated_at, from: item.variant, from_qty: parseInt(item.quantity, 10) || 0, note: ov.note } : null,
+                note: ov?.note || null,
                 color, size, qty, ordered, already_sent: already,
                 product_type: m.product_type,
                 fabric: m.fabric || '',
@@ -157,6 +170,40 @@ async function shopReadyLines({ client = db, from, to } = {}) {
         }
     }
     return out;
+}
+
+/** Non-voided batch lines for these orders, grouped by order. */
+async function sentLinesByOrder(client, orderIds) {
+    const r = await client.query(
+        `SELECT l.order_shopify_id, l.line_key, l.shopify_variant_id, l.qty
+           FROM myxture_batch_lines l JOIN myxture_batches b ON b.id = l.batch_id
+          WHERE b.voided_at IS NULL AND l.order_shopify_id = ANY($1)`, [orderIds]);
+    const by = new Map();
+    for (const x of r.rows) {
+        if (!by.has(x.order_shopify_id)) by.set(x.order_shopify_id, []);
+        by.get(x.order_shopify_id).push(x);
+    }
+    return by;
+}
+
+/**
+ * How much of an order line has gone. A sent line counts against it by the key it was sent under
+ * or by the variant it was changed to, so a size changed here and then also in Shopify is still
+ * one piece sent, not one sent and one waiting.
+ */
+const sentFor = (lines, key) => (lines || [])
+    .filter(l => l.line_key === key || String(l.shopify_variant_id || '') === key)
+    .reduce((n, l) => n + l.qty, 0);
+
+async function removedKeys(client, orderIds) {
+    const r = await client.query(
+        'SELECT order_shopify_id, line_key FROM myxture_removed WHERE order_shopify_id = ANY($1)', [orderIds]);
+    return new Set(r.rows.map(x => `${x.order_shopify_id}|${x.line_key}`));
+}
+
+async function overridesFor(client, orderIds) {
+    const r = await client.query('SELECT * FROM myxture_overrides WHERE order_shopify_id = ANY($1)', [orderIds]);
+    return new Map(r.rows.map(x => [`${x.order_shopify_id}|${x.line_key}`, x]));
 }
 
 /* --------------------------------------- manual lines --------------------------------------- */
@@ -172,7 +219,8 @@ async function manualReadyLines({ client = db, from, to } = {}) {
     if (from) { vals.push(from); where.push(`m.created_at::date >= $${vals.length}`); }
     if (to) { vals.push(to); where.push(`m.created_at::date <= $${vals.length}`); }
     const rows = (await client.query(
-        `SELECT m.*, p.product_type, p.fabric, p.design_file
+        `SELECT m.*, p.product_type, p.fabric, p.design_file,
+                TO_CHAR(m.created_at, 'YYYY-MM-DD"T"HH24:MI') AS order_at
            FROM myxture_manual_lines m
            JOIN myxture_products p ON p.shopify_product_id = m.shopify_product_id AND p.active = true
           WHERE ${where.join(' AND ')} ORDER BY m.created_at DESC`, vals)).rows;
@@ -188,6 +236,7 @@ async function manualReadyLines({ client = db, from, to } = {}) {
             order_shopify_id: manualKey(r.id),
             order_number: r.order_ref,
             order_date: r.created_at,
+            order_at: r.order_at,
             payment: r.source || 'Manual',
             manual: true, manual_id: r.id, note: r.note, created_by: r.created_by,
             line_key: 'manual',
@@ -229,6 +278,131 @@ async function deleteManualLine(id, user) {
         throw Object.assign(new Error('Already sent to Myxture — void its batch instead'), { status: 400 });
     }
     await db.query('UPDATE myxture_manual_lines SET deleted_at = NOW(), deleted_by = $2 WHERE id = $1', [id, user]);
+}
+
+/* -------------------------------------- edit and remove -------------------------------------- */
+
+const bad = (msg, status = 400) => Object.assign(new Error(msg), { status });
+
+/** The product and variant a line is changed to, checked against what Myxture makes. */
+async function resolveTarget(body) {
+    const pid = String(body.shopify_product_id || '').replace(/\D/g, '');
+    if (!pid) throw bad('Pick the product');
+    const m = (await db.query('SELECT * FROM myxture_products WHERE shopify_product_id = $1', [pid])).rows[0];
+    if (!m) throw bad('That product is not set up as a Myxture product');
+    const variant = String(body.variant || '').trim();
+    const { color, size } = splitVariant(variant);
+    if (!size) throw bad('Pick the size');
+    const qty = parseInt(body.qty, 10);
+    if (!(qty > 0)) throw bad('Quantity must be at least 1');
+    return {
+        pid, mapping: m, variant, color, size, qty,
+        vid: String(body.shopify_variant_id || '').replace(/\D/g, '') || null,
+        title: String(body.title || m.title || '').trim() || null,
+        note: String(body.note || '').trim() || null,
+    };
+}
+
+/** Change a Shopify line that hasn't been sent: size, colour or quantity, before it goes. */
+async function editReadyLine(body, user) {
+    const order = String(body.order_shopify_id || '');
+    const key = String(body.line_key || '');
+    if (!order || !key || order.startsWith('manual:')) throw bad('Pick a store order line');
+    const t = await resolveTarget(body);
+    await db.query(
+        `INSERT INTO myxture_overrides (order_shopify_id, line_key, shopify_product_id, shopify_variant_id, title, variant, qty, note, updated_by, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW())
+         ON CONFLICT (order_shopify_id, line_key) DO UPDATE SET shopify_product_id = excluded.shopify_product_id,
+            shopify_variant_id = excluded.shopify_variant_id, title = excluded.title, variant = excluded.variant,
+            qty = excluded.qty, note = excluded.note, updated_by = excluded.updated_by, updated_at = NOW()`,
+        [order, key, t.pid, t.vid, t.title, t.variant, t.qty, t.note, user]);
+}
+
+/** Undo a change made here, so the line follows Shopify again. */
+async function clearReadyEdit(order, key) {
+    await db.query('DELETE FROM myxture_overrides WHERE order_shopify_id = $1 AND line_key = $2', [order, key]);
+}
+
+async function editManualLine(id, body, user) {
+    const sent = await sentLinesByOrder(db, [manualKey(id)]);
+    if (sentFor(sent.get(manualKey(id)), 'manual')) throw bad('Already sent to Myxture — change it in its batch instead');
+    const t = await resolveTarget(body);
+    const ref = String(body.order_ref || '').trim();
+    if (!ref) throw bad('Give it a reference');
+    const source = MANUAL_SOURCES.includes(body.source) ? body.source : 'Other';
+    await db.query(
+        `UPDATE myxture_manual_lines SET order_ref = $2, source = $3, shopify_product_id = $4, shopify_variant_id = $5,
+            title = $6, variant = $7, qty = $8, note = $9, updated_by = $10, updated_at = NOW()
+          WHERE id = $1 AND deleted_at IS NULL`,
+        [id, ref, source, t.pid, t.vid, t.title, t.variant, t.qty, t.note, user]);
+}
+
+/**
+ * Take a store order line off Myxture's list for good — made some other way, or not wanted. Kept
+ * as a record rather than deleted, so it can't quietly come back on the next sync.
+ */
+async function removeReadyLine(body, user) {
+    const order = String(body.order_shopify_id || '');
+    const key = String(body.line_key || '');
+    if (order.startsWith('manual:')) return deleteManualLine(parseInt(order.slice(7), 10), user);
+    if (!order || !key) throw bad('Pick a line');
+    await db.query(
+        `INSERT INTO myxture_removed (order_shopify_id, line_key, order_number, title, variant, qty, reason, removed_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [order, key, body.order_number || null, body.title || null, body.variant || null,
+            parseInt(body.qty, 10) || null, String(body.reason || '').trim() || null, user]);
+    await clearReadyEdit(order, key);
+}
+
+/**
+ * Change a line that has already gone — the customer changed their size after we sent it. The
+ * portal has to be changed by hand too; this keeps our record (and the check-in) right, and keeps
+ * what it said before.
+ */
+async function editBatchLine(batchId, lineId, body, user) {
+    const l = (await db.query(
+        `SELECT l.*, b.voided_at FROM myxture_batch_lines l JOIN myxture_batches b ON b.id = l.batch_id
+          WHERE l.id = $1 AND l.batch_id = $2`, [lineId, batchId])).rows[0];
+    if (!l) throw bad('Line not found', 404);
+    if (l.voided_at) throw bad('This batch was voided');
+    if (l.received_at) throw bad('Already received — undo the receipt first');
+    const t = await resolveTarget(body);
+    const was = { title: l.title, variant: l.variant, size: l.size, qty: l.qty, design_file: l.design_file };
+    await db.query(
+        `UPDATE myxture_batch_lines SET shopify_product_id = $3, shopify_variant_id = $4, title = $5, variant = $6,
+            color = $7, size = $8, qty = $9, product_type = $10, fabric = $11, design_file = $12,
+            original = COALESCE(original, $13), edited_by = $14, edited_at = NOW(),
+            qc_note = COALESCE($15, qc_note)
+          WHERE id = $1 AND batch_id = $2`,
+        [lineId, batchId, t.pid, t.vid, t.title, t.variant, t.color, t.size, t.qty,
+            t.mapping.product_type, t.mapping.fabric, designFileFor(t.mapping, t.color),
+            JSON.stringify(was), user, t.note]);
+}
+
+/**
+ * Take a line out of a batch — the order was cancelled after it went, say. It doesn't come back
+ * as ready: a store line is recorded as removed, a manual one is deleted.
+ */
+async function removeBatchLine(batchId, lineId, body, user) {
+    const l = (await db.query(
+        `SELECT l.*, b.voided_at FROM myxture_batch_lines l JOIN myxture_batches b ON b.id = l.batch_id
+          WHERE l.id = $1 AND l.batch_id = $2`, [lineId, batchId])).rows[0];
+    if (!l) throw bad('Line not found', 404);
+    if (l.voided_at) throw bad('This batch was voided');
+    if (l.received_at) throw bad('Already received — undo the receipt first');
+    await db.transaction(async (c) => {
+        await c.query('DELETE FROM myxture_batch_lines WHERE id = $1', [lineId]);
+        if (l.order_shopify_id.startsWith('manual:')) {
+            await c.query('UPDATE myxture_manual_lines SET deleted_at = NOW(), deleted_by = $2 WHERE id = $1',
+                [parseInt(l.order_shopify_id.slice(7), 10), user]);
+        } else {
+            await c.query(
+                `INSERT INTO myxture_removed (order_shopify_id, line_key, order_number, title, variant, qty, reason, removed_by, batch_no)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,(SELECT batch_no FROM myxture_batches WHERE id = $9))`,
+                [l.order_shopify_id, l.line_key, l.order_number, l.title, l.variant, l.qty,
+                    String(body?.reason || '').trim() || null, user, batchId]);
+        }
+    });
 }
 
 /* ------------------------------------------ images ------------------------------------------ */
@@ -437,7 +611,9 @@ async function attentionLines() {
         else if (l.cancelled_at) reason = 'Order cancelled';
         else if (/^(REFUNDED|VOIDED)$/i.test(l.financial_status || '')) reason = `Order ${String(l.financial_status).toLowerCase()}`;
         else {
-            const item = inv.safeItems(l).find(i => lineKeyOf(i) === l.line_key);
+            // By the key it went under, or the variant it was changed to since.
+            const item = inv.safeItems(l).find(i => lineKeyOf(i) === l.line_key
+                || (l.shopify_variant_id && lineKeyOf(i) === String(l.shopify_variant_id)));
             const now = item ? (parseInt(item.quantity, 10) || 0) : 0;
             const sent = sentTotals.get(`${l.order_shopify_id}|${l.line_key}`) || 0;
             if (now < sent) reason = now === 0 ? 'Item removed from the order' : `Order now has ${now}, ${sent} sent`;
@@ -487,4 +663,5 @@ module.exports = {
     mappings, productIds, readyLines, createBatch, insertLine, listBatches, getBatch, batchXlsx, batchCsv, fileName,
     voidBatch, receiveLines, attentionLines, clearAttention, stats, fileOrder,
     MANUAL_SOURCES, addManualLine, deleteManualLine, catalogue, withImages,
+    editReadyLine, clearReadyEdit, editManualLine, removeReadyLine, editBatchLine, removeBatchLine,
 };

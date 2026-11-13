@@ -25,6 +25,20 @@ const STATUS_CLASS = {
 
 const blankItem = () => ({ product: '', variant: '', qty: 1, shopify_product_id: '', shopify_variant_id: '', blank_type: '', color: '', size: '' })
 const blankForm = () => ({ purpose: '', requested_for: '', shoot_date: '', notes: '', items: [blankItem()] })
+// A DATE column arrives as midnight IST in UTC ("…T18:30:00Z" the day before), so the form takes
+// the calendar day as the browser sees it, not the first ten characters.
+const ymd = (v) => {
+  if (!v) return ''
+  const d = new Date(v)
+  if (Number.isNaN(d.getTime())) return ''
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+// The request as the form holds it, for editing.
+const formFrom = (x) => ({
+  id: x.id, ref: x.ref, status: x.status,
+  purpose: x.purpose || '', requested_for: x.requested_for || '', shoot_date: ymd(x.shoot_date), notes: x.notes || '',
+  items: (x.items || []).length ? x.items.map(it => ({ ...blankItem(), ...it, qty: it.qty || 1 })) : [blankItem()],
+})
 
 /**
  * Shoot samples — garments marketing borrows to photograph.
@@ -61,8 +75,8 @@ export default function SamplesTab({ onChanged }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { load() }, [])
 
-  const openForm = async () => {
-    setForm(blankForm())
+  const openForm = async (existing) => {
+    setForm(existing ? formFrom(existing) : blankForm())
     if (!products) {
       const r = await apiFetch('/api/marketing/samples/products')
       if (r && !r.error) setProducts(r.products.filter(p => p.variants.length))
@@ -73,11 +87,11 @@ export default function SamplesTab({ onChanged }) {
 
   const guard = useDirtyGuard({
     snapshot: form && { ...form },
-    identity: form ? 'new' : null,
+    identity: form ? (form.id || 'new') : null,
     onDiscard: () => setForm(null),
     confirm: toast.confirm,
-    title: 'Discard this request?',
-    message: 'What you have filled in will be lost.',
+    title: form?.id ? 'Discard your changes?' : 'Discard this request?',
+    message: form?.id ? 'The request stays as it was.' : 'What you have filled in will be lost.',
   })
 
   const save = async (e) => {
@@ -86,10 +100,12 @@ export default function SamplesTab({ onChanged }) {
     const items = form.items.filter(it => it.product && Number(it.qty) > 0)
     if (!items.length) { toast.error('Add at least one product'); return }
     setBusy(true)
-    const res = await apiFetch('/api/marketing/samples', { method: 'POST', body: JSON.stringify({ ...form, items }) })
+    const res = form.id
+      ? await apiFetch(`/api/marketing/samples/${form.id}`, { method: 'PUT', body: JSON.stringify({ ...form, items }) })
+      : await apiFetch('/api/marketing/samples', { method: 'POST', body: JSON.stringify({ ...form, items }) })
     setBusy(false)
-    if (!res || res.error) { toast.error(res?.error || 'Failed to raise the request'); return }
-    toast.success(`${res.ref} raised — waiting for approval`)
+    if (!res || res.error) { toast.error(res?.error || (form.id ? 'Failed to save the request' : 'Failed to raise the request')); return }
+    toast.success(form.id ? `${res.ref} updated` : `${res.ref} raised — waiting for approval`)
     guard.reset()
     setForm(null); load()
   }
@@ -219,7 +235,7 @@ export default function SamplesTab({ onChanged }) {
             the barter for the shoot.
           </p>
         </div>
-        <button className="btn btn-primary" onClick={openForm}>
+        <button className="btn btn-primary" onClick={() => openForm()}>
           <Icon name="plus" size={15} style={{ marginRight: 6, verticalAlign: '-2px' }} />
           Request a sample
         </button>
@@ -307,6 +323,10 @@ export default function SamplesTab({ onChanged }) {
                         {['In Production', 'With Marketing'].includes(x.status) && (
                           <button className="mini-btn" onClick={() => move(x, BARTER)}>Given as barter</button>
                         )}
+                        {/* A finished request is a record of what happened; only open ones change. */}
+                        {!TERMINAL.includes(x.status) && (
+                          <button className="mini-btn" onClick={() => openForm(x)}>Edit</button>
+                        )}
                         {!TERMINAL.includes(x.status) && (
                           <button className="mini-btn" onClick={() => move(x, 'Cancelled')}>Cancel</button>
                         )}
@@ -331,7 +351,7 @@ export default function SamplesTab({ onChanged }) {
         <div className="drawer-overlay" onClick={guard.requestClose}>
           <div className="drawer" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true">
             <div className="drawer-header">
-              <h2>Request a sample</h2>
+              <h2>{form.id ? `Edit ${form.ref}` : 'Request a sample'}</h2>
               <button type="button" className="btn-icon" onClick={guard.requestClose}><Icon name="close" size={16} /></button>
             </div>
 
@@ -402,8 +422,11 @@ export default function SamplesTab({ onChanged }) {
                   <input value={form.notes} onChange={e => setF({ notes: e.target.value })} />
                 </div>
                 <p className="img-upload-hint">
-                  It goes to an admin for approval. Nothing is printed and no blank moves until
-                  production starts.
+                  {!form.id
+                    ? 'It goes to an admin for approval. Nothing is printed and no blank moves until production starts.'
+                    : ['In Production', 'With Marketing'].includes(form.status)
+                      ? 'Already in production: changing the garments moves blank stock by the difference.'
+                      : 'Nothing has been printed yet, so changing the garments moves no stock.'}
                 </p>
               </form>
             </div>
@@ -411,7 +434,7 @@ export default function SamplesTab({ onChanged }) {
             <div className="drawer-footer">
               <button type="button" className="btn btn-secondary" onClick={guard.requestClose}>Cancel</button>
               <button type="submit" form="mk-sample-form" className="btn btn-primary" disabled={busy}>
-                {busy ? 'Saving…' : 'Raise the request'}
+                {busy ? 'Saving…' : form.id ? 'Save changes' : 'Raise the request'}
               </button>
             </div>
           </div>
