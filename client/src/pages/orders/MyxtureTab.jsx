@@ -197,30 +197,60 @@ const fmtStamp = (s) => {
 }
 
 /**
- * From and to, each a date and a time — "everything since yesterday 2 pm" is the question the
- * team actually asks, not "since yesterday". The quick picks cover the usual ones.
+ * When: all time unless narrowed. The usual ranges are one pick; a custom range opens a from and a
+ * to, each a date and a time, for "everything since yesterday 2 pm".
  */
 function DateTimeRange({ from, to, onChange }) {
-  const [now] = useState(() => new Date())
-  const at = (daysAgo, h, m = 0) => { const d = new Date(now); d.setDate(d.getDate() - daysAgo); d.setHours(h, m, 0, 0); return localStamp(d) }
-  const PRESETS = [
-    { label: 'Today', from: at(0, 0), to: '' },
-    { label: 'Since yesterday', from: at(1, 0), to: '' },
-    { label: 'Yesterday 12 pm onward', from: at(1, 12), to: '' },
-    { label: 'Last 7 days', from: at(7, 0), to: '' },
-  ]
+  const [mode, setMode] = useState(from || to ? 'custom' : 'all')
+  const at = (daysAgo, h, m = 0) => { const d = new Date(); d.setDate(d.getDate() - daysAgo); d.setHours(h, m, 0, 0); return localStamp(d) }
+  const RANGES = {
+    all: () => ['', ''],
+    today: () => [at(0, 0), ''],
+    yesterday: () => [at(1, 0), at(1, 23, 59)],
+    since_yesterday: () => [at(1, 0), ''],
+    week: () => [at(7, 0), ''],
+    month: () => [at(30, 0), ''],
+  }
+  const pick = (v) => {
+    setMode(v)
+    if (v !== 'custom') onChange(...RANGES[v]())
+  }
   return (
-    <div className="mx-dtr">
-      <label>From <input type="datetime-local" value={from} max={to || undefined} onChange={e => onChange(e.target.value, to)} /></label>
-      <label>To <input type="datetime-local" value={to} min={from || undefined} onChange={e => onChange(from, e.target.value)} /></label>
-      <select value="" onChange={e => { const p = PRESETS[Number(e.target.value)]; if (p) onChange(p.from, p.to) }} aria-label="Quick time range">
-        <option value="">Quick pick…</option>
-        {PRESETS.map((p, i) => <option key={p.label} value={i}>{p.label}</option>)}
+    <>
+      <select value={mode} onChange={e => pick(e.target.value)} aria-label="When">
+        <option value="all">All time</option>
+        <option value="today">Today</option>
+        <option value="yesterday">Yesterday</option>
+        <option value="since_yesterday">Since yesterday</option>
+        <option value="week">Last 7 days</option>
+        <option value="month">Last 30 days</option>
+        <option value="custom">Custom range…</option>
       </select>
-      {(from || to) && <button type="button" className="mini-btn" onClick={() => onChange('', '')}>Clear</button>}
-    </div>
+      {mode === 'custom' && (
+        <div className="mx-dtr">
+          <label>From <input type="datetime-local" value={from} max={to || undefined} onChange={e => onChange(e.target.value, to)} /></label>
+          <label>To <input type="datetime-local" value={to} min={from || undefined} onChange={e => onChange(from, e.target.value)} /></label>
+          <button type="button" className="mini-btn" onClick={() => pick('all')}>All time</button>
+        </div>
+      )}
+    </>
   )
 }
+
+// Customers can change their size for two hours after ordering, so a store order is normally sent
+// only once that's over. The filter applies to store orders only: nobody edits a seeding parcel.
+const AGES = [
+  { value: 0, label: 'Any age' },
+  { value: 1, label: 'Older than 1 hour' },
+  { value: 2, label: 'Older than 2 hours' },
+  { value: 3, label: 'Older than 3 hours' },
+  { value: 4, label: 'Older than 4 hours' },
+  { value: 6, label: 'Older than 6 hours' },
+  { value: 12, label: 'Older than 12 hours' },
+  { value: 24, label: 'Older than 24 hours' },
+]
+const EDIT_WINDOW_HOURS = 2
+const SOURCE_CLASS = { Marketing: 'partial', Offline: 'partial' }
 
 /** Delete only once the order number has been typed back — the button is right next to Edit. */
 const confirmDelete = (toast, l, message) => toast.confirm({
@@ -247,6 +277,11 @@ function ReadyView({ onSent, onChange, goProducts }) {
   const [search, setSearch] = useState('')
   const [picked, setPicked] = useState(new Set())
   const [editing, setEditing] = useState(null)   // { mode, line }
+  const [age, setAge] = useState(EDIT_WINDOW_HOURS)
+  const [source, setSource] = useState('')
+  const [rtoOnly, setRtoOnly] = useState(false)
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => { const t = setInterval(() => setNow(Date.now()), 60000); return () => clearInterval(t) }, [])
 
   const load = async () => {
     setLoading(true)
@@ -263,12 +298,22 @@ function ReadyView({ onSent, onChange, goProducts }) {
 
   // order_at is the order's own clock time as "YYYY-MM-DDTHH:MM", so it compares as text against
   // what the datetime inputs hold.
-  const shown = useMemo(() => {
+  const sourcesShown = useMemo(() => ['Store', 'Marketing', 'Offline', 'Manual'].filter(x => lines.some(l => l.source === x)), [lines])
+  const rtoCount = lines.filter(l => l.rto).length
+  // A store order still inside its edit window, given the age picked.
+  const tooNew = (l) => age > 0 && l.source === 'Store' && l.order_at && (now - new Date(l.order_at).getTime()) < age * 3600000
+
+  const filtered = useMemo(() => {
     const s = search.trim().replace(/^#/, '').toLowerCase()
     return lines.filter(l => (!design || l.design_file === design) && (!size || l.size === size)
+      && (!source || l.source === source) && (!rtoOnly || l.rto)
       && (!from || (l.order_at || '') >= from) && (!to || (l.order_at || '') <= to)
-      && (!s || String(l.order_number).toLowerCase().replace(/^#/, '').includes(s)))
-  }, [lines, design, size, search, from, to])
+      && (!s || String(l.order_number).toLowerCase().replace(/^#/, '').includes(s)
+        || String(l.party || '').toLowerCase().includes(s)))
+  }, [lines, design, size, search, from, to, source, rtoOnly])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const shown = useMemo(() => filtered.filter(l => !tooNew(l)), [filtered, age, now])
+  const waiting = filtered.length - shown.length
 
   // Only what is on screen is ever sent: a line picked and then filtered away stays behind.
   const chosen = shown.filter(l => picked.has(keyOf(l)))
@@ -287,9 +332,13 @@ function ReadyView({ onSent, onChange, goProducts }) {
 
   const send = async (mode) => {
     if (!chosen.length) return
+    const onShelf = chosen.filter(l => l.rto)
+    const shelfNote = onShelf.length
+      ? `\n\n${plural(onShelf.length, 'line')} (${onShelf.map(l => l.order_number).join(', ')}) ${onShelf.length === 1 ? 'has' : 'have'} the same jersey on the RTO shelf — cancel and use "Use RTO piece" to send that instead of ordering a new one.`
+      : ''
     if (!await toast.confirm({
       title: `Send ${plural(orders, 'order')} to Myxture?`,
-      message: `${plural(chosen.length, 'line')}, ${units} pieces go into a new batch and are marked as sent, so nobody can send them again. ${HOW[mode].after} If they never reach the portal, void the batch to put the lines back.`,
+      message: `${plural(chosen.length, 'line')}, ${units} pieces go into a new batch and are marked as sent, so nobody can send them again. ${HOW[mode].after} If they never reach the portal, void the batch to put the lines back.${shelfNote}`,
       confirmLabel: HOW[mode].confirm, cancelLabel: 'Cancel',
     })) return
     setBusy(mode)
@@ -315,13 +364,27 @@ function ReadyView({ onSent, onChange, goProducts }) {
   const remove = async (l) => {
     if (!await confirmDelete(toast, l, l.manual
       ? `${l.title} (${l.variant}) × ${l.qty} comes off Ready to send for good.`
-      : `${l.title} (${l.variant}) × ${l.qty} comes off Myxture's list for good and won't come back on the next sync. The Shopify order itself isn't touched.`)) return
+      : `${l.title} (${l.variant}) × ${l.qty} comes off Myxture's list for good and won't come back. The ${l.source === 'Store' ? 'Shopify order' : `${l.source.toLowerCase()} order`} itself isn't touched.`)) return
     const r = await apiFetch('/api/myxture/ready/remove', {
       method: 'POST',
       body: JSON.stringify({ order_shopify_id: l.order_shopify_id, line_key: l.line_key, order_number: l.order_number, title: l.title, variant: l.variant, qty: l.qty }),
     })
     if (!r || r.error) { toast.error(r?.error || 'Could not delete it'); return }
     toast.success(`${l.order_number} deleted`); load(); onChange()
+  }
+
+  // The same jersey came back on an RTO: send that one and don't order a new print.
+  const sendFromShelf = async (l) => {
+    const n = Math.min(l.qty, l.rto.available)
+    if (!await toast.confirm({
+      title: `Send the returned piece for ${l.order_number}?`,
+      message: `${n} × ${l.title} (${l.variant}) comes off the RTO shelf against ${l.order_number}${n < l.qty ? `, and the other ${l.qty - n} still go to Myxture` : ', and the line comes off Myxture\'s list'}. Pick it from the shelf for this order.`,
+      confirmLabel: 'Use RTO piece', cancelLabel: 'Cancel',
+    })) return
+    const r = await apiFetch('/api/myxture/ready/use-rto', { method: 'POST', body: JSON.stringify({ order_shopify_id: l.order_shopify_id, line_key: l.line_key, qty: n }) })
+    if (!r || r.error) { toast.error(r?.error || 'Could not take it off the shelf'); load(); return }
+    toast.success(`${l.order_number}: ${plural(r.taken, 'piece')} from the RTO shelf${r.rest > 0 ? `, ${r.rest} still to Myxture` : ''}`)
+    load(); onChange()
   }
 
   const undoEdit = async (l) => {
@@ -345,11 +408,21 @@ function ReadyView({ onSent, onChange, goProducts }) {
 
   return (
     <>
-      <div className="filters-row">
+      <div className="filters-row mx-filters">
         <div className="search-bar">
           <span className="search-icon">🔍</span>
-          <input type="search" placeholder="Search order number…" value={search} onChange={e => setSearch(e.target.value)} />
+          <input type="search" placeholder="Search order or name…" value={search} onChange={e => setSearch(e.target.value)} />
         </div>
+        <DateTimeRange from={from} to={to} onChange={(f, t) => { setFrom(f); setTo(t) }} />
+        <select value={age} onChange={e => setAge(Number(e.target.value))} aria-label="Order age" title="Store orders only — customers can change their size for 2 hours">
+          {AGES.map(a => <option key={a.value} value={a.value}>{a.label}</option>)}
+        </select>
+        {sourcesShown.length > 1 && (
+          <select value={source} onChange={e => setSource(e.target.value)} aria-label="Source">
+            <option value="">All sources</option>
+            {sourcesShown.map(x => <option key={x} value={x}>{x === 'Store' ? 'Store orders' : x === 'Marketing' ? 'Influencer seeding' : x === 'Offline' ? 'Offline sales' : 'Added by hand'}</option>)}
+          </select>
+        )}
         <select value={design} onChange={e => setDesign(e.target.value)}>
           <option value="">All designs</option>
           {designs.map(d => <option key={d} value={d}>{d}</option>)}
@@ -358,11 +431,23 @@ function ReadyView({ onSent, onChange, goProducts }) {
           <option value="">All sizes</option>
           {sizes.map(s => <option key={s} value={s}>{s}</option>)}
         </select>
+        {rtoCount > 0 && (
+          <button className={`btn ${rtoOnly ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setRtoOnly(v => !v)}
+            title="Lines whose jersey is sitting on the RTO shelf">
+            ↺ On RTO shelf ({rtoCount})
+          </button>
+        )}
         <button className="btn btn-secondary" onClick={() => setEditing({ mode: 'new' })}>
           <Icon name="plus" size={15} /> Add manual order
         </button>
       </div>
-      <DateTimeRange from={from} to={to} onChange={(f, t) => { setFrom(f); setTo(t) }} />
+      {waiting > 0 && (
+        <div className="mx-waiting">
+          {plural(waiting, 'store order line')} placed in the last {plural(age, 'hour')} {waiting === 1 ? 'is' : 'are'} hidden
+          {age >= EDIT_WINDOW_HOURS ? ' — customers can still change their size' : ''}.{' '}
+          <button type="button" className="mx-link" onClick={() => setAge(0)}>Show them</button>
+        </div>
+      )}
 
       <div className="data-table-wrapper">
         {loading ? <div className="loader"><div className="spinner"></div></div>
@@ -370,7 +455,8 @@ function ReadyView({ onSent, onChange, goProducts }) {
             <div className="empty-state">
               <div className="empty-icon">✅</div>
               <h3>Nothing waiting</h3>
-              <p>{lines.length ? 'No line matches these filters.' : 'Every Myxture order has been sent.'}</p>
+              <p>{!lines.length ? 'Every Myxture order has been sent.'
+                : waiting && waiting === filtered.length ? 'Everything waiting is still inside its edit window.' : 'No line matches these filters.'}</p>
             </div>
           ) : (
             <table className="data-table">
@@ -388,15 +474,25 @@ function ReadyView({ onSent, onChange, goProducts }) {
                       <td onClick={e => e.stopPropagation()}><input type="checkbox" checked={picked.has(k)} onChange={() => toggle(k)} /></td>
                       <td data-label="Order" style={{ fontWeight: 600, color: 'var(--primary-light)' }}>
                         {l.order_number}
-                        {l.note && <div style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 400 }}>{l.note}</div>}
+                        {l.party && <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', fontWeight: 400 }}>{l.party}{l.status ? ` · ${l.status}` : ''}</div>}
+                        {l.note && !/RTO shelf/.test(l.note) && <div style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 400 }}>{l.note}</div>}
                       </td>
                       <td data-label="Product">
                         <ProductCell line={l} primary={l.title} secondary={l.variant} />
-                        {l.edited && (
+                        {/* Part of it went from the RTO shelf: those pieces have left, so no undo. */}
+                        {l.edited && /RTO shelf/.test(l.edited.note || '') && l.edited.from === l.variant ? (
+                          <div className="mx-rto">↺ {l.edited.note} — {l.qty} still to Myxture</div>
+                        ) : l.edited && (
                           <div className="mx-edited" onClick={e => e.stopPropagation()}>
                             Changed here from {l.edited.from}{l.edited.from_qty !== l.ordered ? ` × ${l.edited.from_qty}` : ''}
                             {l.edited.by ? ` by ${l.edited.by}` : ''} ·{' '}
                             <button type="button" className="mx-link" onClick={() => undoEdit(l)}>undo</button>
+                          </div>
+                        )}
+                        {l.rto && (
+                          <div className="mx-rto" onClick={e => e.stopPropagation()}>
+                            ↺ {l.rto.available} on the RTO shelf ·{' '}
+                            <button type="button" className="mx-link" onClick={() => sendFromShelf(l)}>Use RTO piece</button>
                           </div>
                         )}
                       </td>
@@ -406,7 +502,7 @@ function ReadyView({ onSent, onChange, goProducts }) {
                         {l.already_sent > 0 && <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{l.already_sent} sent before</div>}
                       </td>
                       <td data-label="Design file">{l.design_file || '—'}</td>
-                      <td data-label="Type"><span className={`status-badge ${PAY_CLASS[l.payment] || 'partial'}`}>{l.payment}</span></td>
+                      <td data-label="Type"><span className={`status-badge ${PAY_CLASS[l.payment] || SOURCE_CLASS[l.source] || 'partial'}`}>{l.payment}</span></td>
                       <td data-label="Ordered" style={{ color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>{fmtStamp(l.order_at)}</td>
                       <td onClick={e => e.stopPropagation()} style={{ whiteSpace: 'nowrap' }}>
                         <button className="btn-icon" title="Change size, colour or quantity"
@@ -526,8 +622,10 @@ function LineDrawer({ mode, line, batchId, sources = [], onClose, onSaved }) {
         </div>
         <form id="myxture-line-form" className="drawer-body" onSubmit={save}>
           <p style={{ fontSize: 13, color: 'var(--text-muted)', margin: 0 }}>
-            {mode === 'new' && 'For jerseys that aren\'t a store order — influencer seeding, offline sales, replacements. It goes into the next batch like any other line.'}
-            {mode === 'ready' && `Was ${line?.variant} × ${line?.ordered} on the Shopify order. The change is used when it goes to Myxture; Shopify itself isn't changed.`}
+            {mode === 'new' && 'For jerseys that aren\'t on any order here — a replacement, say. Store orders, influencer seeding and offline sales show up on their own. It goes into the next batch like any other line.'}
+            {mode === 'ready' && (line?.source === 'Store'
+              ? `Was ${line?.variant} × ${line?.ordered} on the Shopify order. The change is used when it goes to Myxture; Shopify itself isn't changed.`
+              : `Was ${line?.variant} × ${line?.ordered} on ${line?.order_number}. The change is used when it goes to Myxture; the ${line?.source?.toLowerCase()} order itself isn't changed.`)}
             {mode === 'manual' && 'Not sent yet, so the change simply goes with it.'}
             {mode === 'batch' && 'Already sent to Myxture — change it on their portal as well. This keeps our record and the check-in right, and remembers what was sent.'}
           </p>
@@ -613,7 +711,9 @@ function BatchesView({ onOpen, refreshKey }) {
 
   return (
     <>
-    <DateTimeRange from={from} to={to} onChange={(f, t) => { setFrom(f); setTo(t) }} />
+    <div className="filters-row mx-filters">
+      <DateTimeRange from={from} to={to} onChange={(f, t) => { setFrom(f); setTo(t) }} />
+    </div>
     <div className="data-table-wrapper">
       {loading ? <div className="loader"><div className="spinner"></div></div>
         : shown.length === 0 ? (

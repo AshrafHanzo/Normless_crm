@@ -36,7 +36,7 @@ router.get('/ready', async (req, res) => {
     try {
         const from = DATE_RE.test(req.query.from || '') ? req.query.from : null;
         const to = DATE_RE.test(req.query.to || '') ? req.query.to : null;
-        const lines = await mx.withImages(await mx.readyLines({ from, to }));
+        const lines = await mx.withImages(await mx.readyLines({ from, to, rto: true }));
         res.json({ lines, mapped: (await mx.mappings()).length, sources: mx.MANUAL_SOURCES });
     } catch (err) { fail(res, err, 'load the orders ready for Myxture'); }
 });
@@ -73,6 +73,13 @@ router.post('/ready/edit/clear', async (req, res) => {
 router.post('/ready/remove', async (req, res) => {
     try { await mx.removeReadyLine(req.body || {}, who(req)); res.json({ ok: true }); }
     catch (err) { fail(res, err, 'remove the line'); }
+});
+
+// POST /api/myxture/ready/use-rto { order_shopify_id, line_key, qty } — send the returned piece
+// on our shelf instead of ordering a new one.
+router.post('/ready/use-rto', async (req, res) => {
+    try { res.json(await mx.fillFromRto(req.body || {}, who(req))); }
+    catch (err) { fail(res, err, 'take it off the RTO shelf'); }
 });
 
 router.put('/batches/:id/lines/:lineId', async (req, res) => {

@@ -2231,6 +2231,7 @@ async function ensureMyxtureSchema() {
         // Myxture products never touch our blank stock, so any "unmapped" warnings the inventory
         // raised for them before they were set up as Myxture products are noise.
         await require('./services/myxture').clearInventoryNoise();
+        await require('./services/myxture').linkManualLines().catch(e => console.error('myxture linkManualLines:', e.message));
     } catch (err) {
         console.error('ensureMyxtureSchema error:', err.message);
     }

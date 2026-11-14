@@ -95,18 +95,34 @@ async function sentIndex(client = db, orderIds = null) {
 
 /**
  * Every Myxture line still waiting to be sent. Same idea of "open" as the pick list — not
- * fulfilled, cancelled, refunded, voided or on hold — and both COD and prepaid count.
+ * fulfilled, cancelled, refunded, voided or on hold — and both COD and prepaid count. Influencer
+ * seeding and offline sales that hold a Myxture product come in on their own, the same way.
  */
-async function readyLines({ client = db, from, to } = {}) {
-    const [shop, manual] = await Promise.all([shopReadyLines({ client, from, to }), manualReadyLines({ client, from, to })]);
-    return [...manual, ...shop];
+async function readyLines({ client = db, from, to, rto = false } = {}) {
+    const maps = await mappings();
+    const jobs = [
+        () => manualReadyLines({ client, from, to }),
+        () => maps.length ? shopCandidates(client, maps, { from, to }) : [],
+        () => maps.length ? marketingCandidates(client, maps) : [],
+        () => maps.length ? offlineCandidates(client, maps) : [],
+    ];
+    // A transaction's single connection takes one query at a time; the pool can take them together.
+    const [manual, ...rest] = client === db ? await Promise.all(jobs.map(j => j()))
+        : await jobs.reduce(async (acc, j) => [...await acc, await j()], Promise.resolve([]));
+    const lines = [...manual, ...await finishLines(client, maps, rest.flat())];
+    return rto ? withRto(lines) : lines;
 }
 
-async function shopReadyLines({ client = db, from, to } = {}) {
-    const maps = await mappings();
-    if (!maps.length) return [];
-    const byProduct = new Map(maps.map(m => [String(m.shopify_product_id), m]));
+// Where a line came from. Store orders are keyed by their Shopify id; seeding and offline sales
+// by a prefix, so they can never collide with one and are told apart everywhere else.
+const MKT = 'mkt:';
+const OFF = 'off:';
+const sourceOf = (orderId) => String(orderId).startsWith(MKT) ? 'Marketing'
+    : String(orderId).startsWith(OFF) ? 'Offline'
+        : String(orderId).startsWith('manual:') ? 'Manual' : 'Store';
 
+/** Open store orders that hold a Myxture product, one candidate per order line. */
+async function shopCandidates(client, maps, { from, to }) {
     const where = [
         `UPPER(COALESCE(o.fulfillment_status,'')) NOT IN ('FULFILLED','RESTOCKED')`,
         `UPPER(COALESCE(o.financial_status,'')) NOT IN ('VOIDED','REFUNDED')`,
@@ -117,59 +133,225 @@ async function shopReadyLines({ client = db, from, to } = {}) {
     if (from) { vals.push(from); where.push(`o.created_at::date >= $${vals.length}`); }
     if (to) { vals.push(to); where.push(`o.created_at::date <= $${vals.length}`); }
     // Cheap text prefilter so only orders holding a Myxture product are parsed.
-    const ids = [...byProduct.keys()];
-    vals.push(ids.map(id => `%${id}%`));
+    vals.push(maps.map(m => `%${m.shopify_product_id}%`));
     where.push(`o.line_items_json LIKE ANY($${vals.length})`);
-
     const orders = (await client.query(
         `SELECT o.shopify_id, o.order_number, o.financial_status, o.created_at, o.line_items_json,
                 TO_CHAR(o.created_at, 'YYYY-MM-DD"T"HH24:MI') AS order_at
            FROM orders o WHERE ${where.join(' AND ')}
           ORDER BY o.created_at DESC`, vals)).rows;
-    if (!orders.length) return [];
-
-    const orderIds = orders.map(o => String(o.shopify_id));
-    const [sent, removed, edits] = await Promise.all([
-        sentLinesByOrder(client, orderIds), removedKeys(client, orderIds), overridesFor(client, orderIds)]);
-    const allMaps = new Map((await mappings({ activeOnly: false })).map(m => [String(m.shopify_product_id), m]));
     const out = [];
     for (const o of orders) {
+        const payment = /PAID/i.test(o.financial_status || '') && !/PARTIAL/i.test(o.financial_status || '') ? 'Prepaid' : 'COD';
         for (const item of inv.safeItems(o)) {
-            if (!byProduct.get(String(item.shopify_product_id))) continue;
-            const key = lineKeyOf(item);
-            if (removed.has(`${o.shopify_id}|${key}`)) continue;
-            // Changed here before sending — a size swap the customer asked for, say. The change
-            // replaces what Shopify says until the line goes into a batch.
-            const ov = edits.get(`${o.shopify_id}|${key}`);
-            const pid = ov ? String(ov.shopify_product_id) : String(item.shopify_product_id);
-            const m = allMaps.get(pid) || byProduct.get(String(item.shopify_product_id));
-            const variant = ov ? ov.variant : item.variant;
-            const ordered = ov?.qty ?? (parseInt(item.quantity, 10) || 0);
-            const already = sentFor(sent.get(String(o.shopify_id)), key);
-            const qty = ordered - already;
-            if (qty <= 0) continue;
-            const { color, size } = splitVariant(variant);
             out.push({
-                order_shopify_id: String(o.shopify_id),
-                order_number: o.order_number,
-                order_date: o.created_at,
-                order_at: o.order_at,
-                payment: /PAID/i.test(o.financial_status || '') && !/PARTIAL/i.test(o.financial_status || '') ? 'Prepaid' : 'COD',
-                line_key: key,
-                shopify_product_id: ov ? ov.shopify_product_id : (item.shopify_product_id || null),
-                shopify_variant_id: ov ? ov.shopify_variant_id : (item.shopify_variant_id || null),
-                title: ov?.title || item.title,
-                variant,
-                edited: ov ? { by: ov.updated_by, at: ov.updated_at, from: item.variant, from_qty: parseInt(item.quantity, 10) || 0, note: ov.note } : null,
-                note: ov?.note || null,
-                color, size, qty, ordered, already_sent: already,
-                product_type: m.product_type,
-                fabric: m.fabric || '',
-                design_file: designFileFor(m, color),
+                order_shopify_id: String(o.shopify_id), order_number: o.order_number, order_date: o.created_at,
+                order_at: o.order_at, payment, source: 'Store', item,
             });
         }
     }
     return out;
+}
+
+// Seeding that is still to go out. Pending approval is in on purpose: Myxture takes two or three
+// days, so a parcel waiting on sign-off is worth ordering now — the status shows on the line.
+const SEEDING_OPEN = ['Pending Approval', 'Dispatch Pending'];
+// An offline sale that's been agreed but not sent. A draft isn't a sale yet.
+const OFFLINE_OPEN = ['Confirmed', 'In Production'];
+
+const safeJson = (v) => { try { return (typeof v === 'string' ? JSON.parse(v || '[]') : v) || [] } catch { return [] } };
+const asItem = (it) => ({
+    shopify_product_id: it.shopify_product_id, shopify_variant_id: it.shopify_variant_id,
+    title: it.product || it.title, variant: it.variant, quantity: it.qty ?? it.quantity,
+});
+
+async function marketingCandidates(client, maps) {
+    const rows = (await client.query(
+        `SELECT id, ref_no, name, status, items, created_at,
+                TO_CHAR(created_at, 'YYYY-MM-DD"T"HH24:MI') AS order_at
+           FROM marketing_orders WHERE status = ANY($1) AND items LIKE ANY($2)`,
+        [SEEDING_OPEN, maps.map(m => `%${m.shopify_product_id}%`)])).rows;
+    const out = [];
+    for (const r of rows) {
+        const ref = r.ref_no ? `M${String(r.ref_no).padStart(3, '0')}` : `M#${r.id}`;
+        for (const it of safeJson(r.items)) {
+            out.push({
+                order_shopify_id: `${MKT}${r.id}`, order_number: ref, order_date: r.created_at, order_at: r.order_at,
+                payment: 'Marketing', source: 'Marketing', status: r.status, party: r.name, item: asItem(it),
+            });
+        }
+    }
+    return out;
+}
+
+async function offlineCandidates(client, maps) {
+    const rows = (await client.query(
+        `SELECT id, sale_no, customer_name, status, items, created_at,
+                TO_CHAR(created_at, 'YYYY-MM-DD"T"HH24:MI') AS order_at
+           FROM offline_sales WHERE status = ANY($1) AND items LIKE ANY($2)`,
+        [OFFLINE_OPEN, maps.map(m => `%${m.shopify_product_id}%`)])).rows;
+    const out = [];
+    for (const r of rows) {
+        const ref = r.sale_no ? `OS${String(r.sale_no).padStart(4, '0')}` : `OS#${r.id}`;
+        for (const it of safeJson(r.items)) {
+            out.push({
+                order_shopify_id: `${OFF}${r.id}`, order_number: ref, order_date: r.created_at, order_at: r.order_at,
+                payment: 'Offline', source: 'Offline', status: r.status, party: r.customer_name, item: asItem(it),
+            });
+        }
+    }
+    return out;
+}
+
+/**
+ * Candidates into ready lines: only Myxture products, minus what was deleted here, with changes
+ * made here applied, and less whatever has already gone in a batch.
+ */
+async function finishLines(client, maps, candidates) {
+    const byProduct = new Map(maps.map(m => [String(m.shopify_product_id), m]));
+    const mine = candidates.filter(c => byProduct.has(String(c.item.shopify_product_id)));
+    if (!mine.length) return [];
+    const orderIds = [...new Set(mine.map(c => c.order_shopify_id))];
+    const sent = await sentLinesByOrder(client, orderIds);
+    const removed = await removedKeys(client, orderIds);
+    const edits = await overridesFor(client, orderIds);
+    const allMaps = new Map((await mappings({ activeOnly: false })).map(m => [String(m.shopify_product_id), m]));
+    const out = [];
+    for (const c of mine) {
+        const { item } = c;
+        const key = lineKeyOf(item);
+        if (removed.has(`${c.order_shopify_id}|${key}`)) continue;
+        // Changed here before sending — a size swap the customer asked for, say. The change
+        // replaces what the order says until the line goes into a batch.
+        const ov = edits.get(`${c.order_shopify_id}|${key}`);
+        const pid = ov ? String(ov.shopify_product_id) : String(item.shopify_product_id);
+        const m = allMaps.get(pid) || byProduct.get(String(item.shopify_product_id));
+        const variant = ov ? ov.variant : item.variant;
+        const ordered = ov?.qty ?? (parseInt(item.quantity, 10) || 0);
+        const already = sentFor(sent.get(c.order_shopify_id), key);
+        const qty = ordered - already;
+        if (qty <= 0) continue;
+        const { color, size } = splitVariant(variant);
+        const { item: _item, ...base } = c;
+        out.push({
+            ...base,
+            line_key: key,
+            shopify_product_id: ov ? ov.shopify_product_id : (item.shopify_product_id || null),
+            shopify_variant_id: ov ? ov.shopify_variant_id : (item.shopify_variant_id || null),
+            title: ov?.title || item.title,
+            variant,
+            edited: ov ? { by: ov.updated_by, at: ov.updated_at, from: item.variant, from_qty: parseInt(item.quantity, 10) || 0, note: ov.note } : null,
+            note: ov?.note || null,
+            color, size, qty, ordered, already_sent: already,
+            product_type: m.product_type,
+            fabric: m.fabric || '',
+            design_file: designFileFor(m, color),
+        });
+    }
+    return out;
+}
+
+/**
+ * Seeding and offline sales used to be typed in as manual lines. Now they come in on their own, a
+ * manual line for one would be the same jersey twice — so each is folded into the order it was
+ * for: anything already sent is re-pointed at that order's line (so it counts as sent there), and
+ * the manual line goes. Only on an exact match of order, product and size; anything else is left.
+ */
+async function linkManualLines() {
+    const manual = (await db.query(
+        `SELECT * FROM myxture_manual_lines WHERE deleted_at IS NULL AND source IN ('Marketing','Offline')`)).rows;
+    let linked = 0;
+    for (const m of manual) {
+        const mk = /^M0*(\d+)/i.exec(m.order_ref || '');
+        const os = /^OS0*(\d+)/i.exec(m.order_ref || '');
+        const order = mk ? (await db.query('SELECT id, items FROM marketing_orders WHERE ref_no = $1', [mk[1]])).rows[0]
+            : os ? (await db.query('SELECT id, items FROM offline_sales WHERE sale_no = $1', [os[1]])).rows[0] : null;
+        if (!order) continue;
+        const item = safeJson(order.items).map(asItem).find(i =>
+            String(i.shopify_product_id) === String(m.shopify_product_id)
+            && (m.shopify_variant_id && i.shopify_variant_id
+                ? String(i.shopify_variant_id) === String(m.shopify_variant_id)
+                : inv.normVariant(i.variant) === inv.normVariant(m.variant)));
+        if (!item) continue;
+        const orderId = `${mk ? MKT : OFF}${order.id}`;
+        await db.transaction(async (c) => {
+            await c.query('UPDATE myxture_batch_lines SET order_shopify_id = $1, line_key = $2 WHERE order_shopify_id = $3',
+                [orderId, lineKeyOf(item), manualKey(m.id)]);
+            await c.query(`UPDATE myxture_manual_lines SET deleted_at = NOW(), deleted_by = $2 WHERE id = $1`,
+                [m.id, `linked to ${m.order_ref}`]);
+        });
+        linked++;
+    }
+    if (linked) console.log(`Myxture: ${linked} manual lines folded into their seeding / offline orders`);
+    return linked;
+}
+
+/* ------------------------------------------ RTO shelf ------------------------------------------ */
+
+/**
+ * The same jersey came back on an RTO and is sitting on our shelf: sending that piece saves
+ * ordering a new one. `rto` on a line is what the shelf holds for that design, colour and size —
+ * shared, not reserved, so two orders for it both see it.
+ */
+async function withRto(lines) {
+    let shelf = [];
+    try { shelf = await inv.rtoAvailable(); } catch { return lines; }
+    if (!shelf.length) return lines;
+    const index = inv.availabilityIndex(shelf);
+    return lines.map(l => {
+        const hit = inv.matchLine({ shopify_variant_id: l.shopify_variant_id, shopify_product_id: l.shopify_product_id, variant: l.variant }, index);
+        return hit ? { ...l, rto: { available: hit.available, since: hit.oldest } } : l;
+    });
+}
+
+/**
+ * Fill a ready line from the RTO shelf instead of Myxture: the pieces leave the shelf against this
+ * order, and the line comes off Ready (or drops to what's still needed).
+ */
+async function fillFromRto(body, user) {
+    const orderId = String(body.order_shopify_id || '');
+    const key = String(body.line_key || '');
+    const line = (await readyLines()).find(l => l.order_shopify_id === orderId && l.line_key === key);
+    if (!line) throw bad('That line is no longer waiting', 409);
+    const rows = (await db.query(
+        `SELECT id, variant_id, shopify_product_id, variant, qty - qty_used - qty_written_off AS left
+           FROM inventory_rto WHERE qty - qty_used - qty_written_off > 0 ORDER BY created_at ASC`)).rows
+        .filter(r => line.shopify_variant_id && r.variant_id
+            ? String(r.variant_id) === String(line.shopify_variant_id)
+            : String(r.shopify_product_id) === String(line.shopify_product_id)
+                && inv.normVariant(r.variant) === inv.normVariant(line.variant));
+    let want = Math.min(parseInt(body.qty, 10) || line.qty, line.qty);
+    let taken = 0;
+    let piece = null;
+    for (const r of rows) {
+        if (want <= 0) break;
+        const n = Math.min(want, r.left);
+        const res = await inv.takeRtoPiece(r.id, n, line.order_number, 'Sent instead of a Myxture print', user);
+        if (res.error) continue;
+        piece = piece || { id: r.id, variant_id: r.variant_id, product_title: line.title, variant: line.variant };
+        taken += n; want -= n;
+    }
+    if (!taken) throw bad('Nothing left on the RTO shelf for this one', 409);
+
+    if (line.manual) {
+        const left = line.ordered - taken;
+        if (left <= line.already_sent) await deleteManualLine(line.manual_id, user);
+        else await db.query('UPDATE myxture_manual_lines SET qty = $2, updated_by = $3, updated_at = NOW() WHERE id = $1', [line.manual_id, left, user]);
+    } else if (taken >= line.qty) {
+        await removeReadyLine({ ...line, reason: `Sent from the RTO shelf (${taken})` }, user);
+    } else {
+        // Part of it from the shelf: the rest still goes to Myxture.
+        await db.query(
+            `INSERT INTO myxture_overrides (order_shopify_id, line_key, shopify_product_id, shopify_variant_id, title, variant, qty, note, updated_by, updated_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW())
+             ON CONFLICT (order_shopify_id, line_key) DO UPDATE SET qty = excluded.qty, note = excluded.note,
+                updated_by = excluded.updated_by, updated_at = NOW()`,
+            [orderId, key, line.shopify_product_id, line.shopify_variant_id, line.title, line.variant,
+                line.ordered - taken, `${taken} sent from the RTO shelf`, user]);
+    }
+    // The Inventory page's "you already have this one" notice for the order is answered too.
+    if (line.source === 'Store') { try { await inv.resolveAlertsForOrder(line.order_number, piece, user); } catch { /* best effort */ } }
+    return { taken, rest: line.qty - taken };
 }
 
 /** Non-voided batch lines for these orders, grouped by order. */
@@ -210,7 +392,9 @@ async function overridesFor(client, orderIds) {
 
 // Orders that never came through the Shopify store — influencer seeding, offline sales — added by
 // hand. They go through the same batches, keyed `manual:<id>`, so they can't be sent twice either.
-const MANUAL_SOURCES = ['Marketing', 'Offline', 'Replacement', 'Other'];
+// Seeding and offline sales come in on their own now (see marketingCandidates), so they're no
+// longer offered here — adding one by hand as well would put it on the list twice.
+const MANUAL_SOURCES = ['Replacement', 'Other'];
 const manualKey = (id) => `manual:${id}`;
 
 async function manualReadyLines({ client = db, from, to } = {}) {
@@ -238,6 +422,7 @@ async function manualReadyLines({ client = db, from, to } = {}) {
             order_date: r.created_at,
             order_at: r.order_at,
             payment: r.source || 'Manual',
+            source: 'Manual',
             manual: true, manual_id: r.id, note: r.note, created_by: r.created_by,
             line_key: 'manual',
             shopify_product_id: r.shopify_product_id, shopify_variant_id: r.shopify_variant_id,
@@ -307,7 +492,7 @@ async function resolveTarget(body) {
 async function editReadyLine(body, user) {
     const order = String(body.order_shopify_id || '');
     const key = String(body.line_key || '');
-    if (!order || !key || order.startsWith('manual:')) throw bad('Pick a store order line');
+    if (!order || !key || order.startsWith('manual:')) throw bad('Pick an order line');
     const t = await resolveTarget(body);
     await db.query(
         `INSERT INTO myxture_overrides (order_shopify_id, line_key, shopify_product_id, shopify_variant_id, title, variant, qty, note, updated_by, updated_at)
@@ -599,6 +784,21 @@ async function attentionLines() {
            LEFT JOIN orders o ON o.shopify_id = l.order_shopify_id
           WHERE l.attention_cleared_at IS NULL
           ORDER BY b.batch_no DESC`);
+    // Seeding and offline sales aren't in the orders table: read their own status and items.
+    const ids = (prefix) => [...new Set(r.rows.map(l => l.order_shopify_id)
+        .filter(id => id.startsWith(prefix)).map(id => parseInt(id.slice(prefix.length), 10)))];
+    const [mkt, off] = await Promise.all([
+        db.query('SELECT id, status, items FROM marketing_orders WHERE id = ANY($1)', [ids(MKT)]),
+        db.query('SELECT id, status, items FROM offline_sales WHERE id = ANY($1)', [ids(OFF)]),
+    ]);
+    const other = new Map([
+        ...mkt.rows.map(x => [`${MKT}${x.id}`, x]), ...off.rows.map(x => [`${OFF}${x.id}`, x])]);
+    for (const l of r.rows) {
+        const o = other.get(l.order_shopify_id);
+        if (!o) continue;
+        l.line_items_json = JSON.stringify(safeJson(o.items).map(asItem));
+        if (o.status === 'Cancelled') l.cancelled_at = true;
+    }
     const sentTotals = new Map();
     for (const l of r.rows) {
         const k = `${l.order_shopify_id}|${l.line_key}`;
@@ -682,4 +882,5 @@ module.exports = {
     voidBatch, receiveLines, attentionLines, clearAttention, stats, fileOrder,
     MANUAL_SOURCES, addManualLine, deleteManualLine, catalogue, withImages,
     editReadyLine, clearReadyEdit, editManualLine, removeReadyLine, editBatchLine, removeBatchLine,
+    fillFromRto, sourceOf, linkManualLines, SEEDING_OPEN, OFFLINE_OPEN,
 };
