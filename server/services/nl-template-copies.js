@@ -5,7 +5,7 @@
  * (prizmacommunicator…/urlhopper?redirectionUrl={{1}}). Meta doesn't let a template's button
  * address change without a re-review that would break Updatrr while it is still sending, so
  * each one is submitted again as a new template — same wording, photo header, footer and buttons
- * — named nl_<old name>, with the link pointing at ops.normless.store/go/{{1}}. Exact duplicates
+ * — named nl_<old name>, with the link pointing at share.normless.store/go/{{1}}. Exact duplicates
  * among the old ones are submitted once.
  *
  * Also here: what fills each gap in those templates (and in Updatrr's link-free ones, which can

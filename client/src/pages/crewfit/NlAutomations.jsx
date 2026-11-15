@@ -318,7 +318,7 @@ function CopiesCard({ data, onDone }) {
   // Once everything is with Meta there is nothing to do here, so the card goes.
   if (!data.copies?.length || (!todo.length && !results)) return null
   const submit = async () => {
-    if (!await toast.confirm({ title: `Submit ${todo.length} templates to Meta?`, message: 'Each is one of Updatrr’s templates with the same wording and photo, its link changed to ops.normless.store. Updatrr’s own templates are not touched. Meta usually reviews them within minutes to hours.', confirmLabel: 'Submit' })) return
+    if (!await toast.confirm({ title: `Submit ${todo.length} templates to Meta?`, message: 'Each is one of Updatrr’s templates with the same wording and photo, its link changed to share.normless.store. Updatrr’s own templates are not touched. Meta usually reviews them within minutes to hours.', confirmLabel: 'Submit' })) return
     setBusy(true)
     const r = await apiFetch(`${brand.api}/nl/automations/copy-updatrr`, { method: 'POST' })
     setBusy(false)
@@ -338,7 +338,7 @@ function CopiesCard({ data, onDone }) {
           : <span className="status-badge success">All {data.copies.length} submitted</span>}
       </div>
       <p className="was-hint">
-        {originals} of Updatrr’s templates send their button through Updatrr’s redirector. Each is copied as nl_… with the same words and photo, the button going through ops.normless.store instead
+        {originals} of Updatrr’s templates send their button through Updatrr’s redirector. Each is copied as nl_… with the same words and photo, the button going through share.normless.store instead
         {originals > data.copies.length ? ` — ${data.copies.length} templates, as some were exact duplicates` : ''}. Templates without links can be used as they are.
       </p>
       {results && (

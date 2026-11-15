@@ -32,8 +32,9 @@ const isAdmin = (req) => req.user?.role === 'owner' || req.user?.role === 'admin
 const canEdit = (req) => hasPermission(req, 'can_edit_vendor_orders');
 const canSeeBank = (req) => hasPermission(req, 'can_record_vendor_payments');
 const canShare = (req) => hasPermission(req, 'can_share_vendor_link');
-const PUBLIC_BASE = () => (process.env.PUBLIC_BASE_URL || 'https://ops.normless.store').replace(/\/+$/, '');
-const portalUrl = (token) => `${PUBLIC_BASE()}/v/${token}`;
+// The vendor's page is shared outside the team, so it lives on the share address, never the CRM's.
+const { shareBase } = require('../utils/public-urls');
+const portalUrl = (token) => `${shareBase()}/v/${token}`;
 
 const BRANDS = ['normless', 'crewfit', 'both'];
 // Offered in the category picker until vendors have categories of their own; any typed value is

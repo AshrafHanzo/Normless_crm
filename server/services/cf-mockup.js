@@ -41,7 +41,8 @@ const PENDING_DAYS = 14;
 const MOCK_DIR = require('path').join(__dirname, '..', 'uploads', 'whatsapp', 'mockups');
 const GST_PCT = 5;
 const DIGITISING = 800;
-const PUBLIC_BASE = () => (process.env.PUBLIC_BASE_URL || 'https://ops.normless.store').replace(/\/+$/, '');
+// Mockups sent to customers: on the share address, never the CRM's.
+const { shareBase: PUBLIC_BASE } = require('../utils/public-urls');
 const safeJson = (v, f) => { try { return typeof v === 'string' ? (JSON.parse(v || 'null') ?? f) : (v ?? f); } catch { return f; } };
 const soName = (u) => { const n = String(u || '').split('@')[0].replace(/[._-]+/g, ' ').trim(); return n ? n.replace(/\b\w/g, c => c.toUpperCase()) : ''; };
 

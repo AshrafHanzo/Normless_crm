@@ -281,7 +281,7 @@ async function fire(lineId, eventKey, ref, facts, { label = null } = {}) {
         const dest = facts.urls?.[cfg.link] || facts.urls?.store || STORE;
         for (const [index, b] of t.buttons.entries()) {
             if (b.type === 'URL' && /\{\{1\}\}/.test(b.url || '')) {
-                const ours = String(b.url).startsWith(links.BUTTON_BASE());
+                const ours = links.isOurs(b.url);
                 buttons.push({ index, text: ours ? await links.shorten(dest, { kind: eventKey, ref }) : dest });
             } else if (b.type === 'COPY_CODE') {
                 if (!cfg.coupon) return await fail('The template has a “Copy offer code” button — set a coupon code');

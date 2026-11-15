@@ -24,7 +24,7 @@ const { refLabel } = require('./vendor-order');
 
 const COMPANY = 'Normless';
 const BRAND_NAMES = { normless: 'Normless', crewfit: 'Crewfit' };
-const PUBLIC_BASE = () => (process.env.PUBLIC_BASE_URL || 'https://ops.normless.store').replace(/\/+$/, '');
+const { shareBase } = require('../utils/public-urls');
 
 const inr = (v) => `₹${(Number(v) || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -89,7 +89,7 @@ async function pageFor(v) {
         await db.query(`UPDATE vendors SET portal_token = $1, portal_enabled = true, portal_created_at = CURRENT_TIMESTAMP WHERE id = $2 AND portal_token IS NULL`, [token, v.id]);
         token = (await db.query('SELECT portal_token FROM vendors WHERE id = $1', [v.id])).rows[0].portal_token;
     }
-    return `${PUBLIC_BASE()}/v/${token}`;
+    return `${shareBase()}/v/${token}`;
 }
 
 const orderRow = async (id) => (await db.query(

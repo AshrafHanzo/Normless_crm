@@ -97,13 +97,13 @@ const TEMPLATES = {
         name: 'crewfit_advance_received',
         body: 'Hi {{1}}, we have received your advance of ₹{{2}} for Crewfit order {{3}} and production has started. Your proforma invoice is here: {{4}} Thank you!',
         map: ['first_name', 'advance_amount', 'order_ref', 'document_link'],
-        examples: ['Rahul', '1,441', 'CF-142', 'https://ops.normless.store/uploads/whatsapp/outgoing/proforma.pdf'],
+        examples: ['Rahul', '1,441', 'CF-142', 'https://share.normless.store/uploads/whatsapp/outgoing/proforma.pdf'],
     },
     proforma: {
         name: 'crewfit_proforma_invoice',
         body: 'Hi {{1}}, the proforma invoice for your Crewfit order {{2}} is ready. You can view it here: {{3}} Thank you for choosing Crewfit!',
         map: ['first_name', 'order_ref', 'document_link'],
-        examples: ['Rahul', 'CF-142', 'https://ops.normless.store/uploads/whatsapp/outgoing/proforma.pdf'],
+        examples: ['Rahul', 'CF-142', 'https://share.normless.store/uploads/whatsapp/outgoing/proforma.pdf'],
     },
     photos: {
         name: 'crewfit_production_complete',
@@ -121,7 +121,7 @@ const TEMPLATES = {
         name: 'crewfit_tax_invoice',
         body: 'Hi {{1}}, thank you for your payment. The tax invoice for your Crewfit order {{2}} is here: {{3}} We hope to serve you again!',
         map: ['first_name', 'order_ref', 'document_link'],
-        examples: ['Rahul', 'CF-142', 'https://ops.normless.store/uploads/whatsapp/outgoing/invoice.pdf'],
+        examples: ['Rahul', 'CF-142', 'https://share.normless.store/uploads/whatsapp/outgoing/invoice.pdf'],
     },
     dispatch: {
         name: 'crewfit_order_dispatched',
@@ -137,7 +137,8 @@ const TEMPLATES = {
     },
 };
 
-const PUBLIC_BASE = () => (process.env.PUBLIC_BASE_URL || 'https://ops.normless.store').replace(/\/+$/, '');
+// Documents go to customers: built on the share address, never the CRM's.
+const { shareBase: PUBLIC_BASE } = require('../utils/public-urls');
 
 class SendError extends Error {
     constructor(message, status = 400) { super(message); this.status = status; }

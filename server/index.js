@@ -9,6 +9,8 @@ const db = require('./db/connection');
 dotenv.config({ path: path.join(__dirname, '..', '.env') });
 
 const app = express();
+// share.normless.store answers only what is shared with customers and vendors (utils/public-urls).
+app.use(require('./utils/public-urls').shareGuard());
 const PORT = process.env.PORT || 5000;
 
 // Middleware
@@ -390,6 +392,9 @@ app.use(express.static(clientBuildPath, { index: false, maxAge: '1h' }));
 
 // Catch-all for SPA routing
 app.use((req, res, next) => {
+  // On the share address the app shell is only the vendor page; a missing file there is a plain
+  // 404, never the CRM's screens.
+  if (req.isShareHost && !/^\/v\//.test(req.path)) return res.status(404).type('text/plain').send('Not found');
   if (!req.path.startsWith('/api')) {
     // Never cached: it names the hashed bundles, so a stale copy pins everyone to the old build.
     res.setHeader('Cache-Control', 'no-cache');

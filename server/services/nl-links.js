@@ -1,5 +1,9 @@
 /**
- * Our own short links: https://ops.normless.store/go/k3Jx9a → wherever it was made for.
+ * Our own short links: https://share.normless.store/go/k3Jx9a → wherever it was made for.
+ *
+ * Built on the share address (never the CRM's): it is what customers see and tap. Templates
+ * approved before the move still carry ops.normless.store/go/{{1}}; those keep working, and are
+ * still recognised as ours (isOurs).
  *
  * Template buttons end in a gap that is filled each time a message is sent ({{1}}). The links
  * Normless's old provider used sent every tap through its redirector; these keep the checkout,
@@ -10,9 +14,13 @@ const crypto = require('crypto');
 const db = require('../db/connection');
 
 const ALPHABET = 'abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-const PUBLIC_BASE = () => (process.env.PUBLIC_BASE_URL || 'https://ops.normless.store').replace(/\/+$/, '');
+const { opsBase, shareBase } = require('../utils/public-urls');
+// The CRM's own address — for webhooks and anything only the team sees.
+const PUBLIC_BASE = opsBase;
 /** What a template's link button is set to; its {{1}} is a code from here. */
-const BUTTON_BASE = () => `${PUBLIC_BASE()}/go/`;
+const BUTTON_BASE = () => `${shareBase()}/go/`;
+/** Is this button address one of ours — on the share address, or the CRM's from before the move? */
+const isOurs = (url) => [BUTTON_BASE(), `${opsBase()}/go/`].some(b => String(url || '').startsWith(b));
 
 function code(length = 7) {
     const bytes = crypto.randomBytes(length);
@@ -57,4 +65,4 @@ function router() {
     return r;
 }
 
-module.exports = { shorten, resolve, router, BUTTON_BASE, PUBLIC_BASE };
+module.exports = { shorten, resolve, router, BUTTON_BASE, PUBLIC_BASE, isOurs };

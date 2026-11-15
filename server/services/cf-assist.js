@@ -28,7 +28,8 @@ const db = require('../db/connection');
 const wa = require('./whatsapp');
 const lines = require('./wa-line');
 
-const PUBLIC_BASE = () => (process.env.PUBLIC_BASE_URL || 'https://ops.normless.store').replace(/\/+$/, '');
+// Photos sent to customers: on the share address, never the CRM's.
+const { shareBase: PUBLIC_BASE } = require('../utils/public-urls');
 const safeJson = (v, f) => { try { return typeof v === 'string' ? (JSON.parse(v || 'null') ?? f) : (v ?? f); } catch { return f; } };
 const GSTIN = /\b\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]\b/i;
 const QTY = /(?:\b(?:qty|quantity)\s*[:\-=]?\s*(\d{1,5})\b)|(?:\b(\d{1,5})\s*(?:pcs|pc|pieces?|nos|numbers|units|qty|t-?shirts?|tees|shirts?|polos?|hoodies?|jerseys?|caps?|uniforms?)\b)/i;

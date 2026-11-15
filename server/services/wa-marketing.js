@@ -262,7 +262,7 @@ async function message(b, t, person, broadcastId) {
             const dest = b.link_url || (lines.current().brand === 'normless' ? 'https://normless.store' : null);
             if (!dest) throw new Error('This template has a link button — say where it goes');
             // One link per customer, so a tap shows against the person who made it.
-            buttons.push({ index, text: String(btn.url).startsWith(links.BUTTON_BASE()) ? await links.shorten(dest, { kind: 'broadcast', ref: `${broadcastId}:${person.phone || ''}` }) : dest });
+            buttons.push({ index, text: links.isOurs(btn.url) ? await links.shorten(dest, { kind: 'broadcast', ref: `${broadcastId}:${person.phone || ''}` }) : dest });
         } else if (btn.type === 'QUICK_REPLY') {
             buttons.push({ index, payload: /stop/i.test(btn.text || '') ? 'optout' : `bcast:${broadcastId}` });
         }
