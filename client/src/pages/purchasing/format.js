@@ -46,3 +46,10 @@ export async function openFile(apiFetch, toast, url) {
 
 /** status-badge class per quotation status (Expired is an open one past its date). */
 export const QUOTE_CLASS = { Received: 'partial', Expired: 'pending', Accepted: 'fulfilled', Rejected: 'refunded' }
+
+/** After a save: say whether, and when, the vendor will hear about it on WhatsApp. */
+export function waNote(toast, wa) {
+  if (!wa?.queued) return
+  if (wa.merged) { toast.success('Added to today’s WhatsApp to the vendor about this order'); return }
+  toast.success(wa.hold ? `WhatsApp to the vendor goes in ${wa.hold} minute${wa.hold === 1 ? '' : 's'} — stop or send it now from their page` : 'WhatsApp to the vendor is on its way')
+}

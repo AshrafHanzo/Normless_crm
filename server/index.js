@@ -2471,6 +2471,8 @@ app.listen(PORT, async () => {
     // actually looking at.
     // Normless's automatic WhatsApp messages: abandoned-cart reminders and order updates.
     require('./services/nl-automations').start();
+    // WhatsApp updates to vendors, after their short hold.
+    require('./services/vendor-wa').start();
     // Marketing broadcasts that were going when the server stopped carry on.
     require('./services/wa-marketing').startWorker();
 

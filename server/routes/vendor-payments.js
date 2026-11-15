@@ -19,6 +19,7 @@ const { tableParams, pagination } = require('../utils/table');
 const { refLabel } = require('../services/vendor-order');
 const money = require('../services/vendor-money');
 const plan = require('../services/vendor-plan');
+const vendorWa = require('../services/vendor-wa');
 
 const router = express.Router();
 
@@ -308,7 +309,10 @@ router.post('/', async (req, res) => {
             await writeAllocations(c, p.id, allocations);
             return p.id;
         });
-        res.json({ success: true, id });
+        // Told on WhatsApp after the hold; an edit inside it is what they read, a deletion sends nothing.
+        const whatsapp = await vendorWa.enqueue({ event: 'vendor_payment', vendorId: row.vendor_id, ref: `payment:${id}`,
+            user: req.user?.username, notify: req.body?.notify_vendor !== false && req.body?.notify_vendor !== 'false' });
+        res.json({ success: true, id, whatsapp });
     } catch (err) {
         console.error('vendor payment create:', err);
         res.status(500).json({ error: 'Failed to record the payment' });

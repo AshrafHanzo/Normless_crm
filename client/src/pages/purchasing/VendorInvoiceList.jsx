@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import Icon from '../../components/Icon'
-import { inr, day, openFile } from './format'
+import { inr, day, openFile, waNote } from './format'
 
 const TONE = { Accepted: 'fulfilled', Rejected: 'refunded', 'Under review': 'pending' }
 
@@ -30,6 +30,7 @@ export default function VendorInvoiceList({ vendorId, orders, can, apiFetch, toa
     const r = await apiFetch(`/api/vendor-invoices/${id}/review`, { method: 'POST', body: JSON.stringify({ status, reason }) })
     if (r?.error) { toast.error(r.error); return }
     toast.success(status === 'Accepted' ? 'Invoice accepted' : status === 'Rejected' ? 'Invoice rejected — the vendor sees the reason' : 'Back under review')
+    waNote(toast, r?.whatsapp)
     setRejecting(null)
     reload()
   }

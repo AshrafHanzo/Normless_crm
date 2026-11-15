@@ -43,6 +43,16 @@ const EVENTS = [
     { key: 'out_for_delivery', group: 'fulfillment', label: 'Out for delivery', hint: 'When the courier marks the parcel out for delivery (Delhivery’s tracking, as Shopify has it).', links: ['tracking', 'order', 'store'] },
     { key: 'delivered', group: 'fulfillment', label: 'Delivered', hint: 'When the courier marks the parcel delivered.', links: ['order', 'store', 'tracking'] },
     { key: 'refund', group: 'payment', label: 'Refund issued', hint: 'When a refund is made in Shopify.', links: ['order', 'store'] },
+    // Vendors (Purchasing), for both brands' orders — queued with a short hold and sent by
+    // services/vendor-wa.
+    { key: 'vendor_link', group: 'vendor', label: 'Vendor page shared', hint: 'When their link is made or renewed and you choose to send it.', links: ['vendor_page'] },
+    { key: 'vendor_order', group: 'vendor', label: 'New order', hint: 'A vendor order is raised (or made from their quotation).', links: ['vendor_page'] },
+    { key: 'vendor_order_changed', group: 'vendor', label: 'Order changed', hint: 'The total, quantities or delivery date change after the order went out.', links: ['vendor_page'] },
+    { key: 'vendor_payment', group: 'vendor', label: 'Payment sent', hint: 'A payment is recorded, with its UTR and the balance left.', links: ['vendor_page'] },
+    { key: 'vendor_delivery', group: 'vendor', label: 'Delivery received', hint: 'Goods in are recorded. Lots on the same day go as one message.', links: ['vendor_page'] },
+    { key: 'vendor_rejected', group: 'vendor', label: 'QC rejection', hint: 'A delivery has pieces rejected at QC.', links: ['vendor_page'] },
+    { key: 'vendor_invoice', group: 'vendor', label: 'Invoice reviewed', hint: 'An invoice they uploaded is accepted or rejected.', links: ['vendor_page'] },
+    { key: 'vendor_instalment_due', group: 'vendor', label: 'Instalment coming up', hint: 'The day before an instalment on a payment plan is due (sent at 10 am).', links: ['vendor_page'] },
 ];
 const EVENT = Object.fromEntries(EVENTS.map(e => [e.key, e]));
 
@@ -71,7 +81,9 @@ async function config(lineId) {
         return config(lineId);
     }
     const events = Object.fromEntries(EVENTS.map(e => [e.key, { ...blankEvent(e), ...(saved.events?.[e.key] || {}) }]));
-    return { webhook_secret: secret, started_at: saved.started_at || null, events };
+    // Minutes a vendor message waits before it goes, so a mistake can be fixed or cancelled first.
+    const vendorHold = Number.isFinite(Number(saved.vendor_hold)) ? Math.min(120, Math.max(0, Math.round(Number(saved.vendor_hold)))) : 10;
+    return { webhook_secret: secret, started_at: saved.started_at || null, events, vendor_hold: vendorHold };
 }
 
 async function saveRaw(lineId, change) {
@@ -105,6 +117,13 @@ async function saveEvents(lineId, incoming) {
         return { ...a, events, started_at: a.started_at || (anyOn ? new Date().toISOString() : null) };
     });
     return config(lineId);
+}
+
+/** How long vendor messages wait before going out (minutes, 0–120). */
+async function saveVendorHold(lineId, minutes) {
+    const n = Math.min(120, Math.max(0, Math.round(Number(minutes) || 0)));
+    await saveRaw(lineId, (a) => ({ ...a, vendor_hold: n }));
+    return n;
 }
 
 /* ── Filling a template ───────────────────────────────────────────────────────────────────── */
@@ -673,5 +692,5 @@ function start() {
 
 module.exports = {
     EVENTS, config, saveEvents, fire, onAbandoned, onText, onOptOut, cartTick, orderTick, shipmentTick, orderEvents, onReply, recent, cartStats,
-    createSetTemplate, recoverCarts, start, CART_HOURS,
+    createSetTemplate, recoverCarts, start, CART_HOURS, saveVendorHold,
 };

@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react'
 import Icon from '../../components/Icon'
 import useDirtyGuard from '../../hooks/useDirtyGuard'
 import useErrorInView from './useErrorInView'
-import { BRAND_LABEL, MODES, inr, day, todayYmd } from './format'
+import { BRAND_LABEL, MODES, inr, day, todayYmd, waNote } from './format'
 
 const num = (v) => Math.round((Number(v) || 0) * 100) / 100
 
@@ -43,6 +43,8 @@ export default function RecordPaymentDrawer({ vendorId: givenVendor, paymentId, 
   const [loaded, setLoaded] = useState(!paymentId)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [notify, setNotify] = useState(true)
+  const [waOn, setWaOn] = useState(false)
   const errorRef = useErrorInView(error)
 
   // Editing: load the payment first, which also says whose it is.
@@ -72,6 +74,15 @@ export default function RecordPaymentDrawer({ vendorId: givenVendor, paymentId, 
     return () => { live = false }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Will the vendor be told on WhatsApp? Only asked for a new payment.
+  useEffect(() => {
+    if (!vendorId || paymentId) return
+    let live = true
+    apiFetch(`/api/vendors/${vendorId}/whatsapp`).then(r => { if (live && r && !r.error) setWaOn(!!r.events?.vendor_payment) })
+    return () => { live = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vendorId, paymentId])
 
   // The vendor's bank details, balance and the orders the payment can go against.
   useEffect(() => {
@@ -142,7 +153,7 @@ export default function RecordPaymentDrawer({ vendorId: givenVendor, paymentId, 
     if (onAccount < 0) { setError('More is split across orders than was paid'); return }
     setSaving(true); setError('')
     const body = JSON.stringify({
-      ...form, vendor_id: vendorId, amount: num(form.amount),
+      ...form, vendor_id: vendorId, amount: num(form.amount), notify_vendor: notify,
       allocations: Object.entries(shown).filter(([, v]) => num(v) > 0).map(([order_id, amount]) => ({ order_id: Number(order_id), amount: num(amount) })),
     })
     const res = paymentId
@@ -158,6 +169,7 @@ export default function RecordPaymentDrawer({ vendorId: givenVendor, paymentId, 
     setSaving(false)
     guard.reset()
     toast.success(paymentId ? 'Payment saved' : `${inr(form.amount)} recorded`)
+    waNote(toast, res.whatsapp)
     onSaved(res.id)
   }
 
@@ -287,6 +299,13 @@ export default function RecordPaymentDrawer({ vendorId: givenVendor, paymentId, 
             <label htmlFor="pay-note">Note<span className="unit-hint"> optional</span></label>
             <input id="pay-note" value={form.note} onChange={e => set({ note: e.target.value })} placeholder="e.g. Instalment 3 of 5" />
           </div>
+
+          {waOn && (
+            <label className="pp-default">
+              <input type="checkbox" checked={notify} onChange={e => setNotify(e.target.checked)} />
+              <span><b>Tell the vendor on WhatsApp</b><em>From the Normless number, with the amount, UTR and balance left — after a short wait, so a mistake can still be fixed.</em></span>
+            </label>
+          )}
 
           <div className="totals-bar">
             <div><span>Paid</span><strong>{inr(form.amount)}</strong></div>

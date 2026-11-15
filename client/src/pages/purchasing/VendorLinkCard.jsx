@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import Icon from '../../components/Icon'
 
 const when = (ts) => (ts ? new Date(ts).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: 'numeric', minute: '2-digit' }) : null)
@@ -10,8 +10,17 @@ const when = (ts) => (ts ? new Date(ts).toLocaleString('en-IN', { day: '2-digit'
 export default function VendorLinkCard({ vendor, apiFetch, toast, onChanged }) {
   const portal = vendor.portal || {}
   const [busy, setBusy] = useState(false)
+  // Can the link go from the Normless number (template switched on, vendor has a number)?
+  const [waOn, setWaOn] = useState(false)
+  useEffect(() => {
+    let live = true
+    apiFetch(`/api/vendors/${vendor.id}/whatsapp`).then(r => { if (live && r && !r.error) setWaOn(!!r.events?.vendor_link) })
+    return () => { live = false }
+    // apiFetch is a new function every render (see useApi), so it can't be a dependency here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vendor.id])
 
-  const act = async (action) => {
+  const act = async (action, sendWhatsapp = false) => {
     if (action === 'regenerate' && !await toast.confirm({
       title: 'Make a new link?', message: `The link ${vendor.name} has now stops working. Send them the new one.`, confirmLabel: 'Make new link',
     })) return
@@ -19,10 +28,15 @@ export default function VendorLinkCard({ vendor, apiFetch, toast, onChanged }) {
       title: 'Switch the link off?', message: `${vendor.name} won’t be able to open their page until it’s switched back on.`, confirmLabel: 'Switch off',
     })) return
     setBusy(true)
-    const r = await apiFetch(`/api/vendors/${vendor.id}/link`, { method: 'POST', body: JSON.stringify({ action }) })
+    const r = await apiFetch(`/api/vendors/${vendor.id}/link`, { method: 'POST', body: JSON.stringify({ action, send_whatsapp: sendWhatsapp }) })
     setBusy(false)
     if (!r || r.error) { toast.error(r?.error || 'Couldn’t update the link'); return }
-    toast.success(action === 'disable' ? 'Link switched off' : action === 'regenerate' ? 'New link made' : 'Link is on')
+    if (sendWhatsapp) {
+      if (r.whatsapp?.queued) toast.success(`Sent to ${vendor.name} from the Normless number`)
+      else toast.error(`Not sent: ${r.whatsapp?.reason || 'WhatsApp isn’t set up for vendor messages'}`)
+    } else {
+      toast.success(action === 'disable' ? 'Link switched off' : action === 'regenerate' ? 'New link made' : 'Link is on')
+    }
     onChanged()
   }
 
@@ -44,7 +58,9 @@ export default function VendorLinkCard({ vendor, apiFetch, toast, onChanged }) {
           <div className="vp-link-row">
             <input readOnly value={portal.url} aria-label="Vendor link" className="vp-mono" onFocus={e => e.target.select()} />
             <button className="btn btn-secondary" onClick={copy}><Icon name="copy" size={14} /> Copy</button>
-            <button className="btn btn-secondary" onClick={sendWhatsApp} disabled={!vendor.phone} title={vendor.phone ? undefined : 'Add their WhatsApp number first'}><Icon name="whatsapp" size={14} /> Send on WhatsApp</button>
+            {waOn
+              ? <button className="btn btn-secondary" disabled={busy} onClick={() => act('create', true)} title="Sent with the approved template, from the Normless number"><Icon name="whatsapp" size={14} /> Send from Normless WhatsApp</button>
+              : <button className="btn btn-secondary" onClick={sendWhatsApp} disabled={!vendor.phone} title={vendor.phone ? 'Opens WhatsApp on this device with the message ready' : 'Add their WhatsApp number first'}><Icon name="whatsapp" size={14} /> Send on WhatsApp</button>}
             <a className="btn btn-secondary" href={portal.url} target="_blank" rel="noreferrer"><Icon name="external" size={14} /> Open</a>
           </div>
           <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginTop: 10, fontSize: 12.5, color: 'var(--text-muted)' }}>

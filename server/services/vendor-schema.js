@@ -241,6 +241,25 @@ async function ensureVendorSchema() {
             );
             CREATE INDEX IF NOT EXISTS vendor_invoices_vendor_idx ON vendor_invoices (vendor_id, created_at DESC);
 
+            -- WhatsApp messages to vendors waiting to go (services/vendor-wa). Held for a few minutes
+            -- so a mistake can be fixed or cancelled; what they say is worked out when they go, so
+            -- an edit inside the hold is what the vendor reads, and a deletion sends nothing.
+            CREATE TABLE IF NOT EXISTS vendor_wa_queue (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                vendor_id INTEGER NOT NULL REFERENCES vendors(id) ON DELETE CASCADE,
+                event TEXT NOT NULL,
+                ref TEXT NOT NULL,
+                note TEXT,                     -- e.g. what changed on an order
+                send_after TIMESTAMP NOT NULL,
+                status TEXT NOT NULL DEFAULT 'queued',   -- queued | sent | skipped | failed | cancelled
+                error TEXT,
+                created_by TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                done_at TIMESTAMP,
+                UNIQUE (event, ref)
+            );
+            CREATE INDEX IF NOT EXISTS vendor_wa_queue_due_idx ON vendor_wa_queue (send_after) WHERE status = 'queued';
+
             -- A vendor's usual terms as a template a new order's plan can start from:
             -- [{ label, percent | amount, due_kind: 'days' | 'delivery', days }]
             ALTER TABLE vendors ADD COLUMN IF NOT EXISTS default_plan TEXT;

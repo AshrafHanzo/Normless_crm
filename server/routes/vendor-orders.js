@@ -21,6 +21,7 @@ const vendorOrder = require('../services/vendor-order');
 const money = require('../services/vendor-money');
 const plan = require('../services/vendor-plan');
 const receipts = require('../services/vendor-receipts');
+const vendorWa = require('../services/vendor-wa');
 const { tableParams, pagination } = require('../utils/table');
 
 const router = express.Router();
@@ -390,7 +391,10 @@ router.post('/', async (req, res) => {
             }
             return ins;
         });
-        res.json({ success: true, order: hydrate(r.rows[0]) });
+        const order = hydrate(r.rows[0]);
+        const whatsapp = order.vendor_id ? await vendorWa.enqueue({ event: 'vendor_order', vendorId: order.vendor_id, ref: `order:${order.id}`,
+            user: req.user?.username, notify: req.body?.notify_vendor !== false && req.body?.notify_vendor !== 'false' }) : null;
+        res.json({ success: true, order, whatsapp });
     } catch (err) {
         console.error('Error creating vendor order:', err);
         res.status(500).json({ error: 'Failed to create vendor order' });
@@ -404,7 +408,9 @@ router.put('/:id', async (req, res) => {
     if (bad) return res.status(400).json({ error: bad });
 
     try {
-        const existing = (await db.query('SELECT status, payment_status, vendor_id FROM vendor_orders WHERE id = $1', [req.params.id])).rows[0];
+        const existing = (await db.query(
+            `SELECT status, payment_status, vendor_id, total_qty, COALESCE(total_override, total_amount) AS total,
+                    TO_CHAR(delivery_date, 'YYYY-MM-DD') AS delivery_date FROM vendor_orders WHERE id = $1`, [req.params.id])).rows[0];
         if (!existing) return res.status(404).json({ error: 'Vendor order not found' });
 
         const row = rowFrom(req.body, cleanItems(req.body.items));
@@ -434,7 +440,24 @@ router.put('/:id', async (req, res) => {
             }
             return c.query(`SELECT ${ROW_COLUMNS} FROM vendor_orders WHERE id = $1`, [req.params.id]);
         });
-        res.json({ success: true, order: hydrate(r.rows[0]) });
+        const order = hydrate(r.rows[0]);
+        // Once the vendor has been told about the order, a change to what they make, by when, or for
+        // how much is told too.
+        let whatsapp = null;
+        const told = order.vendor_id && (await db.query(
+            `SELECT 1 FROM vendor_wa_queue WHERE event = 'vendor_order' AND ref = $1 AND status = 'sent'`, [`order:${order.id}`])).rows[0];
+        if (told) {
+            const fmt = (v) => `₹${Number(v).toLocaleString('en-IN')}`;
+            const changes = [];
+            if (Number(existing.total_qty) !== Number(order.total_qty)) changes.push(`quantity is now ${order.total_qty} pieces (was ${existing.total_qty})`);
+            if ((Number(existing.total) || 0) !== (Number(order.total) || 0) && order.total) changes.push(`order value is now ${fmt(order.total)} incl. GST`);
+            if ((existing.delivery_date || '') !== (order.delivery_date || '') && order.delivery_date) changes.push(`expected delivery is now ${order.delivery_date.split('-').reverse().join('/')}`);
+            if (changes.length) {
+                whatsapp = await vendorWa.enqueue({ event: 'vendor_order_changed', vendorId: order.vendor_id, ref: `order-changed:${order.id}:${Date.now()}`,
+                    note: changes.join('; '), user: req.user?.username, notify: req.body?.notify_vendor !== false && req.body?.notify_vendor !== 'false' });
+            }
+        }
+        res.json({ success: true, order, whatsapp });
     } catch (err) {
         console.error('Error updating vendor order:', err);
         res.status(500).json({ error: 'Failed to update vendor order' });
@@ -536,7 +559,14 @@ router.post('/:id/deliveries', async (req, res) => {
             await receipts.refresh(req.params.id, c);
             return r.id;
         });
-        res.json({ success: true, id });
+        const vendorId = (await db.query('SELECT vendor_id FROM vendor_orders WHERE id = $1', [req.params.id])).rows[0]?.vendor_id;
+        let whatsapp = null;
+        if (vendorId) {
+            const user = req.user?.username, notify = req.body?.notify_vendor !== false && req.body?.notify_vendor !== 'false';
+            whatsapp = await vendorWa.enqueue({ event: 'vendor_delivery', vendorId, ref: `delivery:${req.params.id}:${d.row.received_on}`, user, notify });
+            if (d.row.rejected_qty > 0) await vendorWa.enqueue({ event: 'vendor_rejected', vendorId, ref: `rejected:${id}`, user, notify });
+        }
+        res.json({ success: true, id, whatsapp });
     } catch (err) {
         console.error('Error recording delivery:', err);
         res.status(500).json({ error: 'Failed to record the delivery' });
@@ -560,6 +590,11 @@ router.put('/:id/deliveries/:rid', async (req, res) => {
             return r.rows.length > 0;
         });
         if (!found) return res.status(404).json({ error: 'Delivery not found' });
+        // Rejects added on an edit are still news to the vendor.
+        if (d.row.rejected_qty > 0) {
+            const vendorId = (await db.query('SELECT vendor_id FROM vendor_orders WHERE id = $1', [req.params.id])).rows[0]?.vendor_id;
+            if (vendorId) await vendorWa.enqueue({ event: 'vendor_rejected', vendorId, ref: `rejected:${parseInt(req.params.rid, 10)}`, user: req.user?.username, notify: req.body?.notify_vendor !== false && req.body?.notify_vendor !== 'false' });
+        }
         res.json({ success: true });
     } catch (err) {
         console.error('Error saving delivery:', err);

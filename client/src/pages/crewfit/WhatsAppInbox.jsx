@@ -1638,6 +1638,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                                 ? <span className="wa-pill" style={pillStyle('#f87171')}>Needs a person</span>
                                 : <span className="wa-pill" style={pillStyle('#34d399')}>Answered</span>)}
                           {!cf && c.open_ticket_ref && <span className="wa-pill" style={pillStyle('#60a5fa')}>{refOf({ ref_no: c.open_ticket_ref })}</span>}
+                          {c.vendor && <span className="wa-pill" style={pillStyle('#fbbf24')} title="A vendor — the bot never answers them">Vendor</span>}
                           <span className="wa-thread-owner">{c.assigned_to ? short(c.assigned_to) : 'Unassigned'}</span>
                           {c.muted && <span className="wa-thread-muted" title="Muted for you"><Icon name="bellOff" size={12} /></span>}
                           {/* Crewfit: the customer's messages since a person last answered, until somebody does (a
@@ -1686,6 +1687,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                     {thread.is_demo && <span className="wa-pill wa-demo-chip" title="A made-up customer for trying the inbox. Nothing is sent from it.">Demo</span>}
                     {!cf && thread.status !== 'closed' && thread.last_direction === 'in' && <span className="wa-pill" style={pillStyle('#f87171')}>Needs a person</span>}
                     {!cf && thread.open_ticket_ref && <span className="wa-pill" style={pillStyle('#60a5fa')}>{refOf({ ref_no: thread.open_ticket_ref })} open</span>}
+                    {thread.vendor && <Link to={`/vendors/${thread.vendor.id}`} className="wa-pill" style={{ ...pillStyle('#fbbf24'), textDecoration: 'none' }} title="Open the vendor — the bot never answers them">Vendor</Link>}
                   </span>
                   <span className="wa-chat-phone">
                     {thread.phone_pretty}{thread.lead_company ? ` · ${thread.lead_company}` : ''}

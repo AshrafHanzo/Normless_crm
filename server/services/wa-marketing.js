@@ -208,9 +208,11 @@ async function audience(line, a = {}) {
         }
     }
 
-    // One per number (by its last ten digits), never anybody who said STOP on this line.
+    // One per number (by its last ten digits), never anybody who said STOP on this line, and never a
+    // vendor — they get order and payment updates, not offers.
     const stopped = new Set((await db.query(
         `SELECT phone FROM wa_contacts WHERE line_id = $1 AND opted_out_at IS NOT NULL`, [line.id])).rows.map(r => last10(r.phone)));
+    const vendorPhones = new Set((await db.query(`SELECT phone FROM vendors WHERE phone IS NOT NULL`)).rows.map(r => last10(r.phone)));
     const seen = new Set();
     const out = [];
     let optedOut = 0;
@@ -220,6 +222,7 @@ async function audience(line, a = {}) {
         if (!phone || key.length < 10 || phone.length > 15 || seen.has(key)) continue;
         seen.add(key);
         if (stopped.has(key)) { optedOut++; continue; }
+        if (vendorPhones.has(key)) continue;
         out.push({ phone, name: String(p.name || '').trim().slice(0, 120) || null });
     }
     out.optedOut = optedOut;

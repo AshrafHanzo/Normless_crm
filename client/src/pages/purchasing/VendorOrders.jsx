@@ -14,7 +14,7 @@ import VendorOrderAnalytics from './VendorOrderAnalytics'
 import RecordPaymentDrawer from './RecordPaymentDrawer'
 import PaymentPlan from './PaymentPlan'
 import RecordDeliveryDrawer from './RecordDeliveryDrawer'
-import { BRAND_LABEL, PAY_CLASS, inr, day, openFile } from './format'
+import { BRAND_LABEL, PAY_CLASS, inr, day, openFile, waNote } from './format'
 import { cleanMobile, mobileError, isValidMobile, mobileInputProps } from '../../utils/phone'
 
 const pad = (n) => String(n).padStart(2, '0')
@@ -78,6 +78,7 @@ function VendorOrderDrawer({ target, defaultBrand, meta, onClose, onSaved, onPay
   const [progress, setProgress] = useState(null)
   // A daily-lots order (the Spark sheet has 14) would push everything below it away.
   const [allDeliveries, setAllDeliveries] = useState(false)
+  const [notify, setNotify] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const errorRef = useErrorInView(error)
@@ -146,7 +147,7 @@ function VendorOrderDrawer({ target, defaultBrand, meta, onClose, onSaved, onPay
       toast.error('Vendor phone must be exactly 10 digits.', { title: 'Check the number' }); return
     }
     setSaving(true); setError('')
-    const body = JSON.stringify(form)
+    const body = JSON.stringify({ ...form, notify_vendor: notify })
     const res = form.id
       ? await apiFetch(`/api/vendor-orders/${form.id}`, { method: 'PUT', body })
       : await apiFetch('/api/vendor-orders', { method: 'POST', body })
@@ -155,6 +156,7 @@ function VendorOrderDrawer({ target, defaultBrand, meta, onClose, onSaved, onPay
     if (res.error) { setError(res.error); return }
     guard.reset()
     toast.success(`${res.order.ref} saved`)
+    waNote(toast, res.whatsapp)
     onSaved(res.order)
   }
 
@@ -358,6 +360,10 @@ function VendorOrderDrawer({ target, defaultBrand, meta, onClose, onSaved, onPay
               <AutoTextarea value={form.notes} onChange={e => set({ notes: e.target.value })}
                 placeholder="Anything the vendor should know — packing, delivery date, labels…" />
             </div>
+            <label className="pp-default">
+              <input type="checkbox" checked={notify} onChange={e => setNotify(e.target.checked)} />
+              <span><b>Tell the vendor on WhatsApp</b><em>{form.id ? 'If the quantity, value or delivery date changed, from the Normless number.' : 'The new order, from the Normless number.'} Only when vendor messages are switched on in WhatsApp → Automations.</em></span>
+            </label>
           </fieldset>
 
           {form.id && progress && (

@@ -31,6 +31,33 @@ const SOURCES = {
     address: { label: 'Delivery address', example: '12 MG Road, Bengaluru, Karnataka, 560001' },
     store_name: { label: 'Store name (Normless)', example: 'Normless' },
     currency: { label: 'Currency (INR)', example: 'INR' },
+    // Vendors (Purchasing): filled by services/vendor-wa.
+    vendor_name: { label: 'Vendor’s contact name', example: 'Ravi' },
+    company: { label: 'Our company (Normless)', example: 'Normless' },
+    vendor_order_ref: { label: 'Vendor order number', example: 'VO-005' },
+    vendor_brand: { label: 'Brand the order is for', example: 'Normless' },
+    vendor_items: { label: 'What was ordered', example: 'Mask × 300, Disk set × 300' },
+    vendor_order_value: { label: 'Order value, incl. GST', example: '₹1,77,000 incl. GST' },
+    vendor_delivery_by: { label: 'Expected delivery', example: '30 Nov 2026' },
+    vendor_change: { label: 'What changed on the order', example: 'delivery date is now 05 Dec 2026' },
+    vendor_pay_amount: { label: 'Payment amount, with ₹', example: '₹35,400' },
+    vendor_paid_on: { label: 'Payment date', example: '15 Nov 2026' },
+    vendor_pay_mode: { label: 'Payment mode', example: 'NEFT' },
+    vendor_pay_ref: { label: 'UTR / reference', example: 'HDFCN52026111500001' },
+    vendor_pay_for: { label: 'What the payment was for', example: 'order VO-005' },
+    vendor_balance: { label: 'Balance still payable to the vendor', example: '₹70,800' },
+    vendor_received_on: { label: 'Delivery date', example: '14 Nov 2026' },
+    vendor_received: { label: 'What came in', example: 'Mask × 35' },
+    vendor_pending: { label: 'What is still to come', example: 'Mask × 49, Disk set × 148' },
+    vendor_rejected: { label: 'Pieces rejected at QC', example: '3' },
+    vendor_qc_note: { label: 'QC note', example: 'warped edges' },
+    vendor_invoice_no: { label: 'Vendor’s invoice number', example: 'SP/INV/1102' },
+    vendor_invoice_amount: { label: 'Invoice amount', example: '₹35,400' },
+    vendor_invoice_status: { label: 'Invoice decision (accepted / rejected)', example: 'accepted' },
+    vendor_invoice_note: { label: 'Invoice note or reason', example: 'Thank you.' },
+    vendor_instalment: { label: 'Instalment (e.g. 3 of 5)', example: '3 of 5' },
+    vendor_instalment_amount: { label: 'Instalment amount, with ₹', example: '₹35,400' },
+    vendor_instalment_due: { label: 'Instalment due date', example: '20 Nov 2026' },
 };
 
 /** Where a link button can go. Each becomes an /go/ code when the message is sent. */
@@ -39,6 +66,7 @@ const LINKS = {
     order: 'Their order status page',
     tracking: 'The courier’s tracking page',
     store: 'The Normless store',
+    vendor_page: 'The vendor’s own page (their private link)',
 };
 
 const EXAMPLE_CODE = 'k3Jx9aQ';
@@ -105,6 +133,51 @@ const SET = [
         vars: ['first_name', 'refund_amount', 'order_number'], link: { text: 'View my order', source: 'order' },
     },
 ];
+
+// Vendors (Purchasing). Transactional, so UTILITY; one button to their own page. Meta refuses a body
+// that starts or ends on a variable, so each opens with a greeting and closes on a sentence.
+SET.push(
+    {
+        event: 'vendor_link', name: 'nlcrm_vendor_page', category: 'UTILITY', image: false,
+        body: 'Hi {{1}}, this is your vendor page with {{2}}.\n\nYour orders, deliveries, payments and invoices are always up to date there, and you can upload your invoices on it.',
+        vars: ['vendor_name', 'company'], link: { text: 'Open my page', source: 'vendor_page' },
+    },
+    {
+        event: 'vendor_order', name: 'nlcrm_vendor_new_order', category: 'UTILITY', image: false,
+        body: 'Hello {{1}}, we have placed a new purchase order {{2}} with you for {{3}}.\n\nItems ordered: {{4}}\nOrder value: {{5}}\nExpected delivery by: {{6}}\n\nPlease confirm that you have received this order by replying to this message. The full order is on your vendor page.',
+        vars: ['vendor_name', 'vendor_order_ref', 'vendor_brand', 'vendor_items', 'vendor_order_value', 'vendor_delivery_by'], link: { text: 'View order', source: 'vendor_page' },
+    },
+    {
+        event: 'vendor_order_changed', name: 'nlcrm_vendor_order_updated', category: 'UTILITY', image: false,
+        body: 'Hello {{1}}, our order {{2}} has been updated: {{3}}.\n\nPlease check the latest details on your vendor page.',
+        vars: ['vendor_name', 'vendor_order_ref', 'vendor_change'], link: { text: 'View order', source: 'vendor_page' },
+    },
+    {
+        event: 'vendor_payment', name: 'nlcrm_vendor_payment_sent', category: 'UTILITY', image: false,
+        body: 'Hello {{1}}, we have sent you a payment of {{2}} on {{3}} by {{4}}.\n\nBank reference (UTR): {{5}}\nPaid for: {{6}}\nBalance still payable to you after this payment: {{7}}\n\nThank you for working with us. Every payment and the full statement are on your vendor page.',
+        vars: ['vendor_name', 'vendor_pay_amount', 'vendor_paid_on', 'vendor_pay_mode', 'vendor_pay_ref', 'vendor_pay_for', 'vendor_balance'], link: { text: 'View statement', source: 'vendor_page' },
+    },
+    {
+        event: 'vendor_delivery', name: 'nlcrm_vendor_delivery_received', category: 'UTILITY', image: false,
+        body: 'Hello {{1}}, we have received your delivery dated {{2}} against our order {{3}}.\n\nReceived in this lot: {{4}}\nStill to come on the order: {{5}}\n\nThank you. You can see every delivery we recorded on your vendor page.',
+        vars: ['vendor_name', 'vendor_received_on', 'vendor_order_ref', 'vendor_received', 'vendor_pending'], link: { text: 'View order', source: 'vendor_page' },
+    },
+    {
+        event: 'vendor_rejected', name: 'nlcrm_vendor_qc_rejected', category: 'UTILITY', image: false,
+        body: 'Hello {{1}}, from your delivery dated {{2}} against our order {{3}}, {{4}} pieces did not pass our quality check.\n\nWhat we found: {{5}}\n\nThese pieces are still owed on the order. Please arrange replacements and let us know when they will be sent.',
+        vars: ['vendor_name', 'vendor_received_on', 'vendor_order_ref', 'vendor_rejected', 'vendor_qc_note'], link: { text: 'View order', source: 'vendor_page' },
+    },
+    {
+        event: 'vendor_invoice', name: 'nlcrm_vendor_invoice_reviewed', category: 'UTILITY', image: false,
+        body: 'Hello {{1}}, your invoice number {{2}} for {{3}} has been {{4}} by our accounts team.\n\nNote: {{5}}\n\nYou can see the status of all your invoices, and upload new ones, on your vendor page.',
+        vars: ['vendor_name', 'vendor_invoice_no', 'vendor_invoice_amount', 'vendor_invoice_status', 'vendor_invoice_note'], link: { text: 'View invoices', source: 'vendor_page' },
+    },
+    {
+        event: 'vendor_instalment_due', name: 'nlcrm_vendor_instalment_due', category: 'UTILITY', image: false,
+        body: 'Hello {{1}}, this is to let you know that instalment {{2}} of {{3}} for our order {{4}} is scheduled to be paid on {{5}}.\n\nYou can see the full payment plan and every payment made on your vendor page.',
+        vars: ['vendor_name', 'vendor_instalment', 'vendor_instalment_amount', 'vendor_order_ref', 'vendor_instalment_due'], link: { text: 'View payment plan', source: 'vendor_page' },
+    },
+);
 
 const FOOTER = 'Normless';
 

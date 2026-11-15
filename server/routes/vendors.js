@@ -15,6 +15,7 @@ const { tableParams, pagination } = require('../utils/table');
 const { refLabel } = require('../services/vendor-order');
 const money = require('../services/vendor-money');
 const { statement } = require('../services/vendor-statement');
+const vendorWa = require('../services/vendor-wa');
 
 const router = express.Router();
 
@@ -327,10 +328,40 @@ router.post('/:id/link', async (req, res) => {
                  portal_created_at = CASE WHEN portal_token IS DISTINCT FROM $1 THEN CURRENT_TIMESTAMP ELSE portal_created_at END,
                  portal_last_seen_at = CASE WHEN portal_token IS DISTINCT FROM $1 THEN NULL ELSE portal_last_seen_at END
              WHERE id = $2`, [token, v.id]);
-        res.json({ success: true, enabled: true, url: portalUrl(token) });
+        // Sent from the Normless number when asked (and the template is on), straight away.
+        const whatsapp = req.body?.send_whatsapp
+            ? await vendorWa.enqueue({ event: 'vendor_link', vendorId: v.id, ref: `link:${v.id}:${token.slice(0, 10)}`, now: true, user: req.user?.username })
+            : null;
+        if (whatsapp?.queued) await vendorWa.tick();
+        res.json({ success: true, enabled: true, url: portalUrl(token), whatsapp });
     } catch (err) {
         console.error('vendor link:', err);
         res.status(500).json({ error: 'Failed to update the link' });
+    }
+});
+
+// GET /api/vendors/:id/whatsapp — messages waiting to go to the vendor, and the latest sent
+router.get('/:id/whatsapp', async (req, res) => {
+    try {
+        const events = {};
+        for (const e of ['vendor_link', 'vendor_order', 'vendor_payment', 'vendor_delivery', 'vendor_invoice']) events[e] = await vendorWa.willNotify(e, req.params.id);
+        res.json({ messages: await vendorWa.forVendor(req.params.id), events });
+    } catch (err) {
+        console.error('vendor whatsapp:', err);
+        res.status(500).json({ error: 'Failed to load WhatsApp messages' });
+    }
+});
+
+// POST /api/vendors/:id/whatsapp/:qid { action: 'send' | 'cancel' } — send a held message now, or not at all
+router.post('/:id/whatsapp/:qid', async (req, res) => {
+    try {
+        if (!await canEdit(req)) return res.status(403).json({ error: 'Access denied' });
+        const ok = await vendorWa.act(parseInt(req.params.qid, 10) || 0, parseInt(req.params.id, 10), req.body?.action === 'send' ? 'send' : 'cancel');
+        if (!ok) return res.status(409).json({ error: 'That message has already gone' });
+        res.json({ success: true });
+    } catch (err) {
+        console.error('vendor whatsapp act:', err);
+        res.status(500).json({ error: 'Failed to update the message' });
     }
 });
 

@@ -12,6 +12,7 @@ const db = require('../db/connection');
 const { hasPermission } = require('../utils/permissions');
 const invoices = require('../services/vendor-invoices');
 const { refLabel } = require('../services/vendor-order');
+const vendorWa = require('../services/vendor-wa');
 
 const router = express.Router();
 
@@ -82,9 +83,14 @@ router.post('/:id/review', async (req, res) => {
     try {
         const r = await db.query(
             `UPDATE vendor_invoices SET status = $1, reason = $2, reviewed_by = $3, reviewed_at = CURRENT_TIMESTAMP
-             WHERE id = $4 RETURNING id`, [status, status === 'Rejected' ? reason : null, req.user?.username || null, req.params.id]);
+             WHERE id = $4 RETURNING id, vendor_id, source`, [status, status === 'Rejected' ? reason : null, req.user?.username || null, req.params.id]);
         if (!r.rows.length) return res.status(404).json({ error: 'Invoice not found' });
-        res.json({ success: true });
+        // Only what the vendor sent us is worth a message back.
+        const inv = r.rows[0];
+        const whatsapp = inv.source === 'vendor' && status !== 'Under review'
+            ? await vendorWa.enqueue({ event: 'vendor_invoice', vendorId: inv.vendor_id, ref: `invoice:${inv.id}:${status}`, user: req.user?.username, notify: req.body?.notify_vendor !== false && req.body?.notify_vendor !== 'false' })
+            : null;
+        res.json({ success: true, whatsapp });
     } catch (err) {
         console.error('vendor invoice review:', err);
         res.status(500).json({ error: 'Failed to update the invoice' });

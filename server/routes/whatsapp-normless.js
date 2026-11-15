@@ -212,7 +212,7 @@ router.get('/automations', async (req, res) => {
     try {
         const cfg = await auto.config(req.waLine.id);
         res.json({
-            events: auto.EVENTS, config: cfg.events, started_at: cfg.started_at,
+            events: auto.EVENTS, config: cfg.events, started_at: cfg.started_at, vendor_hold: cfg.vendor_hold,
             sources: tplSet.SOURCES, links: tplSet.LINKS, cartHours: auto.CART_HOURS,
             set: tplSet.SET.map(t => ({ event: t.event, name: t.name, category: t.category, vars: t.vars, link: t.link?.source || null,
                 components: tplSet.components(t, null) })),
@@ -236,8 +236,9 @@ router.get('/automations', async (req, res) => {
 
 router.put('/automations', manager, async (req, res) => {
     try {
+        if (req.body?.vendor_hold !== undefined) await auto.saveVendorHold(req.waLine.id, req.body.vendor_hold);
         const cfg = await auto.saveEvents(req.waLine.id, req.body?.events || {});
-        res.json({ config: cfg.events, started_at: cfg.started_at });
+        res.json({ config: cfg.events, started_at: cfg.started_at, vendor_hold: cfg.vendor_hold });
     } catch (err) {
         console.error('normless automations save error:', err);
         res.status(500).json({ error: 'Could not save that' });

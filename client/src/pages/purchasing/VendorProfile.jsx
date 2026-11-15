@@ -8,6 +8,7 @@ import RecordPaymentDrawer from './RecordPaymentDrawer'
 import QuotationList from './QuotationList'
 import VendorInvoiceList from './VendorInvoiceList'
 import VendorLinkCard from './VendorLinkCard'
+import VendorWaCard from './VendorWaCard'
 import { BRAND_LABEL, PAY_CLASS, inr, day, openProof } from './format'
 
 const STATUS_CLASS = { Pending: 'pending', 'Consignment Ordered': 'refunded', 'Partly Received': 'partial', 'Consignment Received': 'fulfilled' }
@@ -242,6 +243,7 @@ export default function VendorProfile() {
         </div>
 
         {can.share && <VendorLinkCard vendor={v} apiFetch={apiFetch} toast={toast} onChanged={load} />}
+        <VendorWaCard vendorId={v.id} version={version} canEdit={!!can.edit} apiFetch={apiFetch} toast={toast} />
       </div>
 
       <div className="kpi-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>

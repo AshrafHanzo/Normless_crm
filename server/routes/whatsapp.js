@@ -278,6 +278,11 @@ async function receiveMessage(message, profileName) {
             if (await nlAuto.onReply(conversation.id, interactivePayload(message))) return;
         }
         catch (err) { console.error('normless automation reply error:', err.message); }
+        // Vendors write to this number about orders and payments: a person answers them, never the bot.
+        try {
+            const vendor = (await db.query(`SELECT 1 FROM vendors WHERE phone IS NOT NULL AND phone = RIGHT($1, 10) LIMIT 1`, [String(phone || '').replace(/\D/g, '')])).rows[0];
+            if (vendor) return;
+        } catch (err) { console.error('vendor chat check error:', err.message); }
         try { await nlBot.onInbound({ id: conversation.id, phone }); }
         catch (err) { console.error('normless bot error:', err.message); }
         return;
@@ -855,7 +860,9 @@ const LIST_FIELDS = `c.id, c.status, c.mode, c.assigned_to, c.unread_count, c.la
                      NULLIF(TRIM(CONCAT(cu.first_name, ' ', cu.last_name)), '') AS customer_name,
                      ${LAST_DIRECTION} AS last_direction,
                      (SELECT t.ref_no FROM support_tickets t WHERE t.wa_conversation_id = c.id AND t.status <> 'Closed'
-                       ORDER BY t.id DESC LIMIT 1) AS open_ticket_ref`;
+                       ORDER BY t.id DESC LIMIT 1) AS open_ticket_ref,
+                     -- A vendor (Purchasing) writing to us: tagged, named, and never answered by the bot.
+                     (SELECT json_build_object('id', v.id, 'name', v.name) FROM vendors v WHERE v.phone IS NOT NULL AND v.phone = RIGHT(k.phone, 10) LIMIT 1) AS vendor`;
 const LIST_FROM = `FROM wa_conversations c
                    JOIN wa_contacts k ON k.id = c.contact_id
                    LEFT JOIN crewfit_leads l ON l.id = k.lead_id
@@ -865,7 +872,7 @@ const shapeConversation = (row) => ({
     ...row,
     ad_referral: safeJson(row.ad_referral, null),
     // The name they bill under first, then the one somebody gave the lead, then their WhatsApp name.
-    display_name: row.order_billing_name || row.lead_billing_name || row.lead_name || row.customer_name || row.profile_name || wa.prettyPhone(row.phone),
+    display_name: row.vendor?.name || row.order_billing_name || row.lead_billing_name || row.lead_name || row.customer_name || row.profile_name || wa.prettyPhone(row.phone),
     phone_pretty: wa.prettyPhone(row.phone),
     window_open: wa.windowOpen(row.last_inbound_at),
     window_left_ms: wa.windowLeftMs(row.last_inbound_at),

@@ -24,6 +24,7 @@ const GROUPS = [
   { key: 'cod', label: 'COD confirmation', icon: 'check', intro: 'Asks a cash-on-delivery customer to confirm before it ships. A Confirm is noted on the chat; a Cancel goes to the team to cancel in Shopify.' },
   { key: 'fulfillment', label: 'Shipping', icon: 'truck', intro: 'Sent when an order is fulfilled in Shopify with a tracking number.' },
   { key: 'payment', label: 'Payment & refund', icon: 'card', intro: 'Sent when a refund is made in Shopify.' },
+  { key: 'vendor', label: 'Vendors', icon: 'truck', intro: 'Updates to vendors (Purchasing) for both brands’ orders: new orders, payments with their UTR, goods received, QC rejections and invoice decisions. Each waits a few minutes before it goes, so a mistake can be fixed or stopped. Only vendors with a WhatsApp number and updates switched on get them; the button opens their own page.' },
   { key: 'reopen', label: 'Reopen chats', icon: 'refresh' },
   { key: 'marketing', label: 'Marketing', icon: 'spark' },
   { key: 'library', label: 'All templates', icon: 'mail' },
@@ -37,6 +38,37 @@ const splitDelay = (min) => {
 const fmtWhen = (v) => (v ? new Date(v).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—')
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b)
 const keyOf = (t) => `${t.name}|${t.language}`
+
+/** How long vendor messages wait before going out. */
+function VendorHoldCard({ data, onSaved }) {
+  const apiFetch = useApi()
+  const toast = useToast()
+  const brand = useWaBrand()
+  const [busy, setBusy] = useState(false)
+  const save = async (minutes) => {
+    setBusy(true)
+    const r = await apiFetch(`${brand.api}/nl/automations`, { method: 'PUT', body: JSON.stringify({ vendor_hold: Number(minutes), events: {} }) })
+    setBusy(false)
+    if (!r || r.error) return toast.error(r?.error || 'Could not save that')
+    toast.success(Number(minutes) ? `Vendor messages now wait ${minutes} minutes` : 'Vendor messages now go at once')
+    onSaved()
+  }
+  return (
+    <section className="was-card">
+      <div className="was-card-head"><h3>Wait before sending</h3></div>
+      <p className="was-hint" style={{ marginTop: 0 }}>
+        A vendor message is held after the payment, delivery or order is saved. Editing it in that time changes what the vendor reads; deleting it sends nothing; it can also be stopped or sent now from the vendor’s page.
+      </p>
+      <label className="input-group" style={{ maxWidth: 260 }}>
+        <span>Hold for</span>
+        <select value={data.vendor_hold ?? 10} disabled={busy || !data.canEdit} onChange={e => save(e.target.value)}>
+          {[...new Set([0, 5, 10, 15, 30, 60, Number(data.vendor_hold ?? 10)])].sort((x, y) => x - y)
+            .map(m => <option key={m} value={m}>{m ? `${m} minute${m === 1 ? '' : 's'}` : 'Send at once'}</option>)}
+        </select>
+      </label>
+    </section>
+  )
+}
 
 function useAutomations() {
   const apiFetch = useApi()
@@ -393,6 +425,7 @@ export function NlTemplatesTab() {
           </div>
           <CopiesCard data={a.data} onDone={async () => { await a.load(); setLibKey(k => k + 1) }} />
           {group === 'cart' && <WebhookCard data={a.data} />}
+          {group === 'vendor' && <VendorHoldCard data={a.data} onSaved={a.load} />}
           {events.map(ev => (
             <EventCard key={ev.key} ev={ev} cfg={a.draft[ev.key]} data={a.data} templates={a.templates} canEdit={a.data.canEdit}
               onChange={(patch) => a.setEvent(ev.key, patch)} onEdit={setEditing} />

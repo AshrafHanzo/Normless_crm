@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import Icon from '../../components/Icon'
 import useDirtyGuard from '../../hooks/useDirtyGuard'
 import useErrorInView from './useErrorInView'
-import { todayYmd } from './format'
+import { todayYmd, waNote } from './format'
 
 const n = (v) => { const x = parseInt(v, 10); return x > 0 ? x : 0 }
 const lineName = (l) => [l.color, l.size].filter(Boolean).join(' · ') || l.product
@@ -17,6 +17,8 @@ export default function RecordDeliveryDrawer({ orderId, deliveryId, apiFetch, to
   const [form, setForm] = useState({ received_on: todayYmd(), challan_no: '', note: '' })
   const [qty, setQty] = useState({})              // key → { received, rejected }
   const [showRejected, setShowRejected] = useState(false)
+  const [notify, setNotify] = useState(true)
+  const [waOn, setWaOn] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const errorRef = useErrorInView(error)
@@ -27,6 +29,7 @@ export default function RecordDeliveryDrawer({ orderId, deliveryId, apiFetch, to
       if (!live || !r) return
       if (r.error) { setError(r.error); return }
       setData(r)
+      if (!deliveryId && r.order.vendor_id) apiFetch(`/api/vendors/${r.order.vendor_id}/whatsapp`).then(w => { if (live && w && !w.error) setWaOn(!!w.events?.vendor_delivery) })
       const mine = deliveryId && r.deliveries.find(d => d.id === deliveryId)
       if (mine) {
         setForm({ received_on: mine.received_on, challan_no: mine.challan_no || '', note: mine.note || '' })
@@ -69,7 +72,7 @@ export default function RecordDeliveryDrawer({ orderId, deliveryId, apiFetch, to
       .filter(l => l.received || l.rejected)
     if (!payload.length) { setError('Enter how many pieces came in'); return }
     setSaving(true); setError('')
-    const body = JSON.stringify({ ...form, lines: payload })
+    const body = JSON.stringify({ ...form, lines: payload, notify_vendor: notify })
     const res = deliveryId
       ? await apiFetch(`/api/vendor-orders/${orderId}/deliveries/${deliveryId}`, { method: 'PUT', body })
       : await apiFetch(`/api/vendor-orders/${orderId}/deliveries`, { method: 'POST', body })
@@ -78,6 +81,7 @@ export default function RecordDeliveryDrawer({ orderId, deliveryId, apiFetch, to
     if (res.error) { setError(res.error); return }
     guard.reset()
     toast.success(`${totalIn} piece${totalIn === 1 ? '' : 's'} recorded in`)
+    waNote(toast, res.whatsapp)
     onSaved()
   }
 
@@ -168,6 +172,13 @@ export default function RecordDeliveryDrawer({ orderId, deliveryId, apiFetch, to
                 <label htmlFor="dl-note">Note<span className="unit-hint"> optional</span></label>
                 <input id="dl-note" value={form.note} onChange={e => setForm(f => ({ ...f, note: e.target.value }))} placeholder="e.g. 3 masks warped, sent back" />
               </div>
+
+          {waOn && (
+            <label className="pp-default">
+              <input type="checkbox" checked={notify} onChange={e => setNotify(e.target.checked)} />
+              <span><b>Tell the vendor on WhatsApp</b><em>What came in and what is still to come, from the Normless number. Several lots on one day go as one message.</em></span>
+            </label>
+          )}
 
               <div className="totals-bar">
                 <div><span>Received</span><strong>{totalIn} pcs</strong></div>
