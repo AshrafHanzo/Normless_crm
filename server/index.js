@@ -325,6 +325,9 @@ app.use('/api/myxture', authMiddleware, require('./routes/myxture'));
 app.use('/api/vendors', authMiddleware, require('./routes/vendors'));
 app.use('/api/vendor-payments', authMiddleware, require('./routes/vendor-payments'));
 app.use('/api/vendor-quotations', authMiddleware, require('./routes/vendor-quotations'));
+app.use('/api/vendor-invoices', authMiddleware, require('./routes/vendor-invoices'));
+// A vendor's own page: public, no login — the token in the address is the whole key.
+app.use('/api/portal/vendor', require('./routes/vendor-portal'));
 // WhatsApp. The webhook is public because Meta calls it with no credentials of ours — it proves
 // itself with a signature over the raw body instead, which is why it is mounted here, after the
 // JSON parser that stashes those bytes but ahead of the sign-in the inbox routes sit behind.

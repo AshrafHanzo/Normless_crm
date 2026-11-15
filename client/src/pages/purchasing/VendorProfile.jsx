@@ -1,15 +1,17 @@
 import { useState, useEffect } from 'react'
-import { useParams, useNavigate, Link } from 'react-router-dom'
+import { useParams, useNavigate, Link, useSearchParams } from 'react-router-dom'
 import { useApi } from '../../App'
 import { useToast } from '../../components/Toast'
 import Icon from '../../components/Icon'
 import VendorDrawer from './VendorDrawer'
 import RecordPaymentDrawer from './RecordPaymentDrawer'
 import QuotationList from './QuotationList'
+import VendorInvoiceList from './VendorInvoiceList'
+import VendorLinkCard from './VendorLinkCard'
 import { BRAND_LABEL, PAY_CLASS, inr, day, openProof } from './format'
 
 const STATUS_CLASS = { Pending: 'pending', 'Consignment Ordered': 'refunded', 'Partly Received': 'partial', 'Consignment Received': 'fulfilled' }
-const TABS = [['orders', 'Orders'], ['quotations', 'Quotations'], ['payments', 'Payments'], ['statement', 'Statement']]
+const TABS = [['orders', 'Orders'], ['quotations', 'Quotations'], ['payments', 'Payments'], ['invoices', 'Invoices'], ['statement', 'Statement']]
 
 /** "Poly Cotton Polos · Navy, Black" / "Mask · 300 pcs" per product line. */
 const summarise = (items) => (items || []).map(i => {
@@ -91,7 +93,9 @@ export default function VendorProfile() {
   const [missing, setMissing] = useState(false)
   const [editing, setEditing] = useState(false)
   const [paying, setPaying] = useState(null)     // true = new, or a payment id to edit
-  const [tab, setTab] = useState('orders')
+  // A notification can open a tab directly (?tab=invoices).
+  const [params] = useSearchParams()
+  const [tab, setTab] = useState(() => (TABS.some(([k]) => k === params.get('tab')) ? params.get('tab') : 'orders'))
   const [addingQuote, setAddingQuote] = useState(false)
 
   // Bumped to reload after a save, archive or restore.
@@ -236,6 +240,8 @@ export default function VendorProfile() {
             <Detail label="Internal notes"><span style={{ whiteSpace: 'pre-wrap' }}>{v.notes}</span></Detail>
           </div>
         </div>
+
+        {can.share && <VendorLinkCard vendor={v} apiFetch={apiFetch} toast={toast} onChanged={load} />}
       </div>
 
       <div className="kpi-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
@@ -251,7 +257,8 @@ export default function VendorProfile() {
       <div className="scan-tabs" style={{ marginBottom: 14 }} role="tablist">
         {TABS.map(([k, l]) => (
           <button key={k} role="tab" aria-selected={tab === k} className={tab === k ? 'active' : ''} onClick={() => setTab(k)}>
-            {l}{k === 'orders' ? ` (${orders.length})` : k === 'payments' ? ` (${payments.length})` : k === 'quotations' ? ` (${stats.quotations || 0})` : ''}
+            {l}{k === 'orders' ? ` (${orders.length})` : k === 'payments' ? ` (${payments.length})` : k === 'quotations' ? ` (${stats.quotations || 0})` : k === 'invoices' ? ` (${stats.invoices || 0})` : ''}
+            {k === 'invoices' && stats.invoices_review > 0 && <span className="tab-badge" title={`${stats.invoices_review} to review`}>{stats.invoices_review}</span>}
             {k === 'payments' && missingUtr > 0 && <span className="tab-badge" title={`${missingUtr} without a UTR`}>{missingUtr}</span>}
           </button>
         ))}
@@ -269,7 +276,11 @@ export default function VendorProfile() {
         </>
       )}
 
-      {tab !== 'quotations' && <div className="data-table-wrapper">
+      {tab === 'invoices' && (
+        <VendorInvoiceList vendorId={v.id} orders={orders} can={can} apiFetch={apiFetch} toast={toast} onChanged={load} />
+      )}
+
+      {tab !== 'quotations' && tab !== 'invoices' && <div className="data-table-wrapper">
         {tab === 'orders' && (!orders.length ? (
           <div className="empty-state"><p>No orders with {v.name} yet.</p></div>
         ) : (

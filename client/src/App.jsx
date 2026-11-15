@@ -41,6 +41,7 @@ import VendorProfile from './pages/purchasing/VendorProfile'
 import VendorOrders from './pages/purchasing/VendorOrders'
 import VendorPayments from './pages/purchasing/VendorPayments'
 import VendorQuotations from './pages/purchasing/VendorQuotations'
+import VendorPortal from './pages/purchasing/VendorPortal'
 import TeamMe from './pages/team/Me'
 import WhatsAppSettings from './pages/crewfit/WhatsAppSettings'
 import WhatsAppDashboard, { WhatsAppMyPerformance } from './pages/crewfit/WhatsAppDashboard'
@@ -240,6 +241,8 @@ function App() {
             <Route path="/login" element={token ? <Navigate to={homeFor(brand)} replace /> : <Login />} />
             <Route path="/forgot-password" element={token ? <Navigate to={homeFor(brand)} replace /> : <ForgotPassword />} />
             <Route path="/reset-password" element={token ? <Navigate to={homeFor(brand)} replace /> : <ResetPassword />} />
+            {/* A vendor's own page: public, no login — the link we send them is the key. */}
+            <Route path="/v/:token" element={<VendorPortal />} />
 
             {/* Normless CRM */}
             <Route path="/" element={<ProtectedRoute permission="can_view_dashboard"><AppLayout><Dashboard /></AppLayout></ProtectedRoute>} />

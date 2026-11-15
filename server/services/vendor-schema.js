@@ -25,6 +25,8 @@ async function ensureVendorSchema() {
     try {
         const hadPerm = await exists(
             `SELECT 1 FROM information_schema.columns WHERE table_name = 'admin_users' AND column_name = 'can_view_vendors'`);
+        const hadSharePerm = await exists(
+            `SELECT 1 FROM information_schema.columns WHERE table_name = 'admin_users' AND column_name = 'can_share_vendor_link'`);
 
         await db.exec(`
             -- The Purchasing section. Seeing vendors, changing them, and handling money with them
@@ -32,6 +34,9 @@ async function ensureVendorSchema() {
             ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_view_vendors BOOLEAN DEFAULT false;
             ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_edit_vendor_orders BOOLEAN DEFAULT false;
             ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_record_vendor_payments BOOLEAN DEFAULT false;
+            -- Making, sending and switching off a vendor's own link: it shows them their balance
+            -- and payments, so it is a grant of its own.
+            ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_share_vendor_link BOOLEAN DEFAULT false;
 
             CREATE TABLE IF NOT EXISTS vendors (
                 id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
@@ -204,6 +209,38 @@ async function ensureVendorSchema() {
             CREATE INDEX IF NOT EXISTS vendor_quotations_vendor_idx ON vendor_quotations (vendor_id, quote_date DESC);
             ALTER TABLE vendor_orders ADD COLUMN IF NOT EXISTS quotation_id INTEGER REFERENCES vendor_quotations(id) ON DELETE SET NULL;
 
+            -- The vendor's own page: https://<crm>/v/<token>. One token per vendor; regenerating
+            -- replaces it, so an old link stops working.
+            ALTER TABLE vendors ADD COLUMN IF NOT EXISTS portal_token TEXT;
+            ALTER TABLE vendors ADD COLUMN IF NOT EXISTS portal_enabled BOOLEAN NOT NULL DEFAULT false;
+            ALTER TABLE vendors ADD COLUMN IF NOT EXISTS portal_created_at TIMESTAMP;
+            ALTER TABLE vendors ADD COLUMN IF NOT EXISTS portal_last_seen_at TIMESTAMP;
+            CREATE UNIQUE INDEX IF NOT EXISTS vendors_portal_token_idx ON vendors (portal_token) WHERE portal_token IS NOT NULL;
+
+            -- Invoices from vendors: uploaded by them on their link, or by the team. The paper trail
+            -- for what was billed; accepting one moves no money, and the GST register is still kept
+            -- by hand.
+            CREATE TABLE IF NOT EXISTS vendor_invoices (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                vendor_id INTEGER NOT NULL REFERENCES vendors(id) ON DELETE RESTRICT,
+                order_id INTEGER REFERENCES vendor_orders(id) ON DELETE SET NULL,
+                invoice_no TEXT NOT NULL,
+                invoice_date DATE,
+                amount NUMERIC(12,2),
+                note TEXT,
+                file_path TEXT NOT NULL,       -- under server/storage/vendors/invoices, never served publicly
+                file_name TEXT,
+                file_mime TEXT,
+                source TEXT NOT NULL DEFAULT 'vendor',   -- vendor | team
+                uploaded_by TEXT,
+                status TEXT NOT NULL DEFAULT 'Under review',   -- Under review | Accepted | Rejected
+                reason TEXT,                   -- shown to the vendor when rejected
+                reviewed_by TEXT,
+                reviewed_at TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS vendor_invoices_vendor_idx ON vendor_invoices (vendor_id, created_at DESC);
+
             -- A vendor's usual terms as a template a new order's plan can start from:
             -- [{ label, percent | amount, due_kind: 'days' | 'delivery', days }]
             ALTER TABLE vendors ADD COLUMN IF NOT EXISTS default_plan TEXT;
@@ -262,8 +299,12 @@ async function ensureVendorSchema() {
             await db.query(`UPDATE admin_users SET can_view_vendors = true, can_edit_vendor_orders = true
                             WHERE can_view_crewfit_vendors = true`);
         }
+        if (!hadSharePerm) {
+            // The people who handle vendor money are the ones who will send vendors their page.
+            await db.query('UPDATE admin_users SET can_share_vendor_link = true WHERE can_record_vendor_payments = true');
+        }
         await db.query(`UPDATE admin_users SET can_view_vendors = true, can_edit_vendor_orders = true,
-                            can_record_vendor_payments = true WHERE role IN ('owner','admin')`);
+                            can_record_vendor_payments = true, can_share_vendor_link = true WHERE role IN ('owner','admin')`);
     } catch (err) {
         console.error('ensureVendorSchema error:', err.message);
     }

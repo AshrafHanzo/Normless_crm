@@ -4441,3 +4441,73 @@ p.wdb-sub { margin: 0; }
 /* Quotation attached to a vendor order */
 .vo-quote { display: flex; gap: 12px; align-items: center; padding: 12px 14px; border: 1px dashed var(--border-hover); border-radius: var(--radius-md); background: var(--surface); color: var(--text-secondary); }
 .vo-quote > div { color: var(--text-primary); }
+
+/* ============================================================
+   VENDOR PAGE (public, /v/:token) — always light, phone first.
+   Its own palette, so the CRM's dark theme never reaches it.
+   ============================================================ */
+.vpo { --vp-bg: #f5f6f9; --vp-card: #ffffff; --vp-ink: #141821; --vp-muted: #565e6d; --vp-line: rgba(15, 23, 42, 0.1);
+  --vp-accent: #574ac9; --vp-ok: #047857; --vp-ok-bg: rgba(5, 150, 105, 0.1); --vp-warn: #92500a; --vp-warn-bg: rgba(217, 119, 6, 0.12);
+  --vp-bad: #b42318; --vp-bad-bg: rgba(220, 38, 38, 0.09);
+  min-height: 100vh; background: var(--vp-bg); color: var(--vp-ink); font-family: 'Inter', system-ui, sans-serif; font-size: 14.5px; line-height: 1.45; }
+.vpo-wrap { max-width: 680px; margin: 0 auto; padding: 20px 16px 40px; display: flex; flex-direction: column; gap: 14px; }
+.vpo-header { padding: 4px 4px 6px; }
+.vpo-header h1 { margin: 2px 0; font-size: 24px; font-weight: 800; letter-spacing: -0.02em; color: var(--vp-ink); }
+.vpo-muted { color: var(--vp-muted); font-size: 13px; }
+.vpo-card { background: var(--vp-card); border: 1px solid var(--vp-line); border-radius: 16px; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+.vpo-card-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.vpo-card h2 { margin: 0; font-size: 12.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--vp-muted); }
+.vpo-card h3 { margin: 6px 0 0; font-size: 13px; font-weight: 700; color: var(--vp-ink); }
+.vpo-balance { background: var(--vp-accent); color: #fff; border-radius: 16px; padding: 18px 16px; display: flex; flex-direction: column; gap: 6px; }
+.vpo-balance > span { font-size: 13px; opacity: 0.92; }
+.vpo-balance strong { font-size: 32px; font-weight: 800; letter-spacing: -0.02em; }
+.vpo-balance-row { display: flex; justify-content: space-between; font-size: 13px; }
+.vpo-balance .vpo-bar { background: rgba(255, 255, 255, 0.28); }
+.vpo-balance .vpo-bar i { background: #fff; }
+.vpo-bar { height: 8px; border-radius: 99px; background: #e7eaf0; overflow: hidden; }
+.vpo-bar.thin { height: 6px; }
+.vpo-bar i { display: block; height: 100%; background: var(--vp-ok); }
+.vpo-list { display: flex; flex-direction: column; }
+.vpo-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding: 10px 0; border-top: 1px solid var(--vp-line); }
+.vpo-list > .vpo-row:first-child { border-top: 0; }
+.vpo-row-end { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.vpo-chip { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; background: #eef1f6; color: var(--vp-muted); white-space: nowrap; }
+.vpo-chip.ok { background: var(--vp-ok-bg); color: var(--vp-ok); }
+.vpo-chip.warn { background: var(--vp-warn-bg); color: var(--vp-warn); }
+.vpo-chip.bad { background: var(--vp-bad-bg); color: var(--vp-bad); }
+.vpo-bad-text { color: var(--vp-bad); font-size: 12.5px; }
+.vpo-lines { display: flex; flex-direction: column; gap: 10px; margin-top: 4px; }
+.vpo-line-top { display: flex; justify-content: space-between; gap: 10px; font-size: 13.5px; margin-bottom: 4px; }
+.vpo-num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.vpo-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+.vpo-money { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13px; color: var(--vp-muted); padding-top: 8px; border-top: 1px solid var(--vp-line); }
+.vpo-money b { color: var(--vp-ink); }
+.vpo-btn { font: 600 15px 'Inter', system-ui, sans-serif; min-height: 44px; padding: 10px 16px; border-radius: 12px; border: 1px solid rgba(15, 23, 42, 0.16); background: #fff; color: var(--vp-ink); cursor: pointer; width: 100%; }
+.vpo-btn-primary { background: var(--vp-accent); border-color: var(--vp-accent); color: #fff; }
+.vpo-btn:disabled { opacity: 0.6; }
+.vpo-link { background: none; border: 0; padding: 4px 0; color: var(--vp-accent); font: 600 13px 'Inter', system-ui, sans-serif; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; align-self: flex-start; }
+.vpo-form { display: flex; flex-direction: column; gap: 10px; }
+.vpo-form label { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; font-weight: 600; color: var(--vp-muted); }
+.vpo-form input, .vpo-form select { font: 500 15px 'Inter', system-ui, sans-serif; color: var(--vp-ink); background: #fff; border: 1px solid rgba(15, 23, 42, 0.18); border-radius: 10px; padding: 10px 12px; min-height: 44px; }
+.vpo-two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.vpo-msg { margin: 0; padding: 10px 12px; border-radius: 10px; background: var(--vp-ok-bg); color: var(--vp-ok); font-size: 13.5px; }
+.vpo-msg.bad { background: var(--vp-bad-bg); color: var(--vp-bad); }
+.vpo-details summary { cursor: pointer; color: var(--vp-accent); font-weight: 600; font-size: 13px; padding: 4px 0; }
+.vpo-table-wrap { overflow-x: auto; }
+.vpo-table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 480px; }
+.vpo-table th { text-align: left; font-size: 11.5px; color: var(--vp-muted); font-weight: 600; padding: 6px 8px; border-bottom: 1px solid var(--vp-line); }
+.vpo-table td { padding: 8px; border-bottom: 1px solid var(--vp-line); vertical-align: top; }
+.vpo-table th:nth-child(n+3), .vpo-table td:nth-child(n+3) { text-align: right; }
+.vpo-foot { text-align: center; font-size: 12px; }
+@media (max-width: 420px) { .vpo-two { grid-template-columns: 1fr; } }
+@media print {
+  .vpo { background: #fff; }
+  .vpo-btn, .vpo-link, .vpo-form { display: none !important; }
+  .vpo-card, .vpo-balance { break-inside: avoid; }
+  .vpo-balance { color: var(--vp-ink); background: #fff; border: 1px solid var(--vp-line); }
+}
+
+.vp-link-card { grid-column: 1 / -1; }
+.vp-link-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.vp-link-row input { flex: 1 1 320px; min-width: 0; color: var(--text-secondary); }
+.vp-link-row .btn { text-decoration: none; }

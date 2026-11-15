@@ -8,11 +8,13 @@
  */
 
 const express = require('express');
+const crypto = require('crypto');
 const db = require('../db/connection');
 const { hasPermission } = require('../utils/permissions');
 const { tableParams, pagination } = require('../utils/table');
 const { refLabel } = require('../services/vendor-order');
 const money = require('../services/vendor-money');
+const { statement } = require('../services/vendor-statement');
 
 const router = express.Router();
 
@@ -28,6 +30,9 @@ router.use(async (req, res, next) => {
 const isAdmin = (req) => req.user?.role === 'owner' || req.user?.role === 'admin';
 const canEdit = (req) => hasPermission(req, 'can_edit_vendor_orders');
 const canSeeBank = (req) => hasPermission(req, 'can_record_vendor_payments');
+const canShare = (req) => hasPermission(req, 'can_share_vendor_link');
+const PUBLIC_BASE = () => (process.env.PUBLIC_BASE_URL || 'https://ops.normless.store').replace(/\/+$/, '');
+const portalUrl = (token) => `${PUBLIC_BASE()}/v/${token}`;
 
 const BRANDS = ['normless', 'crewfit', 'both'];
 // Offered in the category picker until vendors have categories of their own; any typed value is
@@ -132,7 +137,7 @@ router.get('/meta', async (req, res) => {
         res.json({
             categories: [...seen.values()].sort((a, b) => a.localeCompare(b)),
             brands: BRANDS,
-            can: { edit: await canEdit(req), bank: await canSeeBank(req), delete: isAdmin(req) },
+            can: { edit: await canEdit(req), bank: await canSeeBank(req), share: await canShare(req), delete: isAdmin(req) },
         });
     } catch (err) {
         console.error('vendors meta:', err);
@@ -186,6 +191,14 @@ router.get('/:id', async (req, res) => {
         const v = (await db.query('SELECT * FROM vendors WHERE id = $1', [req.params.id])).rows[0];
         if (!v) return res.status(404).json({ error: 'Vendor not found' });
         const vendor = await canSeeBank(req) ? { ...v, bank_on_file: !!(v.bank_account_no || v.upi_id) } : { ...v, ...maskBank(v) };
+        // The link itself only to those who may share it; that it exists, to everyone.
+        const sharer = await canShare(req);
+        vendor.portal = {
+            enabled: !!(v.portal_enabled && v.portal_token),
+            url: sharer && v.portal_token ? portalUrl(v.portal_token) : null,
+            created_at: v.portal_created_at, last_seen_at: v.portal_last_seen_at,
+        };
+        delete vendor.portal_token;
 
         const orders = (await db.query(
             `SELECT o.id, o.ref_no, o.brand, TO_CHAR(o.order_date, 'YYYY-MM-DD') AS order_date,
@@ -224,6 +237,9 @@ router.get('/:id', async (req, res) => {
             ...await money.vendorMoney(v.id),
         };
         stats.quotations = (await db.query('SELECT COUNT(*)::int AS n FROM vendor_quotations WHERE vendor_id = $1', [v.id])).rows[0].n;
+        const inv = (await db.query(
+            `SELECT COUNT(*)::int AS n, COUNT(*) FILTER (WHERE status = 'Under review')::int AS review FROM vendor_invoices WHERE vendor_id = $1`, [v.id])).rows[0];
+        stats.invoices = inv.n; stats.invoices_review = inv.review;
         res.json({ vendor, orders, payments, stats });
     } catch (err) {
         console.error('vendor profile:', err);
@@ -237,42 +253,7 @@ router.get('/:id/statement', async (req, res) => {
     try {
         const v = (await db.query('SELECT id, name FROM vendors WHERE id = $1', [req.params.id])).rows[0];
         if (!v) return res.status(404).json({ error: 'Vendor not found' });
-        const orders = (await db.query(
-            `SELECT o.id, o.ref_no, o.brand, TO_CHAR(o.order_date, 'YYYY-MM-DD') AS date, o.title, o.quote_ref, o.items,
-                    ${money.TOTAL_SQL} AS total, o.created_at
-             FROM vendor_orders o WHERE o.vendor_id = $1`, [v.id])).rows;
-        const payments = (await db.query(
-            `SELECT p.id, TO_CHAR(p.paid_on, 'YYYY-MM-DD') AS date, p.amount, p.mode, p.reference, p.source, p.created_at,
-                    COALESCE((SELECT string_agg('VO-' || LPAD(o.ref_no::text, 3, '0'), ', ' ORDER BY o.id)
-                              FROM vendor_payment_allocations a JOIN vendor_orders o ON o.id = a.order_id
-                              WHERE a.payment_id = p.id), '') AS against
-             FROM vendor_payments p WHERE p.vendor_id = $1`, [v.id])).rows;
-
-        const entries = [
-            ...orders.map(o => {
-                const items = parseItems(o.items).map(i => i.product_type).filter(Boolean).join(', ');
-                return {
-                    kind: 'order', id: o.id, date: o.date, at: o.created_at, ref: refLabel(o), brand: o.brand,
-                    text: [o.title || items || 'Order', o.quote_ref ? `quote ${o.quote_ref}` : null].filter(Boolean).join(' · '),
-                    billed: Number(o.total) > 0 ? Number(o.total) : null, paid: null,
-                };
-            }),
-            ...payments.map(p => ({
-                kind: 'payment', id: p.id, date: p.date, at: p.created_at, ref: p.reference || null, mode: p.mode,
-                text: `Payment${p.mode ? ` · ${p.mode}` : ''}${p.against ? ` · for ${p.against}` : ' · on account'}`,
-                billed: null, paid: Number(p.amount),
-                missing_reference: p.source === 'manual' && p.mode !== 'Cash' && !String(p.reference || '').trim(),
-            })),
-        ].sort((a, b) => (a.date === b.date
-            ? (a.kind === b.kind ? new Date(a.at) - new Date(b.at) : (a.kind === 'order' ? -1 : 1))
-            : a.date.localeCompare(b.date)));
-
-        let balance = 0;
-        for (const e of entries) {
-            balance = money.round2(balance + (e.billed || 0) - (e.paid || 0));
-            e.balance = balance;
-        }
-        res.json({ vendor: v, entries, balance });
+        res.json({ vendor: v, ...await statement(v.id) });
     } catch (err) {
         console.error('vendor statement:', err);
         res.status(500).json({ error: 'Failed to load the statement' });
@@ -324,6 +305,32 @@ router.put('/:id', async (req, res) => {
     } catch (err) {
         console.error('vendor update:', err);
         res.status(500).json({ error: 'Failed to save vendor' });
+    }
+});
+
+// POST /api/vendors/:id/link { action: 'create' | 'regenerate' | 'disable' } — the vendor's own page.
+// Regenerating gives a new address and kills the old one, for a link that went somewhere it shouldn't.
+router.post('/:id/link', async (req, res) => {
+    try {
+        if (!await canShare(req)) return res.status(403).json({ error: 'You can’t share vendor links' });
+        const v = (await db.query('SELECT id, portal_token FROM vendors WHERE id = $1', [req.params.id])).rows[0];
+        if (!v) return res.status(404).json({ error: 'Vendor not found' });
+        const action = req.body?.action;
+        if (action === 'disable') {
+            await db.query('UPDATE vendors SET portal_enabled = false, updated_at = CURRENT_TIMESTAMP WHERE id = $1', [v.id]);
+            return res.json({ success: true, enabled: false, url: v.portal_token ? portalUrl(v.portal_token) : null });
+        }
+        if (!['create', 'regenerate'].includes(action)) return res.status(400).json({ error: 'Unknown action' });
+        const token = action === 'regenerate' || !v.portal_token ? crypto.randomBytes(24).toString('base64url') : v.portal_token;
+        await db.query(
+            `UPDATE vendors SET portal_token = $1, portal_enabled = true, updated_at = CURRENT_TIMESTAMP,
+                 portal_created_at = CASE WHEN portal_token IS DISTINCT FROM $1 THEN CURRENT_TIMESTAMP ELSE portal_created_at END,
+                 portal_last_seen_at = CASE WHEN portal_token IS DISTINCT FROM $1 THEN NULL ELSE portal_last_seen_at END
+             WHERE id = $2`, [token, v.id]);
+        res.json({ success: true, enabled: true, url: portalUrl(token) });
+    } catch (err) {
+        console.error('vendor link:', err);
+        res.status(500).json({ error: 'Failed to update the link' });
     }
 });
 
