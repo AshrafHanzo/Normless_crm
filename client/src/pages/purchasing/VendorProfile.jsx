@@ -59,6 +59,18 @@ function Statement({ vendorId, version, apiFetch }) {
   )
 }
 
+/** "20% on order · 30% after 14 days · 50% on delivery" — set from an order's payment plan. */
+function usualPlan(raw) {
+  let rows = []
+  try { rows = JSON.parse(raw || '[]') } catch { return null }
+  if (!rows.length) return null
+  return rows.map(r => {
+    const share = r.percent ? `${Number(r.percent)}%` : inr(r.amount)
+    const when = r.due_kind === 'delivery' ? 'on delivery' : r.days == null ? 'date to be fixed' : Number(r.days) === 0 ? 'on order' : `after ${r.days} days`
+    return `${share} ${when}`
+  }).join(' · ')
+}
+
 function Detail({ label, children }) {
   return (
     <div className="vp-detail">
@@ -217,6 +229,7 @@ export default function VendorProfile() {
           <h3 style={{ marginTop: 18 }}>Terms &amp; notes</h3>
           <div className="vp-details">
             <Detail label="Payment terms">{v.payment_terms}</Detail>
+            <Detail label="Usual payment plan">{usualPlan(v.default_plan)}</Detail>
             <Detail label="Internal notes"><span style={{ whiteSpace: 'pre-wrap' }}>{v.notes}</span></Detail>
           </div>
         </div>

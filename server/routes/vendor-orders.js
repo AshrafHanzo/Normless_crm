@@ -19,6 +19,7 @@ const db = require('../db/connection');
 const { hasPermission } = require('../utils/permissions');
 const vendorOrder = require('../services/vendor-order');
 const money = require('../services/vendor-money');
+const plan = require('../services/vendor-plan');
 const { tableParams, pagination } = require('../utils/table');
 
 const router = express.Router();
@@ -61,22 +62,32 @@ const orderTotal = (row) => {
 };
 const hydrate = (row) => {
     const total = orderTotal(row);
+    const paid = Number(row.paid_amount) || 0;
+    const instalments = total ? plan.schedule(row.instalments || [], { paid_amount: paid, status: row.status }) : [];
+    const planned = money.round2(instalments.reduce((s, i) => s + i.amount, 0));
     return {
         ...row,
         items: parseItems(row.items),
         ref: vendorOrder.refLabel(row),
         total,
-        paid_amount: Number(row.paid_amount) || 0,
-        balance: total ? money.round2(total - (Number(row.paid_amount) || 0)) : null,
+        paid_amount: paid,
+        balance: total ? money.round2(total - paid) : null,
         // Hand-set only when there is no total to work it out from.
         payment_manual: !total,
+        instalments,
+        next_instalment: plan.nextDue(instalments),
+        // The total changed after the plan was made, and fixed amounts no longer add up to it.
+        plan_mismatch: instalments.length > 0 && Math.abs(planned - total) > 1 ? planned : null,
     };
 };
 
 const ROW_COLUMNS = `id, ref_no, brand, TO_CHAR(order_date, 'YYYY-MM-DD') AS order_date,
     TO_CHAR(delivery_date, 'YYYY-MM-DD') AS delivery_date, vendor, vendor_id, vendor_phone, title, quote_ref,
     status, payment_status, items, notes, total_qty, total_amount, total_override, paid_amount,
-    confirmed_at, sent_at, created_by, created_at`;
+    confirmed_at, sent_at, created_by, created_at,
+    COALESCE((SELECT json_agg(json_build_object('id', i.id, 'seq', i.seq, 'label', i.label, 'amount', i.amount,
+                  'percent', i.percent, 'due_kind', i.due_kind, 'due_date', TO_CHAR(i.due_date, 'YYYY-MM-DD')) ORDER BY i.seq)
+              FROM vendor_order_instalments i WHERE i.order_id = vendor_orders.id), '[]') AS instalments`;
 
 const posInt = (v) => { const n = parseInt(v, 10); return n > 0 ? n : 0; };
 
@@ -299,7 +310,9 @@ router.get('/:id', async (req, res) => {
                     p.amount AS payment_amount, a.amount, (p.proof_path IS NOT NULL) AS has_proof
              FROM vendor_payment_allocations a JOIN vendor_payments p ON p.id = a.payment_id
              WHERE a.order_id = $1 ORDER BY p.paid_on, p.id`, [req.params.id])).rows;
-        res.json({ order: hydrate(r.rows[0]), payments });
+        const vendor = r.rows[0].vendor_id
+            ? (await db.query('SELECT default_plan FROM vendors WHERE id = $1', [r.rows[0].vendor_id])).rows[0] : null;
+        res.json({ order: hydrate(r.rows[0]), payments, vendor_default_plan: parseItems(vendor?.default_plan) });
     } catch (err) {
         console.error('Error loading vendor order:', err);
         res.status(500).json({ error: 'Failed to load vendor order' });
@@ -376,7 +389,12 @@ router.put('/:id', async (req, res) => {
             await c.query(
                 `UPDATE vendor_orders SET ${cols.map((col, i) => `${col} = $${i + 1}`).join(', ')}, updated_at = CURRENT_TIMESTAMP
                  WHERE id = $${cols.length + 1}`, [...cols.map(col => row[col]), req.params.id]);
-            // A new total changes how much of it is paid.
+            // A new total changes how much of it is paid, and what each percentage instalment is.
+            const total = row.total_override || row.total_amount;
+            if (total) {
+                await c.query(`UPDATE vendor_order_instalments SET amount = ROUND($1 * percent / 100, 2)
+                               WHERE order_id = $2 AND percent IS NOT NULL`, [total, req.params.id]);
+            }
             await money.recompute([req.params.id], c);
             return c.query(`SELECT ${ROW_COLUMNS} FROM vendor_orders WHERE id = $1`, [req.params.id]);
         });
@@ -448,6 +466,40 @@ router.get('/:id/pdf', async (req, res) => {
     } catch (err) {
         console.error('Error rendering vendor order PDF:', err);
         if (!res.headersSent) res.status(500).json({ error: 'Failed to render PDF' });
+    }
+});
+
+// PUT /api/vendor-orders/:id/plan { instalments: [...], save_as_default } — the payment plan.
+// Set by whoever records payments: it is the money side of the order.
+router.put('/:id/plan', async (req, res) => {
+    if (!await hasPermission(req, 'can_record_vendor_payments')) return res.status(403).json({ error: 'Only people who record vendor payments can set a payment plan' });
+    try {
+        const o = (await db.query(
+            `SELECT id, vendor_id, TO_CHAR(order_date, 'YYYY-MM-DD') AS order_date, total_amount, total_override
+             FROM vendor_orders WHERE id = $1`, [req.params.id])).rows[0];
+        if (!o) return res.status(404).json({ error: 'Vendor order not found' });
+        const total = orderTotal(o);
+        const { error, rows } = plan.cleanPlan(req.body?.instalments, total);
+        if (error) return res.status(400).json({ error });
+
+        await db.transaction(async (c) => {
+            await c.query('DELETE FROM vendor_order_instalments WHERE order_id = $1', [o.id]);
+            for (const r of rows) {
+                await c.query(
+                    `INSERT INTO vendor_order_instalments (order_id, seq, label, amount, percent, due_kind, due_date)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+                    [o.id, r.seq, r.label, r.amount, r.percent, r.due_kind, r.due_date]);
+            }
+            if (req.body?.save_as_default && o.vendor_id && rows.length) {
+                await c.query('UPDATE vendors SET default_plan = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+                    [JSON.stringify(plan.toTemplate(rows, total, o.order_date)), o.vendor_id]);
+            }
+        });
+        const r = await db.query(`SELECT ${ROW_COLUMNS} FROM vendor_orders WHERE id = $1`, [o.id]);
+        res.json({ success: true, order: hydrate(r.rows[0]) });
+    } catch (err) {
+        console.error('Error saving payment plan:', err);
+        res.status(500).json({ error: 'Failed to save the payment plan' });
     }
 });
 

@@ -47,7 +47,7 @@ const NAV = {
 const PURCHASING_NAV = [
   { to: '/vendors', icon: 'truck', label: 'Vendors', perm: 'can_view_vendors' },
   { to: '/vendor-orders', icon: 'box', label: 'Vendor Orders', perm: 'can_view_vendors' },
-  { to: '/vendor-payments', icon: 'wallet', label: 'Vendor Payments', perm: 'can_view_vendors' },
+  { to: '/vendor-payments', icon: 'wallet', label: 'Vendor Payments', perm: 'can_view_vendors', badge: 'vendor_due' },
 ]
 
 // The Team section is the same in both menus: one list of people, one payroll and one set of
@@ -109,6 +109,23 @@ export default function Sidebar({ collapsed = false, onToggleCollapse, open: ope
     return () => { live = false; clearInterval(t) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canSeeMarketing])
+
+  // Vendor instalments overdue or due today, on either brand's menu: whoever pays vendors is told
+  // before the vendor has to ask.
+  const canSeeVendors = user?.role === 'owner' || user?.role === 'admin' || !!user?.can_view_vendors
+  const [vendorDue, setVendorDue] = useState(0)
+  useEffect(() => {
+    if (!canSeeVendors) return
+    let live = true
+    const check = async () => {
+      const r = await apiFetch('/api/vendor-payments/due-count')
+      if (live && r && !r.error) setVendorDue(r.due || 0)
+    }
+    check()
+    const t = setInterval(check, 300000)
+    return () => { live = false; clearInterval(t) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canSeeVendors])
 
   // Customer requests nobody has closed. On the menu for the same reason as the others: the desk
   // that answers the customer is not the desk that packs the replacement.
@@ -240,12 +257,18 @@ export default function Sidebar({ collapsed = false, onToggleCollapse, open: ope
           {purchasingItems.length > 0 && (
             <div className="sidebar-section">
               <div className="sidebar-section-label">Purchasing</div>
-              {purchasingItems.map(item => (
-                <NavLink key={item.to} to={item.to} onClick={close} title={item.label}
-                  className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>
-                  <span className="link-icon"><Icon name={item.icon} size={19} /></span><span>{item.label}</span>
-                </NavLink>
-              ))}
+              {purchasingItems.map(item => {
+                const count = item.badge === 'vendor_due' ? vendorDue : 0
+                return (
+                  <NavLink key={item.to} to={item.to} onClick={close}
+                    title={count ? `${item.label} — ${count} instalment${count > 1 ? 's' : ''} overdue or due today` : item.label}
+                    className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>
+                    <span className="link-icon"><Icon name={item.icon} size={19} />{count > 0 && <span className="link-dot" />}</span>
+                    <span>{item.label}</span>
+                    {count > 0 && <span className="nav-badge">{count}</span>}
+                  </NavLink>
+                )
+              })}
             </div>
           )}
 

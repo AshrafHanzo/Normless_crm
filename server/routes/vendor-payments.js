@@ -18,6 +18,7 @@ const { hasPermission } = require('../utils/permissions');
 const { tableParams, pagination } = require('../utils/table');
 const { refLabel } = require('../services/vendor-order');
 const money = require('../services/vendor-money');
+const plan = require('../services/vendor-plan');
 
 const router = express.Router();
 
@@ -51,6 +52,10 @@ const today = () => new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 1
 const SORTS = {
     paid_on: 'p.paid_on', vendor: 'LOWER(v.name)', amount: 'p.amount', mode: 'p.mode', reference: 'p.reference',
 };
+
+const INST_SQL = `COALESCE((SELECT json_agg(json_build_object('id', i.id, 'seq', i.seq, 'label', i.label, 'amount', i.amount,
+                  'percent', i.percent, 'due_kind', i.due_kind, 'due_date', TO_CHAR(i.due_date, 'YYYY-MM-DD')) ORDER BY i.seq)
+              FROM vendor_order_instalments i WHERE i.order_id = o.id), '[]') AS instalments`;
 
 const LIST_COLUMNS = `p.id, p.vendor_id, v.name AS vendor, TO_CHAR(p.paid_on, 'YYYY-MM-DD') AS paid_on, p.amount,
     p.mode, p.reference, p.paid_from, p.note, p.source, (p.proof_path IS NOT NULL) AS has_proof, p.proof_name,
@@ -114,6 +119,65 @@ router.get('/', async (req, res) => {
     }
 });
 
+const DUE_ORDER = { Overdue: 0, Due: 1, 'Due soon': 2, Upcoming: 3, 'No date': 4, 'On delivery': 5 };
+
+/** Every instalment still owing, across orders, with its order and vendor. */
+async function dueInstalments({ brand, vendorId } = {}) {
+    const where = [`${money.TOTAL_SQL} > o.paid_amount`, 'EXISTS (SELECT 1 FROM vendor_order_instalments i WHERE i.order_id = o.id)'];
+    const vals = [];
+    if (['normless', 'crewfit'].includes(brand)) { vals.push(brand); where.push(`o.brand = $${vals.length}`); }
+    if (vendorId) { vals.push(vendorId); where.push(`o.vendor_id = $${vals.length}`); }
+    const orders = (await db.query(
+        `SELECT o.id, o.ref_no, o.brand, o.vendor_id, v.name AS vendor, TO_CHAR(o.order_date, 'YYYY-MM-DD') AS order_date,
+                o.title, o.quote_ref, o.status, ${money.TOTAL_SQL} AS total, o.paid_amount, ${INST_SQL}
+         FROM vendor_orders o LEFT JOIN vendors v ON v.id = o.vendor_id
+         WHERE ${where.join(' AND ')}`, vals)).rows;
+    const out = [];
+    for (const o of orders) {
+        for (const i of plan.schedule(o.instalments, o)) {
+            if (i.status === 'Paid') continue;
+            out.push({ ...i, order_id: o.id, ref: refLabel(o), brand: o.brand, vendor_id: o.vendor_id, vendor: o.vendor,
+                title: o.title, quote_ref: o.quote_ref, order_total: Number(o.total), order_paid: Number(o.paid_amount) });
+        }
+    }
+    return out.sort((a, b) => (DUE_ORDER[a.status] - DUE_ORDER[b.status])
+        || String(a.due_date || '9999').localeCompare(String(b.due_date || '9999')) || a.order_id - b.order_id || a.seq - b.seq);
+}
+
+// GET /api/vendor-payments/due?brand&vendor_id — what is owed on payment plans, most urgent first
+router.get('/due', async (req, res) => {
+    try {
+        const rows = await dueInstalments({ brand: req.query.brand, vendorId: parseInt(req.query.vendor_id, 10) || null });
+        const bucket = (keep) => {
+            const list = rows.filter(r => keep.includes(r.status));
+            return { count: list.length, amount: money.round2(list.reduce((s, r) => s + r.remaining, 0)) };
+        };
+        res.json({
+            instalments: rows,
+            summary: {
+                overdue: bucket(['Overdue']),
+                due: bucket(['Due']),
+                soon: bucket(['Due soon']),
+                later: bucket(['Upcoming', 'No date', 'On delivery']),
+            },
+        });
+    } catch (err) {
+        console.error('vendor instalments due:', err);
+        res.status(500).json({ error: 'Failed to load what is due' });
+    }
+});
+
+// GET /api/vendor-payments/due-count — for the menu badge: instalments overdue or due today
+router.get('/due-count', async (req, res) => {
+    try {
+        const rows = await dueInstalments();
+        res.json({ due: rows.filter(r => r.status === 'Overdue' || r.status === 'Due').length });
+    } catch (err) {
+        console.error('vendor due count:', err);
+        res.status(500).json({ error: 'Failed' });
+    }
+});
+
 // GET /api/vendor-payments/form?vendor_id&payment_id — what the payment form needs: the vendor's
 // bank details and balance, and the orders it can be put against (with what is still due on each,
 // counting this payment's own share as not yet paid when it is being edited).
@@ -129,7 +193,7 @@ router.get('/form', async (req, res) => {
 
         const orders = (await db.query(
             `SELECT o.id, o.ref_no, o.brand, TO_CHAR(o.order_date, 'YYYY-MM-DD') AS order_date, o.title, o.quote_ref,
-                    o.status, o.payment_status, o.items, ${money.TOTAL_SQL} AS total,
+                    o.status, o.payment_status, o.items, ${money.TOTAL_SQL} AS total, o.paid_amount, ${INST_SQL},
                     o.paid_amount - COALESCE((SELECT a.amount FROM vendor_payment_allocations a
                                               WHERE a.order_id = o.id AND a.payment_id = $2), 0) AS paid_elsewhere,
                     COALESCE((SELECT a.amount FROM vendor_payment_allocations a
@@ -140,7 +204,10 @@ router.get('/form', async (req, res) => {
             .map(o => {
                 const total = Number(o.total) > 0 ? Number(o.total) : null;
                 const due = total ? money.round2(total - Number(o.paid_elsewhere)) : null;
+                // The next instalment as it stands without this payment, to suggest an amount.
+                const next = total ? plan.nextDue(plan.schedule(o.instalments, { ...o, paid_amount: o.paid_elsewhere })) : null;
                 return {
+                    next_instalment: next && { number: next.number, of: next.of, label: next.label, remaining: next.remaining, due_date: next.due_date, status: next.status },
                     id: o.id, ref: refLabel(o), brand: o.brand, order_date: o.order_date, title: o.title, quote_ref: o.quote_ref,
                     status: o.status, payment_status: o.payment_status, total, due, this_payment: Number(o.this_payment),
                     summary: (() => { try { return JSON.parse(o.items || '[]').map(i => i.product_type).filter(Boolean).join(', '); } catch { return ''; } })(),

@@ -18,3 +18,16 @@ export async function openProof(apiFetch, toast, id) {
   }
   setTimeout(() => URL.revokeObjectURL(url), 60000)
 }
+
+/** status-badge class per instalment status. */
+export const INSTALMENT_CLASS = { Paid: 'fulfilled', Overdue: 'refunded', Due: 'pending', 'Due soon': 'pending', Upcoming: 'partial', 'On delivery': '', 'No date': '' }
+
+/** One line saying when an instalment falls due. */
+export function dueText(i) {
+  if (i.status === 'Paid') return 'Paid'
+  if (i.due_kind === 'delivery') return i.status === 'Due' ? 'Due — delivered' : 'On delivery'
+  if (!i.due_date) return 'Date to be fixed'
+  if (i.days < 0) return `${-i.days} day${i.days === -1 ? '' : 's'} overdue · ${day(i.due_date)}`
+  if (i.days === 0) return `Due today · ${day(i.due_date)}`
+  return `${day(i.due_date)}${i.days <= 7 ? ` · in ${i.days} day${i.days === 1 ? '' : 's'}` : ''}`
+}

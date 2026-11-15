@@ -12,6 +12,7 @@ import SortTh from '../../components/SortTh'
 import Pagination from '../../components/Pagination'
 import VendorOrderAnalytics from './VendorOrderAnalytics'
 import RecordPaymentDrawer from './RecordPaymentDrawer'
+import PaymentPlan from './PaymentPlan'
 import { BRAND_LABEL, PAY_CLASS, inr, day } from './format'
 import { cleanMobile, mobileError, isValidMobile, mobileInputProps } from '../../utils/phone'
 
@@ -50,7 +51,7 @@ function summarise(items) {
 
 /* ────────────────────────────── drawer ────────────────────────────── */
 
-function VendorOrderDrawer({ target, defaultBrand, meta, onClose, onSaved, onPay, apiFetch, toast }) {
+function VendorOrderDrawer({ target, defaultBrand, meta, onClose, onSaved, onPay, onChanged, apiFetch, toast }) {
   const [form, setForm] = useState(() => (target === 'new' ? blankOrder(defaultBrand) : {
     ...target,
     delivery_date: target.delivery_date || '',
@@ -66,6 +67,9 @@ function VendorOrderDrawer({ target, defaultBrand, meta, onClose, onSaved, onPay
       : [blankItem(target.brand)],
   }))
   const [payments, setPayments] = useState([])
+  // The order as saved — the plan is worked out from its saved total, not the form's.
+  const [saved, setSaved] = useState(null)
+  const [defaultPlan, setDefaultPlan] = useState([])
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const errorRef = useErrorInView(error)
@@ -75,7 +79,10 @@ function VendorOrderDrawer({ target, defaultBrand, meta, onClose, onSaved, onPay
   useEffect(() => {
     if (!target?.id) return
     let live = true
-    apiFetch(`/api/vendor-orders/${target.id}`).then(r => { if (live && r && !r.error) setPayments(r.payments || []) })
+    apiFetch(`/api/vendor-orders/${target.id}`).then(r => {
+      if (!live || !r || r.error) return
+      setPayments(r.payments || []); setSaved(r.order); setDefaultPlan(r.vendor_default_plan || [])
+    })
     return () => { live = false }
     // apiFetch is a new function every render (see useApi), so it can't be a dependency here.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -334,6 +341,11 @@ function VendorOrderDrawer({ target, defaultBrand, meta, onClose, onSaved, onPay
             </div>
           </fieldset>
 
+          {saved?.total > 0 && (
+            <PaymentPlan order={saved} vendorName={saved.vendor} defaultPlan={defaultPlan} canEdit={!!meta?.can?.pay}
+              apiFetch={apiFetch} toast={toast} onSaved={(o) => { setSaved(o); onChanged?.() }} />
+          )}
+
           {form.id && total > 0 && (
             <>
               <div className="form-section">
@@ -566,6 +578,11 @@ export default function VendorOrders() {
                   <td data-label="Total" style={{ textAlign: 'right' }}>{o.total ? inr(o.total) : '—'}</td>
                   <td data-label="Balance" style={{ textAlign: 'right', color: o.balance > 0 ? 'var(--warning)' : undefined, fontWeight: o.balance > 0 ? 600 : undefined }}>
                     {o.total ? inr(o.balance) : '—'}
+                    {o.next_instalment && (
+                      <div style={{ fontSize: 11.5, fontWeight: 500, color: o.next_instalment.status === 'Overdue' ? 'var(--danger)' : 'var(--text-muted)' }}>
+                        Next {inr(o.next_instalment.remaining)} · {o.next_instalment.status === 'Overdue' ? 'overdue' : o.next_instalment.due_date ? day(o.next_instalment.due_date) : o.next_instalment.status.toLowerCase()}
+                      </div>
+                    )}
                   </td>
                   {/* Both statuses change straight from the row — they move far more often than
                       anything else on the order. */}
@@ -613,7 +630,8 @@ export default function VendorOrders() {
           meta={meta} apiFetch={apiFetch} toast={toast}
           onClose={() => setTarget(null)}
           onSaved={() => { setTarget(null); load() }}
-          onPay={(o) => { setTarget(null); setPaying(o) }} />
+          onPay={(o) => { setTarget(null); setPaying(o) }}
+          onChanged={load} />
       )}
 
       {paying && (

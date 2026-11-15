@@ -141,6 +141,26 @@ async function ensureVendorSchema() {
                 UNIQUE (payment_id, order_id)
             );
             CREATE INDEX IF NOT EXISTS vendor_payment_alloc_order_idx ON vendor_payment_allocations (order_id);
+
+            -- The payment plan agreed for an order: advance, then instalments. A schedule, not a
+            -- gate — payments are never matched to an instalment; whatever is paid on the order
+            -- covers the instalments in order (services/vendor-plan).
+            CREATE TABLE IF NOT EXISTS vendor_order_instalments (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                order_id INTEGER NOT NULL REFERENCES vendor_orders(id) ON DELETE CASCADE,
+                seq INTEGER NOT NULL,
+                label TEXT,
+                amount NUMERIC(12,2) NOT NULL CHECK (amount > 0),
+                percent NUMERIC(6,3),           -- set when it was agreed as a share of the total
+                due_kind TEXT NOT NULL DEFAULT 'date',   -- date | delivery
+                due_date DATE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS vendor_order_instalments_order_idx ON vendor_order_instalments (order_id, seq);
+
+            -- A vendor's usual terms as a template a new order's plan can start from:
+            -- [{ label, percent | amount, due_kind: 'days' | 'delivery', days }]
+            ALTER TABLE vendors ADD COLUMN IF NOT EXISTS default_plan TEXT;
         `);
 
         // Seeded while the list is empty, so a start that failed half-way tries again next time.

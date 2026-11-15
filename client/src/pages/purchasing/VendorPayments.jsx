@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { useApi } from '../../App'
 import { useToast } from '../../components/Toast'
 import Icon from '../../components/Icon'
@@ -7,7 +7,86 @@ import useServerTable from '../../hooks/useServerTable'
 import SortTh from '../../components/SortTh'
 import Pagination from '../../components/Pagination'
 import RecordPaymentDrawer from './RecordPaymentDrawer'
-import { MODES, inr, day, openProof } from './format'
+import { MODES, INSTALMENT_CLASS, BRAND_LABEL, inr, day, openProof, dueText } from './format'
+
+/** What is owed on payment plans, most urgent first. */
+function ToPay({ apiFetch, toast, canPay, onPay, version }) {
+  const [data, setData] = useState(null)
+  const [brand, setBrand] = useState('')
+  useEffect(() => {
+    let live = true
+    apiFetch(`/api/vendor-payments/due${brand ? `?brand=${brand}` : ''}`).then(r => {
+      if (!live || !r) return
+      if (r.error) toast.error(r.error)
+      else setData(r)
+    })
+    return () => { live = false }
+    // apiFetch is a new function every render (see useApi), so it can't be a dependency here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [brand, version])
+
+  const s = data?.summary
+  const tiles = [
+    { label: 'Overdue', b: s?.overdue, color: 'var(--danger)' },
+    { label: 'Due today or on delivery', b: s?.due, color: 'var(--warning)' },
+    { label: 'Due in the next 7 days', b: s?.soon },
+    { label: 'Later', b: s?.later },
+  ]
+  return (
+    <>
+      <div className="kpi-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))' }}>
+        {tiles.map(t => (
+          <div className="kpi-card" key={t.label}>
+            <div className="kpi-value" style={t.b?.count && t.color ? { color: t.color } : undefined}>{t.b ? inr(t.b.amount) : '—'}</div>
+            <div className="kpi-label">{t.label}</div>
+            <div className="kpi-sub">{t.b ? `${t.b.count} instalment${t.b.count === 1 ? '' : 's'}` : ''}</div>
+          </div>
+        ))}
+      </div>
+      <div className="filters-row">
+        <select value={brand} onChange={e => setBrand(e.target.value)} style={{ width: 'auto' }} aria-label="Brand">
+          <option value="">Both brands</option>
+          <option value="normless">Normless orders</option>
+          <option value="crewfit">Crewfit orders</option>
+        </select>
+      </div>
+      <div className="data-table-wrapper">
+        {!data ? <div className="loader"><div className="spinner" /></div> : !data.instalments.length ? (
+          <div className="empty-state"><div className="empty-icon"><Icon name="check" size={28} /></div>
+            <p>Nothing owed on a payment plan. Plans are set on each vendor order.</p>
+          </div>
+        ) : (
+          <table className="data-table">
+            <thead>
+              <tr><th>Due</th><th>Vendor</th><th>Order</th><th>Instalment</th><th style={{ textAlign: 'right' }}>To pay</th><th>Status</th><th></th></tr>
+            </thead>
+            <tbody>
+              {data.instalments.map(i => (
+                <tr key={i.id}>
+                  <td data-label="Due" style={{ fontSize: 12.5, color: i.status === 'Overdue' ? 'var(--danger)' : undefined }}>{dueText(i)}</td>
+                  <td className="cell-primary"><Link to={`/vendors/${i.vendor_id}`} style={{ fontWeight: 600, color: 'inherit' }}>{i.vendor || '—'}</Link></td>
+                  <td data-label="Order">
+                    {i.ref} <span className="badge-secondary">{BRAND_LABEL[i.brand]}</span>
+                    {(i.title || i.quote_ref) && <div style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>{[i.title, i.quote_ref].filter(Boolean).join(' · ')}</div>}
+                  </td>
+                  <td data-label="Instalment">{i.label || `${i.number} of ${i.of}`}{i.label && <div style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>{i.number} of {i.of}</div>}</td>
+                  <td data-label="To pay" style={{ textAlign: 'right', fontWeight: 600 }}>
+                    {inr(i.remaining)}
+                    {i.part && <div style={{ fontSize: 11.5, fontWeight: 500, color: 'var(--text-muted)' }}>{inr(i.covered)} of {inr(i.amount)} paid</div>}
+                  </td>
+                  <td data-label="Status"><span className={`status-badge ${INSTALMENT_CLASS[i.status] || ''}`}>{i.status}</span></td>
+                  <td className="cell-actions">
+                    {canPay && i.vendor_id && <button className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: 13 }} onClick={() => onPay(i)}>Pay</button>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </>
+  )
+}
 
 export default function VendorPayments() {
   const apiFetch = useApi()
@@ -26,6 +105,10 @@ export default function VendorPayments() {
   const [term, setTerm] = useState('')
   const [search, setSearch] = useState('')
   const [editing, setEditing] = useState(null)     // 'new' | payment id
+  const [paying, setPaying] = useState(null)       // an instalment, paid from the To pay tab
+  const [params, setParams] = useSearchParams()
+  const tab = params.get('tab') === 'paid' ? 'paid' : 'due'
+  const [version, setVersion] = useState(0)
   const seq = useRef(0)
 
   // apiFetch is a new function every render (see useApi), so it can't be a dependency here.
@@ -75,6 +158,14 @@ export default function VendorPayments() {
         {can.pay && <button className="btn btn-primary" onClick={() => setEditing('new')}><Icon name="plus" size={15} /> Record payment</button>}
       </div>
 
+      <div className="scan-tabs" style={{ marginBottom: 16 }} role="tablist">
+        <button role="tab" aria-selected={tab === 'due'} className={tab === 'due' ? 'active' : ''} onClick={() => setParams({}, { replace: true })}>To pay</button>
+        <button role="tab" aria-selected={tab === 'paid'} className={tab === 'paid' ? 'active' : ''} onClick={() => setParams({ tab: 'paid' }, { replace: true })}>Paid</button>
+      </div>
+
+      {tab === 'due' && <ToPay apiFetch={apiFetch} toast={toast} canPay={!!can.pay} onPay={setPaying} version={version} />}
+
+      {tab === 'paid' && <>
       <div className="kpi-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))' }}>
         <div className="kpi-card"><div className="kpi-value">{summary ? inr(summary.total) : '—'}</div><div className="kpi-label">Paid{from || to || vendorId || brand || mode ? ' (filtered)' : ''}</div></div>
         <div className="kpi-card"><div className="kpi-value">{summary?.count ?? '—'}</div><div className="kpi-label">Payments</div></div>
@@ -158,11 +249,17 @@ export default function VendorPayments() {
         )}
         {!loading && rows.length > 0 && <Pagination table={t} noun="payments" />}
       </div>
+      </>}
 
       {editing && (
         <RecordPaymentDrawer paymentId={editing === 'new' ? null : editing} apiFetch={apiFetch} toast={toast}
           onClose={() => setEditing(null)}
           onSaved={() => { setEditing(null); load() }} />
+      )}
+      {paying && (
+        <RecordPaymentDrawer vendorId={paying.vendor_id} presetOrderId={paying.order_id} apiFetch={apiFetch} toast={toast}
+          onClose={() => setPaying(null)}
+          onSaved={() => { setPaying(null); setVersion(v => v + 1); load() }} />
       )}
     </div>
   )

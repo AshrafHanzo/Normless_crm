@@ -87,6 +87,18 @@ export default function RecordPaymentDrawer({ vendorId: givenVendor, paymentId, 
   }, [vendorId, paymentId])
 
   const orders = useMemo(() => ctx?.orders || [], [ctx])
+
+  // Opened from an order with a plan: suggest its next instalment, once, if nothing is typed yet.
+  const [suggested, setSuggested] = useState(false)
+  useEffect(() => {
+    if (suggested || paymentId || !ctx || !presetOrderId) return
+    setSuggested(true)
+    const next = ctx.orders.find(o => o.id === presetOrderId)?.next_instalment
+    if (next && !form.amount) {
+      setForm(f => ({ ...f, amount: String(next.remaining), note: f.note || next.label || `Instalment ${next.number} of ${next.of}` }))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ctx])
   // Until the split is touched by hand it follows the amount.
   const shown = manualSplit ? split : autoSplit(form.amount, orders, presetOrderId)
   const allocated = num(Object.values(shown).reduce((s, v) => s + num(v), 0))
@@ -261,6 +273,7 @@ export default function RecordPaymentDrawer({ vendorId: givenVendor, paymentId, 
                               {[day(o.order_date), o.title || o.summary, o.quote_ref].filter(Boolean).join(' · ')}
                             </div>
                             <div className="pay-alloc-meta">{o.due != null ? `${inr(o.due)} still due of ${inr(o.total)}` : 'No total on this order'}</div>
+                            {o.next_instalment && <div className="pay-alloc-meta">Next: instalment {o.next_instalment.number} of {o.next_instalment.of}, {inr(o.next_instalment.remaining)} · {o.next_instalment.status}</div>}
                           </div>
                           <input type="number" min="0" step="any" value={on ? shown[o.id] : ''} disabled={!on}
                             aria-label={`Amount for ${o.ref}`} onChange={e => setShare(o.id, e.target.value)} />
