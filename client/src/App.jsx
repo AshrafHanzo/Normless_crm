@@ -40,6 +40,7 @@ import Vendors from './pages/purchasing/Vendors'
 import VendorProfile from './pages/purchasing/VendorProfile'
 import VendorOrders from './pages/purchasing/VendorOrders'
 import VendorPayments from './pages/purchasing/VendorPayments'
+import VendorQuotations from './pages/purchasing/VendorQuotations'
 import TeamMe from './pages/team/Me'
 import WhatsAppSettings from './pages/crewfit/WhatsAppSettings'
 import WhatsAppDashboard, { WhatsAppMyPerformance } from './pages/crewfit/WhatsAppDashboard'
@@ -285,6 +286,7 @@ function App() {
             <Route path="/vendors/:id" element={<ProtectedRoute permission="can_view_vendors"><AppLayout><VendorProfile /></AppLayout></ProtectedRoute>} />
             <Route path="/vendor-orders" element={<ProtectedRoute permission="can_view_vendors"><AppLayout><VendorOrders /></AppLayout></ProtectedRoute>} />
             <Route path="/vendor-payments" element={<ProtectedRoute permission="can_view_vendors"><AppLayout><VendorPayments /></AppLayout></ProtectedRoute>} />
+            <Route path="/vendor-quotations" element={<ProtectedRoute permission="can_view_vendors"><AppLayout><VendorQuotations /></AppLayout></ProtectedRoute>} />
             <Route path="/team/me" element={<ProtectedRoute><AppLayout><TeamMe /></AppLayout></ProtectedRoute>} />
             {/* Vendor orders moved to Purchasing, shared by both brands. */}
             <Route path="/crewfit/vendor-orders" element={<Navigate to="/vendor-orders?brand=crewfit" replace />} />

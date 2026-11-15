@@ -180,6 +180,30 @@ async function ensureVendorSchema() {
             ALTER TABLE vendor_orders ADD COLUMN IF NOT EXISTS received_qty INTEGER NOT NULL DEFAULT 0;
             ALTER TABLE vendor_orders ADD COLUMN IF NOT EXISTS rejected_qty INTEGER NOT NULL DEFAULT 0;
 
+            -- Quotations as the vendor sent them, kept so several for the same job can be compared
+            -- and the accepted one stays attached to the order it became. Amounts include GST.
+            CREATE TABLE IF NOT EXISTS vendor_quotations (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                vendor_id INTEGER NOT NULL REFERENCES vendors(id) ON DELETE RESTRICT,
+                brand TEXT NOT NULL DEFAULT 'normless',
+                quote_no TEXT,
+                quote_date DATE,
+                valid_until DATE,
+                title TEXT,
+                amount NUMERIC(12,2),
+                notes TEXT,
+                status TEXT NOT NULL DEFAULT 'Received',   -- Received | Accepted | Rejected
+                order_id INTEGER REFERENCES vendor_orders(id) ON DELETE SET NULL,
+                file_path TEXT,                -- under server/storage/vendors/quotations, never served publicly
+                file_name TEXT,
+                file_mime TEXT,
+                created_by TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS vendor_quotations_vendor_idx ON vendor_quotations (vendor_id, quote_date DESC);
+            ALTER TABLE vendor_orders ADD COLUMN IF NOT EXISTS quotation_id INTEGER REFERENCES vendor_quotations(id) ON DELETE SET NULL;
+
             -- A vendor's usual terms as a template a new order's plan can start from:
             -- [{ label, percent | amount, due_kind: 'days' | 'delivery', days }]
             ALTER TABLE vendors ADD COLUMN IF NOT EXISTS default_plan TEXT;

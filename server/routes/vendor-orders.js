@@ -89,7 +89,7 @@ const hydrate = (row) => {
 
 const ROW_COLUMNS = `id, ref_no, brand, TO_CHAR(order_date, 'YYYY-MM-DD') AS order_date,
     TO_CHAR(delivery_date, 'YYYY-MM-DD') AS delivery_date, vendor, vendor_id, vendor_phone, title, quote_ref,
-    status, payment_status, items, notes, total_qty, total_amount, total_override, paid_amount, received_qty, rejected_qty,
+    status, payment_status, items, notes, total_qty, total_amount, total_override, paid_amount, received_qty, rejected_qty, quotation_id,
     confirmed_at, sent_at, created_by, created_at,
     COALESCE((SELECT json_agg(json_build_object('id', i.id, 'seq', i.seq, 'label', i.label, 'amount', i.amount,
                   'percent', i.percent, 'due_kind', i.due_kind, 'due_date', TO_CHAR(i.due_date, 'YYYY-MM-DD')) ORDER BY i.seq)
@@ -323,7 +323,10 @@ router.get('/:id', async (req, res) => {
              FROM vendor_receipts WHERE order_id = $1 ORDER BY received_on DESC, id DESC`, [req.params.id])).rows
             .map(d => ({ ...d, lines: parseItems(d.lines) }));
         const order = hydrate(r.rows[0]);
-        res.json({ order, payments, vendor_default_plan: parseItems(vendor?.default_plan),
+        const quotation = order.quotation_id ? (await db.query(
+            `SELECT id, quote_no, title, amount, TO_CHAR(quote_date, 'YYYY-MM-DD') AS quote_date, (file_path IS NOT NULL) AS has_file, file_name
+             FROM vendor_quotations WHERE id = $1`, [order.quotation_id])).rows[0] || null : null;
+        res.json({ order, quotation, payments, vendor_default_plan: parseItems(vendor?.default_plan),
             deliveries, progress: receipts.progress(order.items, deliveries) });
     } catch (err) {
         console.error('Error loading vendor order:', err);
@@ -365,11 +368,28 @@ router.post('/', async (req, res) => {
         row.vendor_id = await rememberVendor(row.vendor, row.vendor_phone, row.brand);
         row.created_by = req.user?.username || null;
 
+        // Raised from a quotation: it must be this vendor's, and not already on another order.
+        const quoteId = parseInt(req.body.quotation_id, 10) || null;
+        if (quoteId) {
+            const q = (await db.query('SELECT vendor_id, order_id FROM vendor_quotations WHERE id = $1', [quoteId])).rows[0];
+            if (!q) return res.status(400).json({ error: 'That quotation no longer exists' });
+            if (q.vendor_id !== row.vendor_id) return res.status(400).json({ error: 'The quotation is from another vendor — pick the vendor who sent it' });
+            if (q.order_id) return res.status(409).json({ error: 'That quotation is already on another order' });
+            row.quotation_id = quoteId;
+        }
+
         const cols = Object.keys(row);
-        const r = await db.query(
-            `INSERT INTO vendor_orders (ref_no, ${cols.join(', ')})
-             VALUES ((SELECT COALESCE(MAX(ref_no), 0) + 1 FROM vendor_orders), ${cols.map((_, i) => `$${i + 1}`).join(', ')})
-             RETURNING ${ROW_COLUMNS}`, cols.map(c => row[c]));
+        const r = await db.transaction(async (c) => {
+            const ins = await c.query(
+                `INSERT INTO vendor_orders (ref_no, ${cols.join(', ')})
+                 VALUES ((SELECT COALESCE(MAX(ref_no), 0) + 1 FROM vendor_orders), ${cols.map((_, i) => `$${i + 1}`).join(', ')})
+                 RETURNING ${ROW_COLUMNS}`, cols.map(k => row[k]));
+            if (quoteId) {
+                await c.query(`UPDATE vendor_quotations SET status = 'Accepted', order_id = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+                    [ins.rows[0].id, quoteId]);
+            }
+            return ins;
+        });
         res.json({ success: true, order: hydrate(r.rows[0]) });
     } catch (err) {
         console.error('Error creating vendor order:', err);
@@ -605,7 +625,11 @@ router.delete('/:id', async (req, res) => {
     try {
         const paid = (await db.query('SELECT 1 FROM vendor_payment_allocations WHERE order_id = $1 LIMIT 1', [req.params.id])).rows[0];
         if (paid) return res.status(409).json({ error: 'Payments are recorded against this order — delete or move them first' });
-        const r = await db.query('DELETE FROM vendor_orders WHERE id = $1 RETURNING id', [req.params.id]);
+        const r = await db.transaction(async (c) => {
+            // Its quotation goes back to open rather than staying "accepted" for an order that's gone.
+            await c.query(`UPDATE vendor_quotations SET status = 'Received', order_id = NULL WHERE order_id = $1`, [req.params.id]);
+            return c.query('DELETE FROM vendor_orders WHERE id = $1 RETURNING id', [req.params.id]);
+        });
         if (!r.rows.length) return res.status(404).json({ error: 'Vendor order not found' });
         res.json({ success: true });
     } catch (err) {

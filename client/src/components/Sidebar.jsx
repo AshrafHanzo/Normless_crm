@@ -46,6 +46,7 @@ const NAV = {
 // Purchasing is shared too: one vendor list, whichever brand the stock is for.
 const PURCHASING_NAV = [
   { to: '/vendors', icon: 'truck', label: 'Vendors', perm: 'can_view_vendors' },
+  { to: '/vendor-quotations', icon: 'invoice', label: 'Quotations', perm: 'can_view_vendors' },
   { to: '/vendor-orders', icon: 'box', label: 'Vendor Orders', perm: 'can_view_vendors' },
   { to: '/vendor-payments', icon: 'wallet', label: 'Vendor Payments', perm: 'can_view_vendors', badge: 'vendor_due' },
 ]

@@ -31,3 +31,18 @@ export function dueText(i) {
   if (i.days === 0) return `Due today · ${day(i.due_date)}`
   return `${day(i.due_date)}${i.days <= 7 ? ` · in ${i.days} day${i.days === 1 ? '' : 's'}` : ''}`
 }
+
+/** Open a privately stored file (proof, quotation) in a new tab — fetched with the login. */
+export async function openFile(apiFetch, toast, url) {
+  const res = await apiFetch(url, { responseType: 'blob' })
+  if (!res || res.error) { toast.error(res?.error || 'Couldn’t open the file'); return }
+  const href = URL.createObjectURL(res.blob)
+  if (!window.open(href, '_blank')) {
+    const a = document.createElement('a'); a.href = href; a.download = res.filename || 'file'
+    document.body.appendChild(a); a.click(); a.remove()
+  }
+  setTimeout(() => URL.revokeObjectURL(href), 60000)
+}
+
+/** status-badge class per quotation status (Expired is an open one past its date). */
+export const QUOTE_CLASS = { Received: 'partial', Expired: 'pending', Accepted: 'fulfilled', Rejected: 'refunded' }

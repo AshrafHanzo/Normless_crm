@@ -223,6 +223,7 @@ router.get('/:id', async (req, res) => {
             pending_pcs: orders.reduce((s, o) => s + o.pending_qty, 0),
             ...await money.vendorMoney(v.id),
         };
+        stats.quotations = (await db.query('SELECT COUNT(*)::int AS n FROM vendor_quotations WHERE vendor_id = $1', [v.id])).rows[0].n;
         res.json({ vendor, orders, payments, stats });
     } catch (err) {
         console.error('vendor profile:', err);
@@ -346,7 +347,8 @@ router.delete('/:id', async (req, res) => {
     if (!isAdmin(req)) return res.status(403).json({ error: 'Access denied' });
     try {
         const used = (await db.query(
-            `SELECT (SELECT COUNT(*) FROM vendor_orders WHERE vendor_id = $1) + (SELECT COUNT(*) FROM vendor_payments WHERE vendor_id = $1) AS n`,
+            `SELECT (SELECT COUNT(*) FROM vendor_orders WHERE vendor_id = $1) + (SELECT COUNT(*) FROM vendor_payments WHERE vendor_id = $1)
+                    + (SELECT COUNT(*) FROM vendor_quotations WHERE vendor_id = $1) AS n`,
             [req.params.id])).rows[0].n;
         if (Number(used)) return res.status(409).json({ error: 'This vendor has orders or payments — archive it instead' });
         const r = await db.query('DELETE FROM vendors WHERE id = $1 RETURNING id', [req.params.id]);

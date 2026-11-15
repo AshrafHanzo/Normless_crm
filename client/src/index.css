@@ -4437,3 +4437,7 @@ p.wdb-sub { margin: 0; }
   .dl-prog-row { grid-template-columns: minmax(0, 1fr) repeat(3, 52px); }
   .dl-prog-row > :last-child { display: none; }
 }
+
+/* Quotation attached to a vendor order */
+.vo-quote { display: flex; gap: 12px; align-items: center; padding: 12px 14px; border: 1px dashed var(--border-hover); border-radius: var(--radius-md); background: var(--surface); color: var(--text-secondary); }
+.vo-quote > div { color: var(--text-primary); }

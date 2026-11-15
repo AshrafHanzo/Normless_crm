@@ -14,7 +14,7 @@ import VendorOrderAnalytics from './VendorOrderAnalytics'
 import RecordPaymentDrawer from './RecordPaymentDrawer'
 import PaymentPlan from './PaymentPlan'
 import RecordDeliveryDrawer from './RecordDeliveryDrawer'
-import { BRAND_LABEL, PAY_CLASS, inr, day } from './format'
+import { BRAND_LABEL, PAY_CLASS, inr, day, openFile } from './format'
 import { cleanMobile, mobileError, isValidMobile, mobileInputProps } from '../../utils/phone'
 
 const pad = (n) => String(n).padStart(2, '0')
@@ -53,7 +53,9 @@ function summarise(items) {
 /* ────────────────────────────── drawer ────────────────────────────── */
 
 function VendorOrderDrawer({ target, defaultBrand, meta, onClose, onSaved, onPay, onDeliver, onChanged, apiFetch, toast }) {
-  const [form, setForm] = useState(() => (target === 'new' ? blankOrder(defaultBrand) : {
+  // A new order, possibly raised from a quotation (`target.prefill`).
+  const isNew = target === 'new' || !!target?.isNew
+  const [form, setForm] = useState(() => (isNew ? { ...blankOrder(target?.prefill?.brand || defaultBrand), ...(target?.prefill || {}) } : {
     ...target,
     delivery_date: target.delivery_date || '',
     vendor_phone: target.vendor_phone || '',
@@ -72,6 +74,7 @@ function VendorOrderDrawer({ target, defaultBrand, meta, onClose, onSaved, onPay
   const [saved, setSaved] = useState(null)
   const [defaultPlan, setDefaultPlan] = useState([])
   const [deliveries, setDeliveries] = useState([])
+  const [quote, setQuote] = useState(target?.quote || null)
   const [progress, setProgress] = useState(null)
   // A daily-lots order (the Spark sheet has 14) would push everything below it away.
   const [allDeliveries, setAllDeliveries] = useState(false)
@@ -87,7 +90,7 @@ function VendorOrderDrawer({ target, defaultBrand, meta, onClose, onSaved, onPay
     apiFetch(`/api/vendor-orders/${target.id}`).then(r => {
       if (!live || !r || r.error) return
       setPayments(r.payments || []); setSaved(r.order); setDefaultPlan(r.vendor_default_plan || [])
-      setDeliveries(r.deliveries || []); setProgress(r.progress || null)
+      setDeliveries(r.deliveries || []); setProgress(r.progress || null); setQuote(r.quotation || null)
     })
     return () => { live = false }
     // apiFetch is a new function every render (see useApi), so it can't be a dependency here.
@@ -181,6 +184,16 @@ function VendorOrderDrawer({ target, defaultBrand, meta, onClose, onSaved, onPay
           {error && <div className="calc-warning" role="alert" ref={errorRef}>{error}</div>}
           <fieldset disabled={!canEdit} style={{ border: 0, padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 18 }}>
             <div className="form-section">Order</div>
+            {quote && (
+              <div className="vo-quote">
+                <Icon name="invoice" size={18} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 600 }}>{form.id ? 'Quotation' : 'From quotation'} {quote.quote_no || ''}</div>
+                  <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{[day(quote.quote_date), quote.amount != null && `${inr(quote.amount)} incl. GST`, quote.title].filter(Boolean).join(' · ')}</div>
+                </div>
+                {quote.has_file && <button type="button" className="mini-btn" onClick={() => openFile(apiFetch, toast, `/api/vendor-quotations/${quote.id}/file`)}>View</button>}
+              </div>
+            )}
             <div className="input-group" style={{ marginBottom: 0 }}>
               <label>For</label>
               <div className="chip-picker" role="radiogroup" aria-label="Brand">
@@ -494,6 +507,27 @@ export default function VendorOrders() {
 
   const filter = (setter) => (e) => { setter(e.target.value); t.resetPage() }
   const setBrand = (b) => { setParams(b ? { brand: b } : {}, { replace: true }); t.resetPage() }
+
+  // "Make order" on a quotation lands here with ?from_quote=ID: open a new order filled from it.
+  const fromQuote = params.get('from_quote')
+  useEffect(() => {
+    if (!fromQuote) return
+    let live = true
+    apiFetch(`/api/vendor-quotations/${fromQuote}`).then(r => {
+      if (!live) return
+      setParams(brand ? { brand } : {}, { replace: true })
+      if (!r || r.error) { toast.error(r?.error || 'That quotation couldn’t be loaded'); return }
+      const q = r.quotation
+      if (q.status !== 'Received') { toast.error(`Quotation ${q.quote_no || ''} is already ${q.status.toLowerCase()}`); return }
+      setTarget({
+        isNew: true,
+        quote: q,
+        prefill: { brand: q.brand, vendor: q.vendor, quote_ref: q.quote_no || '', title: q.title || '', total_override: q.amount ?? '', quotation_id: q.id },
+      })
+    })
+    return () => { live = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fromQuote])
   const can = meta?.can || {}
 
   // window.open can't carry the Authorization header, so hitting the route directly just 401s.
@@ -695,7 +729,7 @@ export default function VendorOrders() {
 
       {target && (
         <VendorOrderDrawer
-          key={target === 'new' ? 'new' : target.id}
+          key={target === 'new' || target.isNew ? 'new' : target.id}
           target={target} defaultBrand={brand || (menuBrand === 'crewfit' ? 'crewfit' : 'normless')}
           meta={meta} apiFetch={apiFetch} toast={toast}
           onClose={() => setTarget(null)}

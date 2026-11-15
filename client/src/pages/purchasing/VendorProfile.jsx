@@ -5,10 +5,11 @@ import { useToast } from '../../components/Toast'
 import Icon from '../../components/Icon'
 import VendorDrawer from './VendorDrawer'
 import RecordPaymentDrawer from './RecordPaymentDrawer'
+import QuotationList from './QuotationList'
 import { BRAND_LABEL, PAY_CLASS, inr, day, openProof } from './format'
 
 const STATUS_CLASS = { Pending: 'pending', 'Consignment Ordered': 'refunded', 'Partly Received': 'partial', 'Consignment Received': 'fulfilled' }
-const TABS = [['orders', 'Orders'], ['payments', 'Payments'], ['statement', 'Statement']]
+const TABS = [['orders', 'Orders'], ['quotations', 'Quotations'], ['payments', 'Payments'], ['statement', 'Statement']]
 
 /** "Poly Cotton Polos · Navy, Black" / "Mask · 300 pcs" per product line. */
 const summarise = (items) => (items || []).map(i => {
@@ -91,6 +92,7 @@ export default function VendorProfile() {
   const [editing, setEditing] = useState(false)
   const [paying, setPaying] = useState(null)     // true = new, or a payment id to edit
   const [tab, setTab] = useState('orders')
+  const [addingQuote, setAddingQuote] = useState(false)
 
   // Bumped to reload after a save, archive or restore.
   const [version, setVersion] = useState(0)
@@ -249,13 +251,25 @@ export default function VendorProfile() {
       <div className="scan-tabs" style={{ marginBottom: 14 }} role="tablist">
         {TABS.map(([k, l]) => (
           <button key={k} role="tab" aria-selected={tab === k} className={tab === k ? 'active' : ''} onClick={() => setTab(k)}>
-            {l}{k === 'orders' ? ` (${orders.length})` : k === 'payments' ? ` (${payments.length})` : ''}
+            {l}{k === 'orders' ? ` (${orders.length})` : k === 'payments' ? ` (${payments.length})` : k === 'quotations' ? ` (${stats.quotations || 0})` : ''}
             {k === 'payments' && missingUtr > 0 && <span className="tab-badge" title={`${missingUtr} without a UTR`}>{missingUtr}</span>}
           </button>
         ))}
       </div>
 
-      <div className="data-table-wrapper">
+      {tab === 'quotations' && (
+        <>
+          {can.edit && (
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 10 }}>
+              <button className="btn btn-secondary" onClick={() => setAddingQuote(true)}><Icon name="plus" size={14} /> Add quotation</button>
+            </div>
+          )}
+          <QuotationList apiFetch={apiFetch} toast={toast} can={can} vendorId={v.id}
+            adding={addingQuote} onAddClose={() => setAddingQuote(false)} onChanged={load} />
+        </>
+      )}
+
+      {tab !== 'quotations' && <div className="data-table-wrapper">
         {tab === 'orders' && (!orders.length ? (
           <div className="empty-state"><p>No orders with {v.name} yet.</p></div>
         ) : (
@@ -319,7 +333,7 @@ export default function VendorProfile() {
         ))}
 
         {tab === 'statement' && <Statement vendorId={v.id} version={version} apiFetch={apiFetch} />}
-      </div>
+      </div>}
 
       {editing && (
         <VendorDrawer vendor={v} meta={meta} canBank={!!can.bank} apiFetch={apiFetch} toast={toast}
