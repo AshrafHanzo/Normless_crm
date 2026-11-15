@@ -20,6 +20,7 @@ const { hasPermission } = require('../utils/permissions');
 const vendorOrder = require('../services/vendor-order');
 const money = require('../services/vendor-money');
 const plan = require('../services/vendor-plan');
+const receipts = require('../services/vendor-receipts');
 const { tableParams, pagination } = require('../utils/table');
 
 const router = express.Router();
@@ -41,7 +42,8 @@ const SORTS = {
 const SEED_VENDORS = ['Mubas Clothings', 'PTI', 'Ashna Garments', 'Print Wear', 'Dutees', 'TPR Garments'];
 const GSM_OPTIONS = ['160', '180', '200', '240', '250', '300'];
 // Mirrors the vocabulary already used on customer orders, so the two lists read the same way.
-const STATUSES = ['Pending', 'Consignment Ordered', 'Consignment Received'];
+// Partly Received is set by the deliveries recorded (services/vendor-receipts).
+const STATUSES = ['Pending', 'Consignment Ordered', 'Partly Received', 'Consignment Received'];
 
 router.use(async (req, res, next) => {
     try {
@@ -76,6 +78,10 @@ const hydrate = (row) => {
         payment_manual: !total,
         instalments,
         next_instalment: plan.nextDue(instalments),
+        received_qty: Number(row.received_qty) || 0,
+        rejected_qty: Number(row.rejected_qty) || 0,
+        // Rejected pieces are still owed.
+        pending_qty: Math.max((Number(row.total_qty) || 0) - ((Number(row.received_qty) || 0) - (Number(row.rejected_qty) || 0)), 0),
         // The total changed after the plan was made, and fixed amounts no longer add up to it.
         plan_mismatch: instalments.length > 0 && Math.abs(planned - total) > 1 ? planned : null,
     };
@@ -83,7 +89,7 @@ const hydrate = (row) => {
 
 const ROW_COLUMNS = `id, ref_no, brand, TO_CHAR(order_date, 'YYYY-MM-DD') AS order_date,
     TO_CHAR(delivery_date, 'YYYY-MM-DD') AS delivery_date, vendor, vendor_id, vendor_phone, title, quote_ref,
-    status, payment_status, items, notes, total_qty, total_amount, total_override, paid_amount,
+    status, payment_status, items, notes, total_qty, total_amount, total_override, paid_amount, received_qty, rejected_qty,
     confirmed_at, sent_at, created_by, created_at,
     COALESCE((SELECT json_agg(json_build_object('id', i.id, 'seq', i.seq, 'label', i.label, 'amount', i.amount,
                   'percent', i.percent, 'due_kind', i.due_kind, 'due_date', TO_CHAR(i.due_date, 'YYYY-MM-DD')) ORDER BY i.seq)
@@ -312,7 +318,13 @@ router.get('/:id', async (req, res) => {
              WHERE a.order_id = $1 ORDER BY p.paid_on, p.id`, [req.params.id])).rows;
         const vendor = r.rows[0].vendor_id
             ? (await db.query('SELECT default_plan FROM vendors WHERE id = $1', [r.rows[0].vendor_id])).rows[0] : null;
-        res.json({ order: hydrate(r.rows[0]), payments, vendor_default_plan: parseItems(vendor?.default_plan) });
+        const deliveries = (await db.query(
+            `SELECT id, TO_CHAR(received_on, 'YYYY-MM-DD') AS received_on, challan_no, note, lines, received_qty, rejected_qty, created_by
+             FROM vendor_receipts WHERE order_id = $1 ORDER BY received_on DESC, id DESC`, [req.params.id])).rows
+            .map(d => ({ ...d, lines: parseItems(d.lines) }));
+        const order = hydrate(r.rows[0]);
+        res.json({ order, payments, vendor_default_plan: parseItems(vendor?.default_plan),
+            deliveries, progress: receipts.progress(order.items, deliveries) });
     } catch (err) {
         console.error('Error loading vendor order:', err);
         res.status(500).json({ error: 'Failed to load vendor order' });
@@ -396,6 +408,10 @@ router.put('/:id', async (req, res) => {
                                WHERE order_id = $2 AND percent IS NOT NULL`, [total, req.params.id]);
             }
             await money.recompute([req.params.id], c);
+            // Changed lines change what is still to come.
+            if ((await c.query('SELECT 1 FROM vendor_receipts WHERE order_id = $1 LIMIT 1', [req.params.id])).rows[0]) {
+                await receipts.refresh(req.params.id, c);
+            }
             return c.query(`SELECT ${ROW_COLUMNS} FROM vendor_orders WHERE id = $1`, [req.params.id]);
         });
         res.json({ success: true, order: hydrate(r.rows[0]) });
@@ -466,6 +482,86 @@ router.get('/:id/pdf', async (req, res) => {
     } catch (err) {
         console.error('Error rendering vendor order PDF:', err);
         if (!res.headersSent) res.status(500).json({ error: 'Failed to render PDF' });
+    }
+});
+
+// Deliveries (goods in) — recorded by whoever can edit vendor orders.
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const todayIST = () => new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10);
+
+async function readDelivery(req) {
+    const o = (await db.query('SELECT id, items FROM vendor_orders WHERE id = $1', [req.params.id])).rows[0];
+    if (!o) return { status: 404, error: 'Vendor order not found' };
+    const b = req.body || {};
+    if (!DATE_RE.test(b.received_on || '')) return { error: 'A valid delivery date is required' };
+    if (b.received_on > todayIST()) return { error: 'The delivery date can’t be in the future' };
+    const checked = receipts.cleanLines(b.lines, parseItems(o.items));
+    if (checked.error) return { error: checked.error };
+    return { row: { received_on: b.received_on, challan_no: clean(b.challan_no), note: clean(b.note),
+        lines: JSON.stringify(checked.lines), received_qty: checked.received, rejected_qty: checked.rejected } };
+}
+
+// POST /api/vendor-orders/:id/deliveries
+router.post('/:id/deliveries', async (req, res) => {
+    if (!await canEdit(req)) return res.status(403).json({ error: 'Access denied' });
+    try {
+        const d = await readDelivery(req);
+        if (d.error) return res.status(d.status || 400).json({ error: d.error });
+        const cols = Object.keys(d.row);
+        const id = await db.transaction(async (c) => {
+            const r = (await c.query(
+                `INSERT INTO vendor_receipts (order_id, ${cols.join(', ')}, created_by)
+                 VALUES ($1, ${cols.map((_, i) => `$${i + 2}`).join(', ')}, $${cols.length + 2}) RETURNING id`,
+                [req.params.id, ...cols.map(k => d.row[k]), req.user?.username || null])).rows[0];
+            await receipts.refresh(req.params.id, c);
+            return r.id;
+        });
+        res.json({ success: true, id });
+    } catch (err) {
+        console.error('Error recording delivery:', err);
+        res.status(500).json({ error: 'Failed to record the delivery' });
+    }
+});
+
+// PUT /api/vendor-orders/:id/deliveries/:rid
+router.put('/:id/deliveries/:rid', async (req, res) => {
+    if (!await canEdit(req)) return res.status(403).json({ error: 'Access denied' });
+    try {
+        const d = await readDelivery(req);
+        if (d.error) return res.status(d.status || 400).json({ error: d.error });
+        const cols = Object.keys(d.row);
+        const found = await db.transaction(async (c) => {
+            const r = await c.query(
+                `UPDATE vendor_receipts SET ${cols.map((k, i) => `${k} = $${i + 1}`).join(', ')},
+                     updated_by = $${cols.length + 1}, updated_at = CURRENT_TIMESTAMP
+                 WHERE id = $${cols.length + 2} AND order_id = $${cols.length + 3} RETURNING id`,
+                [...cols.map(k => d.row[k]), req.user?.username || null, parseInt(req.params.rid, 10) || 0, req.params.id]);
+            if (r.rows.length) await receipts.refresh(req.params.id, c);
+            return r.rows.length > 0;
+        });
+        if (!found) return res.status(404).json({ error: 'Delivery not found' });
+        res.json({ success: true });
+    } catch (err) {
+        console.error('Error saving delivery:', err);
+        res.status(500).json({ error: 'Failed to save the delivery' });
+    }
+});
+
+// DELETE /api/vendor-orders/:id/deliveries/:rid
+router.delete('/:id/deliveries/:rid', async (req, res) => {
+    if (!await canEdit(req)) return res.status(403).json({ error: 'Access denied' });
+    try {
+        const found = await db.transaction(async (c) => {
+            const r = await c.query('DELETE FROM vendor_receipts WHERE id = $1 AND order_id = $2 RETURNING id',
+                [parseInt(req.params.rid, 10) || 0, req.params.id]);
+            if (r.rows.length) await receipts.refresh(req.params.id, c);
+            return r.rows.length > 0;
+        });
+        if (!found) return res.status(404).json({ error: 'Delivery not found' });
+        res.json({ success: true });
+    } catch (err) {
+        console.error('Error deleting delivery:', err);
+        res.status(500).json({ error: 'Failed to delete the delivery' });
     }
 });
 

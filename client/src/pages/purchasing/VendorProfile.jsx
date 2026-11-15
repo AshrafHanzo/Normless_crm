@@ -7,7 +7,7 @@ import VendorDrawer from './VendorDrawer'
 import RecordPaymentDrawer from './RecordPaymentDrawer'
 import { BRAND_LABEL, PAY_CLASS, inr, day, openProof } from './format'
 
-const STATUS_CLASS = { Pending: 'pending', 'Consignment Ordered': 'refunded', 'Consignment Received': 'fulfilled' }
+const STATUS_CLASS = { Pending: 'pending', 'Consignment Ordered': 'refunded', 'Partly Received': 'partial', 'Consignment Received': 'fulfilled' }
 const TABS = [['orders', 'Orders'], ['payments', 'Payments'], ['statement', 'Statement']]
 
 /** "Poly Cotton Polos · Navy, Black" / "Mask · 300 pcs" per product line. */
@@ -162,6 +162,7 @@ export default function VendorProfile() {
     { label: 'Paid', value: inr(stats.paid), sub: stats.on_account > 0 ? `${inr(stats.on_account)} on account` : null, color: 'var(--success)' },
     { label: 'Balance', value: inr(stats.balance), color: stats.balance > 0 ? 'var(--warning)' : undefined },
     { label: 'Orders', value: stats.orders, sub: [stats.open_orders ? `${stats.open_orders} open` : null, `${stats.pieces.toLocaleString('en-IN')} pcs`].filter(Boolean).join(' · ') },
+    { label: 'Pieces still to come', value: stats.pending_pcs.toLocaleString('en-IN'), sub: stats.received ? `${stats.received.toLocaleString('en-IN')} received` : null, color: stats.pending_pcs > 0 ? 'var(--warning)' : undefined },
   ]
   const missingUtr = payments.filter(p => p.missing_reference).length
 
@@ -271,7 +272,10 @@ export default function VendorProfile() {
                   </td>
                   <td data-label="Date" style={{ fontSize: 12.5 }}>{day(o.order_date)}</td>
                   <td data-label="Products" style={{ fontSize: 12 }}>{summarise(o.items).map((s, i) => <div key={i}>{s}</div>)}</td>
-                  <td data-label="Qty" style={{ textAlign: 'center', fontWeight: 600 }}>{o.total_qty}</td>
+                  <td data-label="Qty" style={{ textAlign: 'center', fontWeight: 600 }}>
+                    {o.total_qty}
+                    {o.pending_qty > 0 && Number(o.received_qty) > 0 && <div style={{ fontSize: 11.5, fontWeight: 500, color: 'var(--warning)' }}>{o.pending_qty} to come</div>}
+                  </td>
                   <td data-label="Total" style={{ textAlign: 'right' }}>{o.total ? inr(o.total) : '—'}</td>
                   <td data-label="Paid" style={{ textAlign: 'right' }}>{o.paid_amount ? inr(o.paid_amount) : '—'}</td>
                   <td data-label="Balance" style={{ textAlign: 'right', fontWeight: 600, color: o.balance > 0 ? 'var(--warning)' : undefined }}>{o.total ? inr(o.balance) : '—'}</td>

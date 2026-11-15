@@ -158,6 +158,28 @@ async function ensureVendorSchema() {
             );
             CREATE INDEX IF NOT EXISTS vendor_order_instalments_order_idx ON vendor_order_instalments (order_id, seq);
 
+            -- Goods in: each delivery against an order, as the vendor's lot arrived. Lines are
+            -- [{ product, color, size, received, rejected }] — matched to the order's lines by
+            -- product, colour and size (services/vendor-receipts).
+            CREATE TABLE IF NOT EXISTS vendor_receipts (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                order_id INTEGER NOT NULL REFERENCES vendor_orders(id) ON DELETE CASCADE,
+                received_on DATE NOT NULL,
+                challan_no TEXT,
+                note TEXT,
+                lines TEXT NOT NULL,
+                received_qty INTEGER NOT NULL DEFAULT 0,
+                rejected_qty INTEGER NOT NULL DEFAULT 0,
+                created_by TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_by TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS vendor_receipts_order_idx ON vendor_receipts (order_id, received_on);
+            -- Sums of the receipts, kept on the order so lists can show and sort on them.
+            ALTER TABLE vendor_orders ADD COLUMN IF NOT EXISTS received_qty INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE vendor_orders ADD COLUMN IF NOT EXISTS rejected_qty INTEGER NOT NULL DEFAULT 0;
+
             -- A vendor's usual terms as a template a new order's plan can start from:
             -- [{ label, percent | amount, due_kind: 'days' | 'delivery', days }]
             ALTER TABLE vendors ADD COLUMN IF NOT EXISTS default_plan TEXT;

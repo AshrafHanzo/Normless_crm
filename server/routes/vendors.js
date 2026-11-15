@@ -40,7 +40,7 @@ const TEXT_FIELDS = ['contact_person', 'email', 'address', 'city', 'state', 'gst
 
 const SORTS = {
     name: 'LOWER(v.name)', categories: 'LOWER(v.categories)', brands: 'v.brands',
-    orders: 'o.orders', ordered_value: 'o.ordered_value', last_order: 'o.last_order',
+    orders: 'o.orders', ordered_value: 'o.ordered_value', last_order: 'o.last_order', pending_pcs: 'COALESCE(o.pending_pcs, 0)',
     paid: 'COALESCE(p.paid, 0)', balance: `${'COALESCE(o.due, 0) - (COALESCE(p.paid, 0) - COALESCE(p.allocated, 0))'}`,
 };
 
@@ -52,7 +52,10 @@ const ORDER_ROLLUP = `
                SUM(COALESCE(total_override, total_amount)) AS ordered_value, SUM(total_qty)::int AS pieces,
                SUM(GREATEST(COALESCE(total_override, total_amount) - paid_amount, 0))
                    FILTER (WHERE COALESCE(total_override, total_amount) > 0) AS due,
-               TO_CHAR(MAX(order_date), 'YYYY-MM-DD') AS last_order
+               TO_CHAR(MAX(order_date), 'YYYY-MM-DD') AS last_order,
+               -- Still to come on orders not marked fully received; rejected pieces are still owed.
+               SUM(GREATEST(total_qty - (received_qty - rejected_qty), 0))
+                   FILTER (WHERE status <> 'Consignment Received')::int AS pending_pcs
         FROM vendor_orders WHERE vendor_id IS NOT NULL GROUP BY vendor_id
     ) o ON o.vendor_id = v.id
     LEFT JOIN (
@@ -64,7 +67,7 @@ const ORDER_ROLLUP = `
 
 const LIST_COLUMNS = `v.id, v.name, v.contact_person, v.phone, v.city, v.gstin, v.categories, v.brands,
     v.active, v.whatsapp_updates, COALESCE(o.orders, 0) AS orders, COALESCE(o.open_orders, 0) AS open_orders,
-    o.ordered_value, COALESCE(o.pieces, 0) AS pieces, o.last_order, COALESCE(p.paid, 0) AS paid, p.last_paid,
+    o.ordered_value, COALESCE(o.pieces, 0) AS pieces, COALESCE(o.pending_pcs, 0) AS pending_pcs, o.last_order, COALESCE(p.paid, 0) AS paid, p.last_paid,
     COALESCE(o.due, 0) - (COALESCE(p.paid, 0) - COALESCE(p.allocated, 0)) AS balance`;
 
 const clean = (v) => {
@@ -187,12 +190,14 @@ router.get('/:id', async (req, res) => {
         const orders = (await db.query(
             `SELECT o.id, o.ref_no, o.brand, TO_CHAR(o.order_date, 'YYYY-MM-DD') AS order_date,
                     TO_CHAR(o.delivery_date, 'YYYY-MM-DD') AS delivery_date, o.title, o.quote_ref, o.status, o.payment_status,
-                    o.items, o.total_qty, ${money.TOTAL_SQL} AS total, o.paid_amount
+                    o.items, o.total_qty, o.received_qty, o.rejected_qty, ${money.TOTAL_SQL} AS total, o.paid_amount
              FROM vendor_orders o WHERE o.vendor_id = $1 ORDER BY o.order_date DESC, o.id DESC`, [v.id])).rows
             .map(o => {
                 const total = Number(o.total) > 0 ? Number(o.total) : null;
                 const paid = Number(o.paid_amount) || 0;
+                const accepted = (Number(o.received_qty) || 0) - (Number(o.rejected_qty) || 0);
                 return { ...o, items: parseItems(o.items), ref: refLabel(o), total, paid_amount: paid,
+                    pending_qty: o.status === 'Consignment Received' ? 0 : Math.max((Number(o.total_qty) || 0) - accepted, 0),
                     balance: total ? money.round2(total - paid) : null };
             });
 
@@ -214,6 +219,8 @@ router.get('/:id', async (req, res) => {
             open_orders: orders.filter(o => o.status !== 'Consignment Received').length,
             unpriced_orders: orders.filter(o => !o.total).length,
             pieces: orders.reduce((s, o) => s + (Number(o.total_qty) || 0), 0),
+            received: orders.reduce((s, o) => s + (Number(o.received_qty) || 0) - (Number(o.rejected_qty) || 0), 0),
+            pending_pcs: orders.reduce((s, o) => s + o.pending_qty, 0),
             ...await money.vendorMoney(v.id),
         };
         res.json({ vendor, orders, payments, stats });

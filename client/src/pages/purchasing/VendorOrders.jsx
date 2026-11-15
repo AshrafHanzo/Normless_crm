@@ -13,14 +13,15 @@ import Pagination from '../../components/Pagination'
 import VendorOrderAnalytics from './VendorOrderAnalytics'
 import RecordPaymentDrawer from './RecordPaymentDrawer'
 import PaymentPlan from './PaymentPlan'
+import RecordDeliveryDrawer from './RecordDeliveryDrawer'
 import { BRAND_LABEL, PAY_CLASS, inr, day } from './format'
 import { cleanMobile, mobileError, isValidMobile, mobileInputProps } from '../../utils/phone'
 
 const pad = (n) => String(n).padStart(2, '0')
 const todayStr = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` }
 
-const STATUSES = ['Pending', 'Consignment Ordered', 'Consignment Received']
-const STATUS_CLASS = { Pending: 'pending', 'Consignment Ordered': 'refunded', 'Consignment Received': 'fulfilled' }
+const STATUSES = ['Pending', 'Consignment Ordered', 'Partly Received', 'Consignment Received']
+const STATUS_CLASS = { Pending: 'pending', 'Consignment Ordered': 'refunded', 'Partly Received': 'partial', 'Consignment Received': 'fulfilled' }
 const MANUAL_PAY_CLASS = { 'Not Paid': 'pending', Paid: 'fulfilled' }
 const BRANDS = ['normless', 'crewfit']
 
@@ -51,7 +52,7 @@ function summarise(items) {
 
 /* ────────────────────────────── drawer ────────────────────────────── */
 
-function VendorOrderDrawer({ target, defaultBrand, meta, onClose, onSaved, onPay, onChanged, apiFetch, toast }) {
+function VendorOrderDrawer({ target, defaultBrand, meta, onClose, onSaved, onPay, onDeliver, onChanged, apiFetch, toast }) {
   const [form, setForm] = useState(() => (target === 'new' ? blankOrder(defaultBrand) : {
     ...target,
     delivery_date: target.delivery_date || '',
@@ -70,6 +71,10 @@ function VendorOrderDrawer({ target, defaultBrand, meta, onClose, onSaved, onPay
   // The order as saved — the plan is worked out from its saved total, not the form's.
   const [saved, setSaved] = useState(null)
   const [defaultPlan, setDefaultPlan] = useState([])
+  const [deliveries, setDeliveries] = useState([])
+  const [progress, setProgress] = useState(null)
+  // A daily-lots order (the Spark sheet has 14) would push everything below it away.
+  const [allDeliveries, setAllDeliveries] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const errorRef = useErrorInView(error)
@@ -82,6 +87,7 @@ function VendorOrderDrawer({ target, defaultBrand, meta, onClose, onSaved, onPay
     apiFetch(`/api/vendor-orders/${target.id}`).then(r => {
       if (!live || !r || r.error) return
       setPayments(r.payments || []); setSaved(r.order); setDefaultPlan(r.vendor_default_plan || [])
+      setDeliveries(r.deliveries || []); setProgress(r.progress || null)
     })
     return () => { live = false }
     // apiFetch is a new function every render (see useApi), so it can't be a dependency here.
@@ -341,6 +347,61 @@ function VendorOrderDrawer({ target, defaultBrand, meta, onClose, onSaved, onPay
             </div>
           </fieldset>
 
+          {form.id && progress && (
+            <>
+              <div className="form-section">
+                Deliveries <span className="section-count">{deliveries.length}</span>
+                {canEdit && <button type="button" className="mini-btn" onClick={() => onDeliver(form)}>+ Record delivery</button>}
+              </div>
+              {progress.totals.ordered > 0 && (
+                <div className="dl-progress">
+                  <div className="dl-prog-row dl-prog-head"><span>Line</span><span>Ordered</span><span>In</span><span>To come</span><span /></div>
+                  {progress.lines.map(l => (
+                    <div key={l.key} className="dl-prog-row">
+                      <span>{[l.product, l.color, l.size].filter(Boolean).join(' · ')}{l.unmatched && <em style={{ color: 'var(--warning)', fontStyle: 'normal' }}> · not on the order now</em>}</span>
+                      <span>{l.ordered}</span>
+                      <span>{l.accepted}{l.rejected > 0 && <span style={{ color: 'var(--danger)', fontSize: 11.5 }}> ({l.rejected} rejected)</span>}</span>
+                      <span style={{ fontWeight: 700, color: l.pending ? 'var(--warning)' : 'var(--success)' }}>{l.pending}</span>
+                      <span className="dl-bar" aria-hidden="true"><i style={{ width: `${l.ordered ? Math.min(100, l.accepted / l.ordered * 100) : 0}%` }} /></span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {deliveries.length > 0 ? (
+                <div className="vo-payments">
+                  {(allDeliveries ? deliveries : deliveries.slice(0, 5)).map(d => (
+                    <div key={d.id} className="vo-payment" style={{ gridTemplateColumns: '1fr 2.4fr 0.8fr auto' }}>
+                      <span>{day(d.received_on)}</span>
+                      <span style={{ fontSize: 12.5 }}>
+                        {d.lines.map(l => `${[l.color, l.size].filter(Boolean).join(' ') || l.product} × ${l.received}${l.rejected ? ` (${l.rejected} rejected)` : ''}`).join(', ')}
+                        {(d.challan_no || d.note) && <div style={{ color: 'var(--text-muted)' }}>{[d.challan_no && `Challan ${d.challan_no}`, d.note].filter(Boolean).join(' · ')}</div>}
+                      </span>
+                      <b>{d.received_qty} pcs</b>
+                      {canEdit ? (
+                        <span style={{ display: 'flex', gap: 4 }}>
+                          <button type="button" className="btn-icon" aria-label={`Edit delivery of ${day(d.received_on)}`} onClick={() => onDeliver(form, d.id)}><Icon name="edit" size={13} /></button>
+                          <button type="button" className="btn-icon" aria-label={`Delete delivery of ${day(d.received_on)}`} style={{ color: 'var(--danger)' }} onClick={async () => {
+                            if (!await toast.confirm({ title: 'Delete this delivery?', message: `${d.received_qty} pieces received on ${day(d.received_on)} go back to still to come.`, danger: true, confirmLabel: 'Delete' })) return
+                            const r = await apiFetch(`/api/vendor-orders/${form.id}/deliveries/${d.id}`, { method: 'DELETE' })
+                            if (r?.error) { toast.error(r.error); return }
+                            const fresh = await apiFetch(`/api/vendor-orders/${form.id}`)
+                            if (fresh && !fresh.error) { setDeliveries(fresh.deliveries); setProgress(fresh.progress); setSaved(fresh.order); set({ status: fresh.order.status }) }
+                            onChanged?.()
+                          }}><Icon name="trash" size={13} /></button>
+                        </span>
+                      ) : <span />}
+                    </div>
+                  ))}
+                  {deliveries.length > 5 && (
+                    <button type="button" className="mini-btn" style={{ margin: 10, alignSelf: 'center' }} onClick={() => setAllDeliveries(v => !v)}>
+                      {allDeliveries ? 'Show the latest 5' : `Show all ${deliveries.length} deliveries`}
+                    </button>
+                  )}
+                </div>
+              ) : <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: 13 }}>Nothing received yet.</p>}
+            </>
+          )}
+
           {saved?.total > 0 && (
             <PaymentPlan order={saved} vendorName={saved.vendor} defaultPlan={defaultPlan} canEdit={!!meta?.can?.pay}
               apiFetch={apiFetch} toast={toast} onSaved={(o) => { setSaved(o); onChanged?.() }} />
@@ -400,6 +461,7 @@ export default function VendorOrders() {
   const [loading, setLoading] = useState(true)
   const [target, setTarget] = useState(null)
   const [paying, setPaying] = useState(null)
+  const [delivering, setDelivering] = useState(null)
   const [vendor, setVendor] = useState('')
   const [status, setStatus] = useState('')
   const [payment, setPayment] = useState('')
@@ -574,7 +636,12 @@ export default function VendorOrders() {
                   <td data-label="Products" style={{ fontSize: 12 }}>
                     {summarise(o.items).map((s, i) => <div key={i}>{s}</div>)}
                   </td>
-                  <td data-label="Qty" style={{ textAlign: 'center', fontWeight: 600 }}>{o.total_qty}</td>
+                  <td data-label="Qty" style={{ textAlign: 'center', fontWeight: 600 }}>
+                    {o.total_qty}
+                    {o.received_qty > 0 && o.pending_qty > 0 && o.status !== 'Consignment Received' && (
+                      <div style={{ fontSize: 11.5, fontWeight: 500, color: 'var(--warning)' }}>{o.pending_qty} to come</div>
+                    )}
+                  </td>
                   <td data-label="Total" style={{ textAlign: 'right' }}>{o.total ? inr(o.total) : '—'}</td>
                   <td data-label="Balance" style={{ textAlign: 'right', color: o.balance > 0 ? 'var(--warning)' : undefined, fontWeight: o.balance > 0 ? 600 : undefined }}>
                     {o.total ? inr(o.balance) : '—'}
@@ -591,6 +658,9 @@ export default function VendorOrders() {
                       value={o.status} aria-label={`${o.ref} status`} onChange={e => patchStatus(o, { status: e.target.value })}>
                       {(meta?.statuses || STATUSES).map(s => <option key={s}>{s}</option>)}
                     </select>
+                    {can.edit && o.status !== 'Consignment Received' && o.total_qty > 0 && (
+                      <button className="mini-btn" style={{ display: 'block', marginTop: 6 }} aria-label={`Record delivery for ${o.ref}`} onClick={() => setDelivering({ orderId: o.id })}>Goods in</button>
+                    )}
                   </td>
                   <td data-label="Payment" onClick={e => e.stopPropagation()}>
                     {o.payment_manual ? (
@@ -631,7 +701,14 @@ export default function VendorOrders() {
           onClose={() => setTarget(null)}
           onSaved={() => { setTarget(null); load() }}
           onPay={(o) => { setTarget(null); setPaying(o) }}
+          onDeliver={(o, deliveryId) => { setTarget(null); setDelivering({ orderId: o.id, deliveryId: deliveryId || null }) }}
           onChanged={load} />
+      )}
+
+      {delivering && (
+        <RecordDeliveryDrawer orderId={delivering.orderId} deliveryId={delivering.deliveryId} apiFetch={apiFetch} toast={toast}
+          onClose={() => setDelivering(null)}
+          onSaved={() => { setDelivering(null); load() }} />
       )}
 
       {paying && (
