@@ -14,6 +14,7 @@ import VendorOrderAnalytics from './VendorOrderAnalytics'
 import RecordPaymentDrawer from './RecordPaymentDrawer'
 import PaymentPlan from './PaymentPlan'
 import RecordDeliveryDrawer from './RecordDeliveryDrawer'
+import VendorImportDrawer from './VendorImportDrawer'
 import { BRAND_LABEL, PAY_CLASS, inr, day, openFile, waNote } from './format'
 import { cleanMobile, mobileError, isValidMobile, mobileInputProps } from '../../utils/phone'
 
@@ -481,6 +482,7 @@ export default function VendorOrders() {
   const [target, setTarget] = useState(null)
   const [paying, setPaying] = useState(null)
   const [delivering, setDelivering] = useState(null)
+  const [importing, setImporting] = useState(false)
   const [vendor, setVendor] = useState('')
   const [status, setStatus] = useState('')
   const [payment, setPayment] = useState('')
@@ -601,6 +603,7 @@ export default function VendorOrders() {
           <button className="btn btn-secondary" aria-pressed={showStats} onClick={toggleStats}>
             <Icon name="trending" size={14} /> {showStats ? 'Hide analytics' : 'Analytics'}
           </button>
+          {can.edit && can.pay && <button className="btn btn-secondary" onClick={() => setImporting(true)}><Icon name="download" size={14} /> Import sheet</button>}
           {can.edit && <button className="btn btn-primary" onClick={() => setTarget('new')}>+ New Vendor Order</button>}
         </div>
       </div>
@@ -743,6 +746,10 @@ export default function VendorOrders() {
           onPay={(o) => { setTarget(null); setPaying(o) }}
           onDeliver={(o, deliveryId) => { setTarget(null); setDelivering({ orderId: o.id, deliveryId: deliveryId || null }) }}
           onChanged={load} />
+      )}
+
+      {importing && (
+        <VendorImportDrawer apiFetch={apiFetch} toast={toast} onClose={() => setImporting(false)} onDone={load} />
       )}
 
       {delivering && (
