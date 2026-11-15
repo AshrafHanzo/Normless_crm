@@ -235,9 +235,12 @@ async function templateFor(lineId, key) {
  * Send one event's template, once. `ref` is what makes it unique (the order, cart or shipment);
  * `facts` fill its gaps. Returns the send row, or null when it was already sent or isn't set up.
  */
-async function fire(lineId, eventKey, ref, facts, { label = null } = {}) {
-    const cfg = (await config(lineId)).events[eventKey];
-    if (!cfg?.enabled || !cfg.template) return null;
+async function fire(lineId, eventKey, ref, facts, { label = null, force = false, template: templateKey = null } = {}) {
+    const loaded = (await config(lineId)).events[eventKey];
+    // `force`: sent by hand (a button), so it goes even with the automatic message switched off —
+    // with `template` when the event has none chosen yet.
+    const cfg = loaded && { ...loaded, template: templateKey || loaded.template };
+    if (!cfg || (!cfg.enabled && !force) || !cfg.template) return null;
     if (!facts.phone || facts.phone === DEMO_PHONE) return null;
 
     const claim = (await db.query(

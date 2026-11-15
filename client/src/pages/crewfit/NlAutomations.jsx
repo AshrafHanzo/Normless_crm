@@ -40,11 +40,26 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b)
 const keyOf = (t) => `${t.name}|${t.language}`
 
 /** How long vendor messages wait before going out. */
-function VendorHoldCard({ data, onSaved }) {
+function VendorHoldCard({ data, templates, onSaved }) {
   const apiFetch = useApi()
   const toast = useToast()
   const brand = useWaBrand()
   const [busy, setBusy] = useState(false)
+  // The CRM's vendor templates, and which of them Meta has.
+  const vendorSet = (data.set || []).filter(t => t.event.startsWith('vendor'))
+  const status = (name) => (templates || []).find(t => t.name === name)?.status || null
+  const missing = vendorSet.filter(t => !status(t.name))
+  const submitAll = async () => {
+    if (!await toast.confirm({ title: `Submit ${missing.length} vendor template${missing.length === 1 ? '' : 's'} to Meta?`, message: 'They go for review on the Normless WhatsApp account (usually approved within minutes to a day). Each event’s card is pointed at its template; automatic sending stays off until you switch it on.', confirmLabel: 'Submit' })) return
+    setBusy(true)
+    const r = await apiFetch(`${brand.api}/nl/automations/vendor-templates`, { method: 'POST' })
+    setBusy(false)
+    if (!r || r.error) return toast.error(r?.error || 'Could not submit them')
+    const failed = r.results.filter(x => x.error)
+    if (failed.length) toast.error(failed.map(x => `${x.name}: ${x.error}`).join(' · '), { title: 'Some weren’t submitted' })
+    else toast.success('Vendor templates submitted to Meta')
+    onSaved()
+  }
   const save = async (minutes) => {
     setBusy(true)
     const r = await apiFetch(`${brand.api}/nl/automations`, { method: 'PUT', body: JSON.stringify({ vendor_hold: Number(minutes), events: {} }) })
@@ -54,6 +69,24 @@ function VendorHoldCard({ data, onSaved }) {
     onSaved()
   }
   return (
+    <>
+    <section className="was-card">
+      <div className="was-card-head"><h3>Vendor templates at Meta</h3></div>
+      <p className="was-hint" style={{ marginTop: 0 }}>
+        Vendor messages — automatic or sent with a button — go only with templates Meta has approved.
+      </p>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
+        {vendorSet.map(t => {
+          const st = status(t.name)
+          return <span key={t.name} className={`status-badge ${st === 'APPROVED' ? 'fulfilled' : st ? 'pending' : ''}`} title={t.name}>{t.name.replace('nlcrm_vendor_', '').replace(/_/g, ' ')} · {st ? st.toLowerCase() : 'not submitted'}</span>
+        })}
+      </div>
+      {data.canEdit && missing.length > 0 && (
+        <button type="button" className="btn btn-primary btn-sm" disabled={busy} onClick={submitAll}>
+          {busy ? 'Submitting…' : `Submit ${missing.length} vendor template${missing.length === 1 ? '' : 's'} to Meta`}
+        </button>
+      )}
+    </section>
     <section className="was-card">
       <div className="was-card-head"><h3>Wait before sending</h3></div>
       <p className="was-hint" style={{ marginTop: 0 }}>
@@ -67,6 +100,7 @@ function VendorHoldCard({ data, onSaved }) {
         </select>
       </label>
     </section>
+    </>
   )
 }
 
@@ -425,7 +459,7 @@ export function NlTemplatesTab() {
           </div>
           <CopiesCard data={a.data} onDone={async () => { await a.load(); setLibKey(k => k + 1) }} />
           {group === 'cart' && <WebhookCard data={a.data} />}
-          {group === 'vendor' && <VendorHoldCard data={a.data} onSaved={a.load} />}
+          {group === 'vendor' && <VendorHoldCard data={a.data} templates={a.templates} onSaved={a.load} />}
           {events.map(ev => (
             <EventCard key={ev.key} ev={ev} cfg={a.draft[ev.key]} data={a.data} templates={a.templates} canEdit={a.data.canEdit}
               onChange={(patch) => a.setEvent(ev.key, patch)} onEdit={setEditing} />

@@ -10,11 +10,11 @@ const when = (ts) => (ts ? new Date(ts).toLocaleString('en-IN', { day: '2-digit'
 export default function VendorLinkCard({ vendor, apiFetch, toast, onChanged }) {
   const portal = vendor.portal || {}
   const [busy, setBusy] = useState(false)
-  // Can the link go from the Normless number (template switched on, vendor has a number)?
-  const [waOn, setWaOn] = useState(false)
+  // Can the link go from the Normless number right now — and if not, why?
+  const [wa, setWa] = useState(null)
   useEffect(() => {
     let live = true
-    apiFetch(`/api/vendors/${vendor.id}/whatsapp`).then(r => { if (live && r && !r.error) setWaOn(!!r.events?.vendor_link) })
+    apiFetch(`/api/vendors/${vendor.id}/whatsapp`).then(r => { if (live && r && !r.error) setWa(r.manual?.vendor_link || null) })
     return () => { live = false }
     // apiFetch is a new function every render (see useApi), so it can't be a dependency here.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -32,8 +32,8 @@ export default function VendorLinkCard({ vendor, apiFetch, toast, onChanged }) {
     setBusy(false)
     if (!r || r.error) { toast.error(r?.error || 'Couldn’t update the link'); return }
     if (sendWhatsapp) {
-      if (r.whatsapp?.queued) toast.success(`Sent to ${vendor.name} from the Normless number`)
-      else toast.error(`Not sent: ${r.whatsapp?.reason || 'WhatsApp isn’t set up for vendor messages'}`)
+      if (r.whatsapp?.sent) toast.success(`Sent to ${vendor.name} on WhatsApp from the Normless number`)
+      else toast.error(r.whatsapp?.reason || 'It didn’t send', { title: 'Not sent' })
     } else {
       toast.success(action === 'disable' ? 'Link switched off' : action === 'regenerate' ? 'New link made' : 'Link is on')
     }
@@ -41,11 +41,6 @@ export default function VendorLinkCard({ vendor, apiFetch, toast, onChanged }) {
   }
 
   const copy = async () => { await navigator.clipboard.writeText(portal.url); toast.success('Link copied') }
-  const sendWhatsApp = () => {
-    const text = `Hi ${vendor.contact_person || vendor.name}, this is your vendor page with Normless — your orders, deliveries, payments with UTRs, and where to upload invoices:\n${portal.url}`
-    const digits = String(vendor.phone || '').replace(/\D/g, '')
-    window.open(`https://wa.me/${digits.length === 10 ? `91${digits}` : digits}?text=${encodeURIComponent(text)}`, '_blank')
-  }
 
   return (
     <div className="glass-card vp-card vp-link-card">
@@ -58,13 +53,15 @@ export default function VendorLinkCard({ vendor, apiFetch, toast, onChanged }) {
           <div className="vp-link-row">
             <input readOnly value={portal.url} aria-label="Vendor link" className="vp-mono" onFocus={e => e.target.select()} />
             <button className="btn btn-secondary" onClick={copy}><Icon name="copy" size={14} /> Copy</button>
-            {waOn
-              ? <button className="btn btn-secondary" disabled={busy} onClick={() => act('create', true)} title="Sent with the approved template, from the Normless number"><Icon name="whatsapp" size={14} /> Send from Normless WhatsApp</button>
-              : <button className="btn btn-secondary" onClick={sendWhatsApp} disabled={!vendor.phone} title={vendor.phone ? 'Opens WhatsApp on this device with the message ready' : 'Add their WhatsApp number first'}><Icon name="whatsapp" size={14} /> Send on WhatsApp</button>}
+            <button className="btn btn-secondary" disabled={busy || !wa?.ready} onClick={() => act('create', true)}
+              title={wa?.ready ? 'Sends now from the Normless WhatsApp number' : wa?.reason}>
+              <Icon name="whatsapp" size={14} /> Send on WhatsApp
+            </button>
             <a className="btn btn-secondary" href={portal.url} target="_blank" rel="noreferrer"><Icon name="external" size={14} /> Open</a>
           </div>
           <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginTop: 10, fontSize: 12.5, color: 'var(--text-muted)' }}>
             <span>{portal.last_seen_at ? `Last opened ${when(portal.last_seen_at)}` : 'Not opened yet'}</span>
+            {wa && !wa.ready && <span style={{ color: 'var(--warning)' }}>WhatsApp: {wa.reason}</span>}
             <span style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
               <button className="mini-btn" disabled={busy} onClick={() => act('regenerate')}>Make a new link</button>
               <button className="mini-btn mini-btn-danger" disabled={busy} onClick={() => act('disable')}>Switch off</button>

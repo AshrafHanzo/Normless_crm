@@ -496,6 +496,25 @@ router.post('/:id/status', async (req, res) => {
     }
 });
 
+// POST /api/vendor-orders/:id/whatsapp — send the order to the vendor now, from the Normless
+// number, with the approved "new order" template (its button opens their page with the order).
+router.post('/:id/whatsapp', async (req, res) => {
+    if (!await canEdit(req)) return res.status(403).json({ error: 'Access denied' });
+    try {
+        const o = (await db.query('SELECT id, vendor_id, status FROM vendor_orders WHERE id = $1', [req.params.id])).rows[0];
+        if (!o) return res.status(404).json({ error: 'Vendor order not found' });
+        if (!o.vendor_id) return res.status(400).json({ error: 'Pick the vendor on the order first' });
+        const r = await vendorWa.sendNow({ event: 'vendor_order', vendorId: o.vendor_id, ref: `order:${o.id}`, user: req.user?.username });
+        if (!r.sent) return res.status(r.setup ? 409 : 400).json({ error: r.reason, setup: !!r.setup });
+        // Sending is what places the order, so a Pending one moves on.
+        if (o.status === 'Pending') await db.query(`UPDATE vendor_orders SET status = 'Consignment Ordered', updated_at = CURRENT_TIMESTAMP WHERE id = $1`, [o.id]);
+        res.json({ success: true });
+    } catch (err) {
+        console.error('Error sending vendor order on WhatsApp:', err);
+        res.status(500).json({ error: 'Failed to send on WhatsApp' });
+    }
+});
+
 // GET /api/vendor-orders/:id/message — the WhatsApp text
 router.get('/:id/message', async (req, res) => {
     try {

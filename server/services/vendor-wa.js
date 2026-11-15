@@ -208,28 +208,37 @@ async function tick() {
     if (!line?.id) return;
     const due = (await db.query(
         `SELECT * FROM vendor_wa_queue WHERE status = 'queued' AND send_after <= CURRENT_TIMESTAMP ORDER BY send_after LIMIT 20`)).rows;
-    for (const row of due) {
-        const finish = (status, error = null) => db.query(
-            `UPDATE vendor_wa_queue SET status = $1, error = $2, done_at = CURRENT_TIMESTAMP WHERE id = $3`, [status, error ? String(error).slice(0, 300) : null, row.id]);
-        try {
-            const v = await messageable(row.vendor_id);
-            if (!v) { await finish('skipped', 'No WhatsApp number, or updates switched off for this vendor'); continue; }
-            const page = await pageFor(v);
-            if (!page) { await finish('skipped', 'The vendor’s link is switched off'); continue; }
-            const built = await BUILD[row.event]?.(row);
-            if (!built || built.skip) { await finish('cancelled', built?.skip || 'Unknown message'); continue; }
-            const facts = {
-                ...built.facts, company: COMPANY,
-                vendor_name: (v.contact_person || v.name).split(/\s+/)[0] || v.name,
-                phone: `91${v.phone}`, name: v.name, first_name: v.name, urls: { vendor_page: page },
-            };
-            const sent = await auto.fire(line.id, row.event, row.ref, facts, { label: `${v.name}${built.label ? ` · ${built.label}` : ''}` });
-            if (!sent) await finish('skipped', 'Switched off, or this exact message was already sent');
-            else await finish(sent.status === 'sent' ? 'sent' : 'failed', sent.error || null);
-        } catch (err) {
-            console.error(`vendor wa ${row.event} ${row.ref}:`, err.message);
-            await finish('failed', err.message);
-        }
+    for (const row of due) await sendRow(line, row);
+}
+
+/** Send one queued row. Returns { status, error }. */
+async function sendRow(line, row, { force = false, template = null } = {}) {
+    const finish = async (status, error = null) => {
+        await db.query(`UPDATE vendor_wa_queue SET status = $1, error = $2, done_at = CURRENT_TIMESTAMP WHERE id = $3`,
+            [status, error ? String(error).slice(0, 300) : null, row.id]);
+        return { status, error };
+    };
+    try {
+        // By hand, updates switched off on the vendor doesn't stop a message someone chose to send.
+        const v = force
+            ? (await db.query('SELECT * FROM vendors WHERE id = $1 AND active', [row.vendor_id])).rows.find(x => /^\d{10}$/.test(String(x.phone || '')))
+            : await messageable(row.vendor_id);
+        if (!v) return finish('skipped', 'No WhatsApp number, or updates switched off for this vendor');
+        const page = await pageFor(v);
+        if (!page) return finish('skipped', 'The vendor’s link is switched off');
+        const built = await BUILD[row.event]?.(row);
+        if (!built || built.skip) return finish('cancelled', built?.skip || 'Unknown message');
+        const facts = {
+            ...built.facts, company: COMPANY,
+            vendor_name: (v.contact_person || v.name).split(/\s+/)[0] || v.name,
+            phone: `91${v.phone}`, name: v.name, first_name: v.name, urls: { vendor_page: page },
+        };
+        const sent = await auto.fire(line.id, row.event, row.ref, facts, { label: `${v.name}${built.label ? ` · ${built.label}` : ''}`, force, template });
+        if (!sent) return finish('skipped', 'Switched off, or this exact message was already sent');
+        return finish(sent.status === 'sent' ? 'sent' : 'failed', sent.error || null);
+    } catch (err) {
+        console.error(`vendor wa ${row.event} ${row.ref}:`, err.message);
+        return finish('failed', err.message);
     }
 }
 
@@ -266,6 +275,52 @@ async function act(id, vendorId, action) {
     return r.rows.length > 0;
 }
 
+/**
+ * The template a message would go with: the one chosen on the Automations page, else the CRM's own
+ * for the event if Meta has it. Returns { key, status } or null.
+ */
+async function templateOf(lineId, event) {
+    const cfg = (await auto.config(lineId)).events[event];
+    const set = require('./nl-template-set').byEvent(event);
+    const key = cfg?.template || (set ? `${set.name}|en` : null);
+    if (!key) return null;
+    const [name, language] = key.split('|');
+    const t = (await db.query('SELECT status FROM wa_templates WHERE line_id = $1 AND name = $2 AND language = $3', [lineId, name, language])).rows[0];
+    return t ? { key, name, status: t.status } : { key, name, status: null };
+}
+
+/** Can this message be sent by hand to this vendor right now? { ready, reason }. */
+async function canSend(event, vendorId) {
+    const line = normless();
+    if (!line?.id) return { ready: false, reason: 'Normless WhatsApp isn’t connected' };
+    const v = (await db.query('SELECT phone, active, portal_token, portal_enabled FROM vendors WHERE id = $1', [vendorId])).rows[0];
+    if (!v) return { ready: false, reason: 'Vendor not found' };
+    if (!/^\d{10}$/.test(String(v.phone || ''))) return { ready: false, reason: 'Add the vendor’s WhatsApp number first' };
+    if (v.portal_token && !v.portal_enabled) return { ready: false, reason: 'Their link is switched off — the message’s button opens it' };
+    const t = await templateOf(line.id, event);
+    if (!t?.status) return { ready: false, reason: 'The vendor template isn’t at Meta yet — submit it in WhatsApp → Settings → Templates → Vendors', setup: true };
+    if (t.status !== 'APPROVED') return { ready: false, reason: `The template ${t.name} is ${String(t.status).toLowerCase()} at Meta — it can be sent once approved`, setup: true };
+    return { ready: true };
+}
+
+/**
+ * Send a vendor message now, by hand, from the Normless number — no hold, and whether or not the
+ * automatic message is switched on. Returns { sent: true } or { sent: false, reason }.
+ */
+async function sendNow({ event, vendorId, ref, note = null, user = null }) {
+    const check = await canSend(event, vendorId);
+    if (!check.ready) return { sent: false, reason: check.reason, setup: !!check.setup };
+    const line = normless();
+    const t = await templateOf(line.id, event);
+    // A ref of its own each time, so a message can be sent again by hand.
+    const own = `${ref}:manual:${Date.now()}`;
+    const row = (await db.query(
+        `INSERT INTO vendor_wa_queue (vendor_id, event, ref, note, send_after, status, created_by)
+         VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP, 'queued', $5) RETURNING *`, [vendorId, event, own, note, user])).rows[0];
+    const result = await sendRow(line, row, { force: true, template: t.key });
+    return result.status === 'sent' ? { sent: true } : { sent: false, reason: result.error || 'It didn’t go' };
+}
+
 /** For the forms: would a message go out for this event to this vendor? */
 async function willNotify(event, vendorId) {
     const line = normless();
@@ -287,4 +342,4 @@ function start() {
     timers.forEach(t => t.unref());
 }
 
-module.exports = { enqueue, tick, instalmentTick, forVendor, act, willNotify, start, pageFor };
+module.exports = { enqueue, tick, instalmentTick, forVendor, act, willNotify, start, pageFor, sendNow, canSend };

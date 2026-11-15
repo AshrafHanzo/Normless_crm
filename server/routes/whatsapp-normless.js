@@ -256,6 +256,30 @@ router.post('/automations/copy-updatrr', manager, async (req, res) => {
     }
 });
 
+/** Submit every vendor template Meta doesn't have yet, and point the vendor events at them. */
+router.post('/automations/vendor-templates', manager, async (req, res) => {
+    try {
+        if (!wa.configured() || !wa.wabaId()) return res.status(503).json({ error: 'Connect Normless’s WhatsApp number first' });
+        const have = new Set((await db.query(`SELECT name FROM wa_templates WHERE line_id = $1`, [req.waLine.id])).rows.map(r => r.name));
+        const results = [];
+        const events = {};
+        for (const e of auto.EVENTS.filter(x => x.group === 'vendor')) {
+            const t = tplSet.byEvent(e.key);
+            if (!t) continue;
+            events[e.key] = { ...(await auto.config(req.waLine.id)).events[e.key], template: `${t.name}|en`, vars: t.vars, link: 'vendor_page' };
+            if (have.has(t.name)) { results.push({ event: e.key, name: t.name, status: 'already there' }); continue; }
+            try { results.push({ event: e.key, ...(await auto.createSetTemplate(req.waLine.id, e.key)) }); }
+            catch (err) { results.push({ event: e.key, name: t.name, error: err.message }); }
+        }
+        // Chosen on each card, still switched off: switching on is a decision of its own.
+        await auto.saveEvents(req.waLine.id, Object.fromEntries(Object.entries(events).map(([k, v]) => [k, { ...v, enabled: !!v.enabled }])));
+        res.json({ results });
+    } catch (err) {
+        console.error('vendor templates submit error:', err.message);
+        res.status(err instanceof wa.WhatsAppError ? 502 : 500).json({ error: err.message });
+    }
+});
+
 /** Submit the CRM's own template for an event to Meta. */
 router.post('/automations/:event/template', manager, async (req, res) => {
     try {

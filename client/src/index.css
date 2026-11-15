@@ -3518,7 +3518,8 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .nl-phone-list div:first-child { border-top: 0; }
 
 /* ---- Normless templates, grouped by what sends them ------------------------------------------ */
-.nl-auto-tabs { max-width: 100%; overflow-x: auto; flex-wrap: nowrap; margin: 4px 0 2px; scrollbar-width: none; }
+/* Wraps rather than scrolling: with the scrollbar hidden, tabs past the edge (Vendors) were invisible. */
+.nl-auto-tabs { display: flex; max-width: 100%; flex-wrap: wrap; width: auto; margin: 4px 0 2px; }
 .nl-auto-tabs::-webkit-scrollbar { display: none; }
 .nl-auto-tabs button { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; padding: 8px 14px; }
 .nl-auto-bar { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; justify-content: space-between; }

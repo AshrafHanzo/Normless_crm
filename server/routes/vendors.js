@@ -330,10 +330,10 @@ router.post('/:id/link', async (req, res) => {
                  portal_last_seen_at = CASE WHEN portal_token IS DISTINCT FROM $1 THEN NULL ELSE portal_last_seen_at END
              WHERE id = $2`, [token, v.id]);
         // Sent from the Normless number when asked (and the template is on), straight away.
+        // Sent straight away from the Normless number when asked.
         const whatsapp = req.body?.send_whatsapp
-            ? await vendorWa.enqueue({ event: 'vendor_link', vendorId: v.id, ref: `link:${v.id}:${token.slice(0, 10)}`, now: true, user: req.user?.username })
+            ? await vendorWa.sendNow({ event: 'vendor_link', vendorId: v.id, ref: `link:${v.id}:${token.slice(0, 10)}`, user: req.user?.username })
             : null;
-        if (whatsapp?.queued) await vendorWa.tick();
         res.json({ success: true, enabled: true, url: portalUrl(token), whatsapp });
     } catch (err) {
         console.error('vendor link:', err);
@@ -344,9 +344,11 @@ router.post('/:id/link', async (req, res) => {
 // GET /api/vendors/:id/whatsapp — messages waiting to go to the vendor, and the latest sent
 router.get('/:id/whatsapp', async (req, res) => {
     try {
-        const events = {};
+        const events = {}, manual = {};
         for (const e of ['vendor_link', 'vendor_order', 'vendor_payment', 'vendor_delivery', 'vendor_invoice']) events[e] = await vendorWa.willNotify(e, req.params.id);
-        res.json({ messages: await vendorWa.forVendor(req.params.id), events });
+        // What can be sent by hand now (the buttons), and if not, why.
+        for (const e of ['vendor_link', 'vendor_order']) manual[e] = await vendorWa.canSend(e, req.params.id);
+        res.json({ messages: await vendorWa.forVendor(req.params.id), events, manual });
     } catch (err) {
         console.error('vendor whatsapp:', err);
         res.status(500).json({ error: 'Failed to load WhatsApp messages' });

@@ -563,14 +563,16 @@ export default function VendorOrders() {
     setOrders(list => list.map(x => (x.id === o.id ? r.order : x)))
   }
 
+  // Sent from the Normless number with the approved "new order" template — never web WhatsApp.
+  const [sending, setSending] = useState(null)
   const sendWhatsApp = async (o) => {
-    const r = await apiFetch(`/api/vendor-orders/${o.id}/message`)
-    if (!r || r.error) { toast.error(r?.error || 'Could not build the message'); return }
-    const digits = (r.phone || '').replace(/\D/g, '')
-    const to = digits.length === 10 ? `91${digits}` : digits
-    window.open(`https://wa.me/${to}?text=${encodeURIComponent(r.message)}`, '_blank')
-    // Sending is what actually places the order, so a Pending one moves on by itself.
-    if (o.status === 'Pending' && can.edit) await patchStatus(o, { status: 'Consignment Ordered' })
+    if (!await toast.confirm({ title: `Send ${o.ref} to ${o.vendor}?`, message: 'It goes now on WhatsApp from the Normless number, with a button to the order on their vendor page.', confirmLabel: 'Send' })) return
+    setSending(o.id)
+    const r = await apiFetch(`/api/vendor-orders/${o.id}/whatsapp`, { method: 'POST' })
+    setSending(null)
+    if (!r || r.error) { toast.error(r?.error || 'It didn’t send', { title: 'Not sent' }); return }
+    toast.success(`${o.ref} sent to ${o.vendor} on WhatsApp`)
+    load()
   }
 
   const copyMessage = async (o) => {
@@ -722,7 +724,7 @@ export default function VendorOrders() {
                     <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
                       <button className="btn-icon" title="Open PDF" aria-label={`PDF of ${o.ref}`} disabled={pdfBusy === o.id} onClick={() => openPdf(o)}><Icon name="printer" size={14} /></button>
                       <button className="btn-icon" title="Copy order text" aria-label={`Copy ${o.ref}`} onClick={() => copyMessage(o)}><Icon name="copy" size={14} /></button>
-                      <button className="btn-icon" title="Send on WhatsApp" aria-label={`Send ${o.ref} on WhatsApp`} onClick={() => sendWhatsApp(o)}><Icon name="phone" size={14} /></button>
+                      {can.edit && <button className="btn-icon" title="Send to the vendor on WhatsApp (Normless number)" aria-label={`Send ${o.ref} on WhatsApp`} disabled={sending === o.id} onClick={() => sendWhatsApp(o)}><Icon name="whatsapp" size={14} /></button>}
                       {can.delete && (
                         <button className="btn-icon" title="Delete" aria-label={`Delete ${o.ref}`} style={{ color: 'var(--danger)' }} onClick={() => remove(o)}><Icon name="trash" size={14} /></button>
                       )}
