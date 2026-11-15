@@ -4358,3 +4358,15 @@ p.wdb-sub { margin: 0; }
 .mx-dtr input, .mx-dtr select { width: auto; flex: 0 0 auto; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--text-primary); font-size: 13px; }
 .mx-edited { margin-top: 4px; font-size: 11.5px; color: var(--warning); }
 .mx-link { background: none; border: none; padding: 0; color: var(--primary-light); font-size: inherit; cursor: pointer; text-decoration: underline; }
+
+/* ============================================================
+   PURCHASING — vendor profile
+   ============================================================ */
+.vp-back { display: inline-block; font-size: 13px; font-weight: 600; color: var(--text-secondary); text-decoration: none; }
+.vp-back:hover { color: var(--text-primary); }
+.vp-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(360px, 100%), 1fr)); gap: 18px; margin-bottom: 22px; }
+.vp-card h3 { font-size: 15px; margin: 0 0 14px; }
+.vp-details { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr)); gap: 14px 20px; }
+.vp-detail { display: flex; flex-direction: column; gap: 4px; min-width: 0; font-size: 14px; overflow-wrap: anywhere; }
+.vp-detail > span { font-size: 12px; font-weight: 600; color: var(--text-muted); }
+.vp-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }

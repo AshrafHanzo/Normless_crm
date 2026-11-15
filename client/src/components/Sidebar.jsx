@@ -44,6 +44,11 @@ const NAV = {
   ],
 }
 
+// Purchasing is shared too: one vendor list, whichever brand the stock is for.
+const PURCHASING_NAV = [
+  { to: '/vendors', icon: 'truck', label: 'Vendors', perm: 'can_view_vendors' },
+]
+
 // The Team section is the same in both menus: one list of people, one payroll and one set of
 // boards serve Normless and Crewfit alike.
 const TEAM_NAV = [
@@ -168,6 +173,7 @@ export default function Sidebar({ collapsed = false, onToggleCollapse, open: ope
   const mainItems = items.filter(i => !i.section)
   const systemItems = items.filter(i => i.section === 'System')
   const teamItems = TEAM_NAV.filter(canSee)
+  const purchasingItems = PURCHASING_NAV.filter(canSee)
   const isAdmin = user?.role === 'owner' || user?.role === 'admin'
 
   return (
@@ -229,6 +235,18 @@ export default function Sidebar({ collapsed = false, onToggleCollapse, open: ope
               )
             })}
           </div>
+
+          {purchasingItems.length > 0 && (
+            <div className="sidebar-section">
+              <div className="sidebar-section-label">Purchasing</div>
+              {purchasingItems.map(item => (
+                <NavLink key={item.to} to={item.to} onClick={close} title={item.label}
+                  className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>
+                  <span className="link-icon"><Icon name={item.icon} size={19} /></span><span>{item.label}</span>
+                </NavLink>
+              ))}
+            </div>
+          )}
 
           <div className="sidebar-section">
             <div className="sidebar-section-label">Team</div>

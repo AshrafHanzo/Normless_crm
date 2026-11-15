@@ -82,30 +82,45 @@ function validate(body) {
     return null;
 }
 
-/** Remember a vendor (and its number) so the dropdown grows as new names are typed in. */
+/**
+ * Put a vendor typed on the form onto the shared vendor list (or fill in its missing number), and
+ * return its id so the order can point at it. A Normless-only vendor that now supplies Crewfit too
+ * becomes "both".
+ */
 async function rememberVendor(name, phone) {
     const vendor = String(name || '').trim();
-    if (!vendor) return;
-    await db.query(
-        `INSERT INTO crewfit_vendors (name, phone) VALUES ($1, $2)
+    if (!vendor) return null;
+    const digits = String(phone || '').replace(/\D/g, '');
+    const r = await db.query(
+        `INSERT INTO vendors (name, phone, brands, created_by) VALUES ($1, $2, 'crewfit', 'vendor order')
          ON CONFLICT (LOWER(name)) DO UPDATE SET
-             phone = COALESCE(NULLIF(EXCLUDED.phone, ''), crewfit_vendors.phone),
-             updated_at = CURRENT_TIMESTAMP`,
-        [vendor, phone || null]
+             phone = COALESCE(vendors.phone, EXCLUDED.phone),
+             brands = CASE WHEN vendors.brands = 'normless' THEN 'both' ELSE vendors.brands END,
+             updated_at = CURRENT_TIMESTAMP
+         RETURNING id`,
+        [vendor, digits.length === 10 ? digits : null]
     );
+    return r.rows[0]?.id ?? null;
 }
+
+const linkVendor = (orderId, vendorId) => vendorId
+    && db.query('UPDATE crewfit_vendor_orders SET vendor_id = $1 WHERE id = $2', [vendorId, orderId]);
 
 // GET /api/crewfit/vendor-orders/meta — pick-lists for the form
 router.get('/meta', async (req, res) => {
     try {
-        const saved = (await db.query('SELECT name, phone FROM crewfit_vendors ORDER BY name')).rows;
+        // The shared vendor list (archived vendors left out), with names used on bulk orders that
+        // never made it onto the list still offered.
+        const saved = (await db.query(
+            `SELECT name, phone FROM vendors WHERE active AND brands IN ('crewfit', 'both') ORDER BY name`)).rows;
         const used = (await db.query(
             `SELECT DISTINCT vendor FROM crewfit_orders WHERE vendor IS NOT NULL AND vendor <> ''`
         )).rows.map(r => r.vendor);
+        const archived = new Set((await db.query('SELECT LOWER(name) AS n FROM vendors WHERE NOT active')).rows.map(r => r.n));
 
         const byName = new Map();
-        for (const v of [...SEED_VENDORS, ...used].filter(Boolean)) {
-            byName.set(v.toLowerCase(), { name: v, phone: null });
+        for (const v of [...SEED_VENDORS, ...used]) {
+            if (!archived.has(v.toLowerCase())) byName.set(v.toLowerCase(), { name: v, phone: null });
         }
         // A saved vendor wins: it carries the phone number.
         for (const v of saved) byName.set(v.name.toLowerCase(), { name: v.name, phone: v.phone });
@@ -247,7 +262,7 @@ router.post('/', async (req, res) => {
              JSON.stringify(items), req.body.notes || null, qty, hasPricing ? amount : null,
              req.user?.username || null]
         );
-        await rememberVendor(req.body.vendor, req.body.vendor_phone);
+        await linkVendor(r.rows[0].id, await rememberVendor(req.body.vendor, req.body.vendor_phone));
         res.json({ success: true, order: hydrate(r.rows[0]) });
     } catch (err) {
         console.error('Error creating vendor order:', err);
@@ -277,7 +292,7 @@ router.put('/:id', async (req, res) => {
              req.body.vendor_phone || null, status, paymentStatus,
              JSON.stringify(items), req.body.notes || null, qty, hasPricing ? amount : null, req.params.id]
         );
-        await rememberVendor(req.body.vendor, req.body.vendor_phone);
+        await linkVendor(r.rows[0].id, await rememberVendor(req.body.vendor, req.body.vendor_phone));
         res.json({ success: true, order: hydrate(r.rows[0]) });
     } catch (err) {
         console.error('Error updating vendor order:', err);

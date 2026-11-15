@@ -320,6 +320,8 @@ app.use('/api/banking', authMiddleware, require('./routes/banking'));
 // Customer support: returns, replacements and refunds arranged by hand.
 app.use('/api/support', authMiddleware, require('./routes/support'));
 app.use('/api/myxture', authMiddleware, require('./routes/myxture'));
+// Purchasing — vendors shared by Normless and Crewfit.
+app.use('/api/vendors', authMiddleware, require('./routes/vendors'));
 // WhatsApp. The webhook is public because Meta calls it with no credentials of ours — it proves
 // itself with a signature over the raw body instead, which is why it is mounted here, after the
 // JSON parser that stashes those bytes but ahead of the sign-in the inbox routes sit behind.
@@ -2453,6 +2455,9 @@ app.listen(PORT, async () => {
     // Ensure Crewfit catalog schema + seed
     await ensureCrewfitSchema();
     await require('./services/team-schema').ensureTeamSchema();
+    // Purchasing: one vendor list for both brands. After the Crewfit schema, whose vendor orders
+    // it links to.
+    await require('./services/vendor-schema').ensureVendorSchema();
     require('./services/team-notify').start();
     require('./routes/tasks').startRepeats();
     // The WhatsApp menu, put in place once. Seeded switched off: nobody should discover that a

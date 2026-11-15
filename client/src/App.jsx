@@ -37,6 +37,8 @@ import DesignStudio from './pages/crewfit/DesignStudio'
 import WhatsAppInbox from './pages/crewfit/WhatsAppInbox'
 import Tasks from './pages/team/Tasks'
 import Payroll from './pages/team/Payroll'
+import Vendors from './pages/purchasing/Vendors'
+import VendorProfile from './pages/purchasing/VendorProfile'
 import TeamMe from './pages/team/Me'
 import WhatsAppSettings from './pages/crewfit/WhatsAppSettings'
 import WhatsAppDashboard, { WhatsAppMyPerformance } from './pages/crewfit/WhatsAppDashboard'
@@ -277,6 +279,9 @@ function App() {
             {/* Team: shared by both brands. My pay & leave is anyone signed in; their own data only. */}
             <Route path="/team/tasks" element={<ProtectedRoute permission="can_view_tasks"><AppLayout><Tasks /></AppLayout></ProtectedRoute>} />
             <Route path="/team/payroll" element={<ProtectedRoute permission="can_view_payroll"><AppLayout><Payroll /></AppLayout></ProtectedRoute>} />
+            {/* Purchasing — shared by both brands. */}
+            <Route path="/vendors" element={<ProtectedRoute permission="can_view_vendors"><AppLayout><Vendors /></AppLayout></ProtectedRoute>} />
+            <Route path="/vendors/:id" element={<ProtectedRoute permission="can_view_vendors"><AppLayout><VendorProfile /></AppLayout></ProtectedRoute>} />
             <Route path="/team/me" element={<ProtectedRoute><AppLayout><TeamMe /></AppLayout></ProtectedRoute>} />
             <Route path="/crewfit/vendor-orders" element={<ProtectedRoute permission="can_view_crewfit_vendors"><AppLayout><CrewfitVendorOrders /></AppLayout></ProtectedRoute>} />
             <Route path="/crewfit/invoices" element={<ProtectedRoute permission="can_view_crewfit_invoices"><AppLayout><CrewfitInvoices /></AppLayout></ProtectedRoute>} />
