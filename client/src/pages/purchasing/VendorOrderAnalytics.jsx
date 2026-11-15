@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import DateRangeFilter from '../../components/DateRangeFilter'
 
 /**
- * What Crewfit ordered from its vendors over time, and how much of it is paid. Pieces are counted
+ * What was ordered from vendors over time (one brand or both), and how much of it is paid. Pieces are counted
  * on every order; money only where the order has rates, and the orders without a rate are called
  * out so a missing rate never reads as nothing owed.
  */
@@ -48,16 +48,16 @@ function PiecesChart({ series, group }) {
   )
 }
 
-export default function VendorOrderAnalytics({ apiFetch, vendor, refreshKey }) {
+export default function VendorOrderAnalytics({ apiFetch, vendor, brand, refreshKey }) {
   const [range, setRange] = useState({ from: '', to: '' })
   const [group, setGroup] = useState('month')
   const [data, setData] = useState(null)
 
   useEffect(() => {
-    const q = new URLSearchParams({ group, ...(range.from && { from: range.from }), ...(range.to && { to: range.to }), ...(vendor && { vendor }) })
-    apiFetch(`/api/crewfit/vendor-orders/analytics?${q}`).then(r => { if (r && !r.error) setData(r) })
+    const q = new URLSearchParams({ group, ...(range.from && { from: range.from }), ...(range.to && { to: range.to }), ...(vendor && { vendor }), ...(brand && { brand }) })
+    apiFetch(`/api/vendor-orders/analytics?${q}`).then(r => { if (r && !r.error) setData(r) })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [group, range.from, range.to, vendor, refreshKey])
+  }, [group, range.from, range.to, vendor, brand, refreshKey])
 
   if (!data) return <div className="voa"><div className="loader"><div className="spinner" /></div></div>
   const t = data.totals

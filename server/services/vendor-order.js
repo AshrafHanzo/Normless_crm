@@ -1,6 +1,9 @@
 /**
- * Crewfit → vendor purchase orders: the PDF the vendor receives and the WhatsApp text that
- * accompanies it.
+ * Purchase orders to vendors, for either brand: the PDF the vendor receives and the WhatsApp text
+ * that accompanies it.
+ *
+ * Two kinds of line: apparel (product, GSM, colour × size grid) and simple (a product and a
+ * quantity — masks, packaging, anything without sizes).
  *
  * A vendor order is a production spec, not an invoice: what to make, in which colours, and how
  * many of each size. Prices are optional and only appear once a rate has actually been entered,
@@ -11,7 +14,12 @@ const fs = require('fs');
 const path = require('path');
 const { SELLER } = require('./invoice');
 
-const LOGO_PATH = path.join(__dirname, '..', '..', 'client', 'logo', 'cf_logo', 'cf_black.png');
+const LOGOS = {
+    crewfit: path.join(__dirname, '..', '..', 'client', 'logo', 'cf_logo', 'cf_black.png'),
+    normless: path.join(__dirname, '..', '..', 'client', 'logo', 'n_logo', 'black.png'),
+};
+const BRAND_NAMES = { crewfit: 'CREWFIT', normless: 'NORMLESS' };
+const brandName = (order) => BRAND_NAMES[order.brand] || SELLER.brandName;
 const SIZES = ['XS', 'S', 'M', 'L', 'XL', 'XXL', '3XL', '4XL', '5XL'];
 
 const INK = '#111111';
@@ -37,8 +45,11 @@ function usedSizes(items) {
     return [...known, ...extra];
 }
 
+const isSimple = (item) => item?.kind === 'simple';
 const colorQty = (c) => Object.values(c.sizes || {}).reduce((sum, q) => sum + (Number(q) || 0), 0);
-const itemQty = (item) => (item.colors || []).reduce((sum, c) => sum + colorQty(c), 0);
+const itemQty = (item) => (isSimple(item)
+    ? (Number(item.qty) || 0)
+    : (item.colors || []).reduce((sum, c) => sum + colorQty(c), 0));
 
 function totals(items) {
     const list = items || [];
@@ -64,13 +75,21 @@ const refLabel = (order) => `VO-${String(order.ref_no ?? order.id ?? '').padStar
 function buildVendorMessage(order) {
     const items = order.items || [];
     const { qty, amount, hasPricing } = totals(items);
-    const L = [`*CREWFIT — Purchase Order ${refLabel(order)}*`, ''];
+    const agreed = Number(order.total_override) > 0 ? Number(order.total_override) : null;
+    const L = [`*${brandName(order)} — Purchase Order ${refLabel(order)}*`, ''];
     L.push(`Vendor: ${order.vendor}`);
     L.push(`Date: ${ymd(order.order_date)}`);
     if (order.delivery_date) L.push(`Expected delivery: ${ymd(order.delivery_date)}`);
+    if (order.quote_ref) L.push(`Your quotation: ${order.quote_ref}`);
     L.push('');
 
     items.forEach((item, i) => {
+        if (isSimple(item)) {
+            L.push(`${items.length > 1 ? `${i + 1}. ` : ''}*${item.product_type || 'Item'}*: ${itemQty(item)} pcs`);
+            if (Number(item.rate) > 0) L.push(`   Rate: ${money(item.rate)}/pc`);
+            L.push('');
+            return;
+        }
         const header = [item.product_type || 'Item', item.gsm ? `${item.gsm} GSM` : null].filter(Boolean).join(' · ');
         L.push(`${items.length > 1 ? `${i + 1}. ` : ''}*${header}*`);
         for (const c of item.colors || []) {
@@ -86,15 +105,28 @@ function buildVendorMessage(order) {
     });
 
     L.push(`*Total: ${qty} pcs*`);
-    if (hasPricing) L.push(`*Order value: ${money(amount)}*`);
+    if (agreed) L.push(`*Order value: ${money(agreed)}* (incl. GST)`);
+    else if (hasPricing) L.push(`*Order value: ${money(amount)}*`);
     if (order.notes) L.push('', `Note: ${order.notes}`);
-    L.push('', 'Please confirm receipt and share the expected delivery date.', '', `— ${SELLER.brandName}`);
+    L.push('', 'Please confirm receipt and share the expected delivery date.', '', `— ${brandName(order)}`);
     return L.join('\n');
 }
 
 /** Draw one product block: header strip, then a colour × size matrix. Returns the new y. */
 function renderItem(doc, item, y, opts) {
     const { x, width, showRate } = opts;
+    if (isSimple(item)) {
+        if (!itemQty(item)) return y;
+        doc.rect(x, y, width, 22).fillAndStroke(HEAD_BG, LINE);
+        doc.fillColor(INK).font('Helvetica-Bold').fontSize(9.5).text(item.product_type || 'Item', x + 8, y + 7, { width: width - 260 });
+        if (showRate && Number(item.rate) > 0) {
+            doc.font('Helvetica').fontSize(8.5).fillColor(MUTED)
+                .text(`${money(item.rate)}/pc`, x + width - 250, y + 7, { width: 120, align: 'right' });
+        }
+        doc.font('Helvetica-Bold').fontSize(9.5).fillColor(INK)
+            .text(`${itemQty(item)} pcs`, x + width - 120, y + 7, { width: 112, align: 'right' });
+        return y + 22;
+    }
     const sizes = usedSizes([item]);
     const colors = (item.colors || []).filter(c => colorQty(c) > 0);
     if (!colors.length) return y;
@@ -150,8 +182,9 @@ function renderVendorOrder(doc, order) {
     const width = doc.page.width - M * 2;
     let y = M;
 
-    if (fs.existsSync(LOGO_PATH)) {
-        doc.image(LOGO_PATH, M, y - 4, { width: 54 });
+    const logo = LOGOS[order.brand] || LOGOS.crewfit;
+    if (fs.existsSync(logo)) {
+        doc.image(logo, M, y - 4, { width: 54 });
     }
     doc.fillColor(INK).font('Helvetica-Bold').fontSize(15).text('PURCHASE ORDER', M + 66, y, { width: width - 66 });
     doc.font('Helvetica').fontSize(8.5).fillColor(MUTED)
@@ -176,7 +209,13 @@ function renderVendorOrder(doc, order) {
     }
     y += 42;
 
+    if (order.quote_ref) {
+        doc.font('Helvetica').fontSize(9).fillColor(MUTED).text(`Against your quotation ${order.quote_ref}`, M, y - 10);
+        y += 8;
+    }
+
     const { qty, amount, hasPricing } = totals(order.items);
+    const agreed = Number(order.total_override) > 0 ? Number(order.total_override) : null;
     for (const item of order.items || []) {
         // Keep a product block off the very bottom of the page.
         if (y > doc.page.height - 150) { doc.addPage(); y = M; }
@@ -188,8 +227,8 @@ function renderVendorOrder(doc, order) {
     y += 10;
     doc.font('Helvetica-Bold').fontSize(11).fillColor(INK)
         .text(`TOTAL: ${qty} pcs`, M, y, { width: width / 2 });
-    if (hasPricing) {
-        doc.text(money(amount), M + width / 2, y, { width: width / 2, align: 'right' });
+    if (agreed || hasPricing) {
+        doc.text(agreed ? `${money(agreed)} incl. GST` : money(amount), M + width / 2, y, { width: width / 2, align: 'right' });
     }
     y += 24;
 
@@ -200,7 +239,7 @@ function renderVendorOrder(doc, order) {
     }
 
     doc.font('Helvetica').fontSize(8).fillColor(MUTED)
-        .text(`${SELLER.brandName} · ${SELLER.tagline}`, M, doc.page.height - 46, { width, align: 'center' });
+        .text(order.brand === 'normless' ? SELLER.legalName : `${SELLER.brandName} · ${SELLER.tagline}`, M, doc.page.height - 46, { width, align: 'center' });
 }
 
-module.exports = { renderVendorOrder, buildVendorMessage, totals, itemQty, colorQty, usedSizes, refLabel, SIZES };
+module.exports = { renderVendorOrder, buildVendorMessage, totals, itemQty, colorQty, usedSizes, refLabel, isSimple, SIZES };

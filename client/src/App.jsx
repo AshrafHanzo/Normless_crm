@@ -27,7 +27,6 @@ import CrewfitCatalog from './pages/crewfit/CrewfitCatalog'
 import CrewfitQuotes from './pages/crewfit/CrewfitQuotes'
 import CrewfitPayments from './pages/crewfit/CrewfitPayments'
 import CrewfitCustomers from './pages/crewfit/CrewfitCustomers'
-import CrewfitVendorOrders from './pages/crewfit/CrewfitVendorOrders'
 import CrewfitInvoices from './pages/crewfit/CrewfitInvoices'
 import CrewfitActivity from './pages/crewfit/CrewfitActivity'
 import Inventory from './pages/Inventory'
@@ -39,6 +38,8 @@ import Tasks from './pages/team/Tasks'
 import Payroll from './pages/team/Payroll'
 import Vendors from './pages/purchasing/Vendors'
 import VendorProfile from './pages/purchasing/VendorProfile'
+import VendorOrders from './pages/purchasing/VendorOrders'
+import VendorPayments from './pages/purchasing/VendorPayments'
 import TeamMe from './pages/team/Me'
 import WhatsAppSettings from './pages/crewfit/WhatsAppSettings'
 import WhatsAppDashboard, { WhatsAppMyPerformance } from './pages/crewfit/WhatsAppDashboard'
@@ -282,8 +283,11 @@ function App() {
             {/* Purchasing — shared by both brands. */}
             <Route path="/vendors" element={<ProtectedRoute permission="can_view_vendors"><AppLayout><Vendors /></AppLayout></ProtectedRoute>} />
             <Route path="/vendors/:id" element={<ProtectedRoute permission="can_view_vendors"><AppLayout><VendorProfile /></AppLayout></ProtectedRoute>} />
+            <Route path="/vendor-orders" element={<ProtectedRoute permission="can_view_vendors"><AppLayout><VendorOrders /></AppLayout></ProtectedRoute>} />
+            <Route path="/vendor-payments" element={<ProtectedRoute permission="can_view_vendors"><AppLayout><VendorPayments /></AppLayout></ProtectedRoute>} />
             <Route path="/team/me" element={<ProtectedRoute><AppLayout><TeamMe /></AppLayout></ProtectedRoute>} />
-            <Route path="/crewfit/vendor-orders" element={<ProtectedRoute permission="can_view_crewfit_vendors"><AppLayout><CrewfitVendorOrders /></AppLayout></ProtectedRoute>} />
+            {/* Vendor orders moved to Purchasing, shared by both brands. */}
+            <Route path="/crewfit/vendor-orders" element={<Navigate to="/vendor-orders?brand=crewfit" replace />} />
             <Route path="/crewfit/invoices" element={<ProtectedRoute permission="can_view_crewfit_invoices"><AppLayout><CrewfitInvoices /></AppLayout></ProtectedRoute>} />
             {/* Names who changed what, so it is owner/admin only rather than a team-wide view. */}
             <Route path="/crewfit/activity" element={<AdminRoute><AppLayout><CrewfitActivity /></AppLayout></AdminRoute>} />

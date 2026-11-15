@@ -41,7 +41,6 @@ const GROUPS = [
     { key: 'design_studio', label: 'Design Studio — logo to stitch file', icon: 'spark' },
     { key: 'crewfit_calculator', label: 'Quotes', icon: 'spark' },
     { key: 'crewfit_payments', label: 'Payments', icon: 'card' },
-    { key: 'crewfit_vendors', label: 'Vendor Orders', icon: 'truck' },
     { key: 'crewfit_invoices', label: 'Invoices', icon: 'invoice' },
     { key: 'whatsapp', label: 'WhatsApp inbox — own conversations', icon: 'whatsapp' },
     { key: 'whatsapp_manage', label: 'WhatsApp — every conversation, and reassign', icon: 'edit', sub: 'whatsapp' },
@@ -286,7 +285,7 @@ export default function AdminManagement() {
                 <Icon name="truck" size={15} />
                 <span>
                   <b>Vendors</b>
-                  <em>Open Purchasing → Vendors: the vendor list for Normless and Crewfit, each vendor's contact details and orders.</em>
+                  <em>Open Purchasing: the vendor list, vendor orders and vendor payments for Normless and Crewfit.</em>
                 </span>
               </label>
               <label className="page-check" style={{ margin: '10px 0 0', opacity: form.vendors ? 1 : 0.5 }}>
@@ -294,7 +293,7 @@ export default function AdminManagement() {
                 <Icon name="edit" size={15} />
                 <span>
                   <b>Vendors — add and edit</b>
-                  <em>Add vendors, change their details, archive them.</em>
+                  <em>Add and change vendors and vendor orders, and move an order's status on.</em>
                 </span>
               </label>
               <label className="page-check" style={{ margin: '10px 0 0', opacity: form.vendors ? 1 : 0.5 }}>

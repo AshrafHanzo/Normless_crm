@@ -12,8 +12,11 @@ const db = require('../db/connection');
 const { hasPermission } = require('../utils/permissions');
 const { tableParams, pagination } = require('../utils/table');
 const { refLabel } = require('../services/vendor-order');
+const money = require('../services/vendor-money');
 
 const router = express.Router();
+
+router.param('id', (req, res, next, id) => (/^\d+$/.test(id) ? next() : res.status(404).json({ error: 'Not found' })));
 
 router.use(async (req, res, next) => {
     try {
@@ -38,21 +41,31 @@ const TEXT_FIELDS = ['contact_person', 'email', 'address', 'city', 'state', 'gst
 const SORTS = {
     name: 'LOWER(v.name)', categories: 'LOWER(v.categories)', brands: 'v.brands',
     orders: 'o.orders', ordered_value: 'o.ordered_value', last_order: 'o.last_order',
+    paid: 'COALESCE(p.paid, 0)', balance: `${'COALESCE(o.due, 0) - (COALESCE(p.paid, 0) - COALESCE(p.allocated, 0))'}`,
 };
 
-/** Per-vendor order roll-up. Only Crewfit's vendor orders exist so far; Normless's join them in step 2. */
+/** Per-vendor roll-up of orders (both brands) and payments. */
 const ORDER_ROLLUP = `
     LEFT JOIN (
         SELECT vendor_id, COUNT(*)::int AS orders,
                COUNT(*) FILTER (WHERE status <> 'Consignment Received')::int AS open_orders,
-               SUM(total_amount) AS ordered_value, SUM(total_qty)::int AS pieces,
+               SUM(COALESCE(total_override, total_amount)) AS ordered_value, SUM(total_qty)::int AS pieces,
+               SUM(GREATEST(COALESCE(total_override, total_amount) - paid_amount, 0))
+                   FILTER (WHERE COALESCE(total_override, total_amount) > 0) AS due,
                TO_CHAR(MAX(order_date), 'YYYY-MM-DD') AS last_order
-        FROM crewfit_vendor_orders WHERE vendor_id IS NOT NULL GROUP BY vendor_id
-    ) o ON o.vendor_id = v.id`;
+        FROM vendor_orders WHERE vendor_id IS NOT NULL GROUP BY vendor_id
+    ) o ON o.vendor_id = v.id
+    LEFT JOIN (
+        SELECT vp.vendor_id, SUM(vp.amount) AS paid,
+               SUM((SELECT COALESCE(SUM(a.amount), 0) FROM vendor_payment_allocations a WHERE a.payment_id = vp.id)) AS allocated,
+               TO_CHAR(MAX(vp.paid_on), 'YYYY-MM-DD') AS last_paid
+        FROM vendor_payments vp GROUP BY vp.vendor_id
+    ) p ON p.vendor_id = v.id`;
 
 const LIST_COLUMNS = `v.id, v.name, v.contact_person, v.phone, v.city, v.gstin, v.categories, v.brands,
     v.active, v.whatsapp_updates, COALESCE(o.orders, 0) AS orders, COALESCE(o.open_orders, 0) AS open_orders,
-    o.ordered_value, COALESCE(o.pieces, 0) AS pieces, o.last_order`;
+    o.ordered_value, COALESCE(o.pieces, 0) AS pieces, o.last_order, COALESCE(p.paid, 0) AS paid, p.last_paid,
+    COALESCE(o.due, 0) - (COALESCE(p.paid, 0) - COALESCE(p.allocated, 0)) AS balance`;
 
 const clean = (v) => {
     const s = String(v ?? '').trim();
@@ -162,7 +175,9 @@ router.get('/', async (req, res) => {
     }
 });
 
-// GET /api/vendors/:id — the profile: details, roll-up and orders
+const parseItems = (raw) => { try { return JSON.parse(raw || '[]'); } catch { return []; } };
+
+// GET /api/vendors/:id — the profile: details, money, orders and payments
 router.get('/:id', async (req, res) => {
     try {
         const v = (await db.query('SELECT * FROM vendors WHERE id = $1', [req.params.id])).rows[0];
@@ -170,27 +185,89 @@ router.get('/:id', async (req, res) => {
         const vendor = await canSeeBank(req) ? { ...v, bank_on_file: !!(v.bank_account_no || v.upi_id) } : { ...v, ...maskBank(v) };
 
         const orders = (await db.query(
-            `SELECT id, ref_no, 'crewfit' AS brand, TO_CHAR(order_date, 'YYYY-MM-DD') AS order_date,
-                    TO_CHAR(delivery_date, 'YYYY-MM-DD') AS delivery_date, status, payment_status,
-                    items, total_qty, total_amount
-             FROM crewfit_vendor_orders WHERE vendor_id = $1 ORDER BY order_date DESC, id DESC`, [v.id])).rows
+            `SELECT o.id, o.ref_no, o.brand, TO_CHAR(o.order_date, 'YYYY-MM-DD') AS order_date,
+                    TO_CHAR(o.delivery_date, 'YYYY-MM-DD') AS delivery_date, o.title, o.quote_ref, o.status, o.payment_status,
+                    o.items, o.total_qty, ${money.TOTAL_SQL} AS total, o.paid_amount
+             FROM vendor_orders o WHERE o.vendor_id = $1 ORDER BY o.order_date DESC, o.id DESC`, [v.id])).rows
             .map(o => {
-                let items = [];
-                try { items = JSON.parse(o.items || '[]'); } catch { /* old row */ }
-                return { ...o, items, ref: refLabel(o) };
+                const total = Number(o.total) > 0 ? Number(o.total) : null;
+                const paid = Number(o.paid_amount) || 0;
+                return { ...o, items: parseItems(o.items), ref: refLabel(o), total, paid_amount: paid,
+                    balance: total ? money.round2(total - paid) : null };
             });
+
+        const payments = (await db.query(
+            `SELECT p.id, TO_CHAR(p.paid_on, 'YYYY-MM-DD') AS paid_on, p.amount, p.mode, p.reference, p.note, p.source,
+                    (p.proof_path IS NOT NULL) AS has_proof,
+                    COALESCE((SELECT json_agg(json_build_object('order_id', o.id, 'ref_no', o.ref_no, 'amount', a.amount) ORDER BY o.id)
+                              FROM vendor_payment_allocations a JOIN vendor_orders o ON o.id = a.order_id
+                              WHERE a.payment_id = p.id), '[]') AS allocations
+             FROM vendor_payments p WHERE p.vendor_id = $1 ORDER BY p.paid_on DESC, p.id DESC`, [v.id])).rows
+            .map(p => ({
+                ...p, amount: Number(p.amount),
+                allocations: p.allocations.map(a => ({ ...a, amount: Number(a.amount), ref: refLabel(a) })),
+                missing_reference: p.source === 'manual' && p.mode !== 'Cash' && !String(p.reference || '').trim(),
+            }));
 
         const stats = {
             orders: orders.length,
             open_orders: orders.filter(o => o.status !== 'Consignment Received').length,
-            ordered_value: orders.reduce((s, o) => s + (Number(o.total_amount) || 0), 0),
-            unpriced_orders: orders.filter(o => !Number(o.total_amount)).length,
+            unpriced_orders: orders.filter(o => !o.total).length,
             pieces: orders.reduce((s, o) => s + (Number(o.total_qty) || 0), 0),
+            ...await money.vendorMoney(v.id),
         };
-        res.json({ vendor, orders, stats });
+        res.json({ vendor, orders, payments, stats });
     } catch (err) {
         console.error('vendor profile:', err);
         res.status(500).json({ error: 'Failed to load vendor' });
+    }
+});
+
+// GET /api/vendors/:id/statement — the running ledger: each priced order raises what is owed,
+// each payment brings it down. Orders with no total are listed but move nothing.
+router.get('/:id/statement', async (req, res) => {
+    try {
+        const v = (await db.query('SELECT id, name FROM vendors WHERE id = $1', [req.params.id])).rows[0];
+        if (!v) return res.status(404).json({ error: 'Vendor not found' });
+        const orders = (await db.query(
+            `SELECT o.id, o.ref_no, o.brand, TO_CHAR(o.order_date, 'YYYY-MM-DD') AS date, o.title, o.quote_ref, o.items,
+                    ${money.TOTAL_SQL} AS total, o.created_at
+             FROM vendor_orders o WHERE o.vendor_id = $1`, [v.id])).rows;
+        const payments = (await db.query(
+            `SELECT p.id, TO_CHAR(p.paid_on, 'YYYY-MM-DD') AS date, p.amount, p.mode, p.reference, p.source, p.created_at,
+                    COALESCE((SELECT string_agg('VO-' || LPAD(o.ref_no::text, 3, '0'), ', ' ORDER BY o.id)
+                              FROM vendor_payment_allocations a JOIN vendor_orders o ON o.id = a.order_id
+                              WHERE a.payment_id = p.id), '') AS against
+             FROM vendor_payments p WHERE p.vendor_id = $1`, [v.id])).rows;
+
+        const entries = [
+            ...orders.map(o => {
+                const items = parseItems(o.items).map(i => i.product_type).filter(Boolean).join(', ');
+                return {
+                    kind: 'order', id: o.id, date: o.date, at: o.created_at, ref: refLabel(o), brand: o.brand,
+                    text: [o.title || items || 'Order', o.quote_ref ? `quote ${o.quote_ref}` : null].filter(Boolean).join(' · '),
+                    billed: Number(o.total) > 0 ? Number(o.total) : null, paid: null,
+                };
+            }),
+            ...payments.map(p => ({
+                kind: 'payment', id: p.id, date: p.date, at: p.created_at, ref: p.reference || null, mode: p.mode,
+                text: `Payment${p.mode ? ` · ${p.mode}` : ''}${p.against ? ` · for ${p.against}` : ' · on account'}`,
+                billed: null, paid: Number(p.amount),
+                missing_reference: p.source === 'manual' && p.mode !== 'Cash' && !String(p.reference || '').trim(),
+            })),
+        ].sort((a, b) => (a.date === b.date
+            ? (a.kind === b.kind ? new Date(a.at) - new Date(b.at) : (a.kind === 'order' ? -1 : 1))
+            : a.date.localeCompare(b.date)));
+
+        let balance = 0;
+        for (const e of entries) {
+            balance = money.round2(balance + (e.billed || 0) - (e.paid || 0));
+            e.balance = balance;
+        }
+        res.json({ vendor: v, entries, balance });
+    } catch (err) {
+        console.error('vendor statement:', err);
+        res.status(500).json({ error: 'Failed to load the statement' });
     }
 });
 
@@ -232,7 +309,7 @@ router.put('/:id', async (req, res) => {
                  WHERE id = $${cols.length + 1}`, [...cols.map(col => row[col]), existing.id]);
             // Orders show the vendor's name as typed; a rename is the same vendor, so they follow.
             if (row.name !== existing.name) {
-                await c.query('UPDATE crewfit_vendor_orders SET vendor = $1 WHERE vendor_id = $2', [row.name, existing.id]);
+                await c.query('UPDATE vendor_orders SET vendor = $1 WHERE vendor_id = $2', [row.name, existing.id]);
             }
         });
         res.json({ success: true });
@@ -261,8 +338,10 @@ router.post('/:id/active', async (req, res) => {
 router.delete('/:id', async (req, res) => {
     if (!isAdmin(req)) return res.status(403).json({ error: 'Access denied' });
     try {
-        const used = (await db.query('SELECT COUNT(*)::int AS n FROM crewfit_vendor_orders WHERE vendor_id = $1', [req.params.id])).rows[0].n;
-        if (used) return res.status(409).json({ error: `This vendor has ${used} order${used > 1 ? 's' : ''} — archive it instead` });
+        const used = (await db.query(
+            `SELECT (SELECT COUNT(*) FROM vendor_orders WHERE vendor_id = $1) + (SELECT COUNT(*) FROM vendor_payments WHERE vendor_id = $1) AS n`,
+            [req.params.id])).rows[0].n;
+        if (Number(used)) return res.status(409).json({ error: 'This vendor has orders or payments — archive it instead' });
         const r = await db.query('DELETE FROM vendors WHERE id = $1 RETURNING id', [req.params.id]);
         if (!r.rows.length) return res.status(404).json({ error: 'Vendor not found' });
         res.json({ success: true });

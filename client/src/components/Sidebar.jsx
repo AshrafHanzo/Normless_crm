@@ -37,7 +37,6 @@ const NAV = {
     { to: '/crewfit/design-studio', icon: 'spark', label: 'Design Studio', perm: 'can_use_design_studio' },
     { to: '/crewfit/quotes', icon: 'spark', label: 'Quotes', perm: 'can_view_crewfit_calculator' },
     { to: '/crewfit/payments', icon: 'card', label: 'Payments', perm: 'can_view_crewfit_payments' },
-    { to: '/crewfit/vendor-orders', icon: 'truck', label: 'Vendor Orders', perm: 'can_view_crewfit_vendors' },
     { to: '/crewfit/invoices', icon: 'invoice', label: 'Invoices', perm: 'can_view_crewfit_invoices' },
     { to: '/crewfit/activity', icon: 'bell', label: 'Activity', adminOnly: true },
     { to: '/backup', icon: 'cloud', label: 'Backup', perm: 'can_view_backups', section: 'System' },
@@ -47,6 +46,8 @@ const NAV = {
 // Purchasing is shared too: one vendor list, whichever brand the stock is for.
 const PURCHASING_NAV = [
   { to: '/vendors', icon: 'truck', label: 'Vendors', perm: 'can_view_vendors' },
+  { to: '/vendor-orders', icon: 'box', label: 'Vendor Orders', perm: 'can_view_vendors' },
+  { to: '/vendor-payments', icon: 'wallet', label: 'Vendor Payments', perm: 'can_view_vendors' },
 ]
 
 // The Team section is the same in both menus: one list of people, one payroll and one set of

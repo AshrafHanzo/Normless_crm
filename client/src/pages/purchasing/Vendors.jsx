@@ -119,7 +119,9 @@ export default function Vendors() {
                 <SortTh label="Supplies" col="categories" sort={t.sort} onSort={t.toggle} />
                 <SortTh label="For" col="brands" sort={t.sort} onSort={t.toggle} />
                 <SortTh label="Orders" col="orders" sort={t.sort} onSort={t.toggle} align="center" />
-                <SortTh label="Ordered value" col="ordered_value" sort={t.sort} onSort={t.toggle} align="right" />
+                <SortTh label="Ordered" col="ordered_value" sort={t.sort} onSort={t.toggle} align="right" />
+                <SortTh label="Paid" col="paid" sort={t.sort} onSort={t.toggle} align="right" />
+                <SortTh label="Balance" col="balance" sort={t.sort} onSort={t.toggle} align="right" />
                 <SortTh label="Last order" col="last_order" sort={t.sort} onSort={t.toggle} />
               </tr>
             </thead>
@@ -137,7 +139,9 @@ export default function Vendors() {
                   <td data-label="Orders" style={{ textAlign: 'center' }}>
                     {v.orders ? <><b>{v.open_orders}</b><span style={{ color: 'var(--text-muted)' }}> open / {v.orders}</span></> : <span style={{ color: 'var(--text-muted)' }}>—</span>}
                   </td>
-                  <td data-label="Ordered value" style={{ textAlign: 'right' }}>{Number(v.ordered_value) ? inr(v.ordered_value) : '—'}</td>
+                  <td data-label="Ordered" style={{ textAlign: 'right' }}>{Number(v.ordered_value) ? inr(v.ordered_value) : '—'}</td>
+                  <td data-label="Paid" style={{ textAlign: 'right' }}>{Number(v.paid) ? inr(v.paid) : '—'}</td>
+                  <td data-label="Balance" style={{ textAlign: 'right', fontWeight: 600, color: Number(v.balance) > 0 ? 'var(--warning)' : undefined }}>{Number(v.balance) ? inr(v.balance) : '—'}</td>
                   <td data-label="Last order" style={{ fontSize: 12.5 }}>{day(v.last_order)}</td>
                 </tr>
               ))}
