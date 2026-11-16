@@ -158,12 +158,11 @@ export default function VendorDrawer({ vendor, meta, canBank, apiFetch, toast, o
               <div className="form-row">
                 <div className="input-group">
                   <label htmlFor="v-acno">Account number</label>
-                  <input id="v-acno" inputMode="numeric" value={form.bank_account_no}
-                    onChange={e => set({ bank_account_no: e.target.value.replace(/\D/g, '').slice(0, 20) })} />
+                  <input id="v-acno" {...field('bank_account_no')} />
                 </div>
                 <div className="input-group">
                   <label htmlFor="v-ifsc">IFSC</label>
-                  <input id="v-ifsc" {...field('bank_ifsc')} maxLength={11} style={{ textTransform: 'uppercase' }} />
+                  <input id="v-ifsc" {...field('bank_ifsc')} style={{ textTransform: 'uppercase' }} />
                 </div>
                 <div className="input-group"><label htmlFor="v-upi">UPI ID</label><input id="v-upi" {...field('upi_id')} placeholder="name@bank" /></div>
               </div>

@@ -116,12 +116,11 @@ function readBody(body, { withBank }) {
     if (withBank) {
         row.bank_account_name = clean(body.bank_account_name);
         row.bank_name = clean(body.bank_name);
-        row.bank_account_no = String(body.bank_account_no ?? '').replace(/\s+/g, '') || null;
-        row.bank_ifsc = upper(body.bank_ifsc);
-        row.upi_id = clean(body.upi_id);
-        if (row.bank_account_no && !/^\d{6,20}$/.test(row.bank_account_no)) return { error: 'Account number should be 6–20 digits' };
-        if (row.bank_ifsc && !/^[A-Z]{4}0[A-Z\d]{6}$/.test(row.bank_ifsc)) return { error: 'IFSC should be 11 characters, like HDFC0001234' };
-        if (row.upi_id && !/^[\w.\-]{2,}@[a-zA-Z]{2,}$/.test(row.upi_id)) return { error: 'UPI ID should look like name@bank' };
+        // Kept as typed (trimmed), with no length or format check: bank details come in every
+        // shape — overseas accounts, numbers with letters — and a rejected save helps nobody.
+        row.bank_account_no = clean(body.bank_account_no)?.slice(0, 100) || null;
+        row.bank_ifsc = clean(body.bank_ifsc)?.toUpperCase().slice(0, 100) || null;
+        row.upi_id = clean(body.upi_id)?.slice(0, 100) || null;
     }
     return { row };
 }
