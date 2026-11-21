@@ -3331,9 +3331,10 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .wa-mocks { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-bottom: 10px; }
 .wa-mock { position: relative; border: 2px solid transparent; border-radius: 10px; background: var(--bg-secondary); overflow: hidden; }
 .wa-mock-on { border-color: var(--primary); }
-.wa-mock-pick { display: block; cursor: pointer; aspect-ratio: 1; }
+.wa-mock-pick { display: block; aspect-ratio: 1; }
 .wa-mock-pick input { position: absolute; left: 6px; top: 6px; width: 16px; height: 16px; accent-color: var(--primary); z-index: 1; }
 .wa-mock-pick img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.wa-mock-view { display: block; width: 100%; height: 100%; padding: 0; border: 0; background: none; cursor: zoom-in; }
 .wa-mock-pick .wa-doc-icon { width: 100%; height: 100%; border-radius: 0; }
 .wa-mock-meta { display: block; font-size: 10.5px; color: var(--text-muted); padding: 4px 6px; }
 .wa-mock-order { display: block; width: calc(100% - 12px); margin: 0 6px 6px; padding: 4px 6px; border-radius: 6px; border: 1px solid var(--border); background: transparent; color: var(--text-secondary); font-size: 11px; font-weight: 600; cursor: pointer; }

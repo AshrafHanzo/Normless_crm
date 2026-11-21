@@ -643,6 +643,12 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
   }
 
   const removeMockup = async (m) => {
+    // The ✕ sits on the picture's corner, where a designer reaching for the picture lands: ask first.
+    if (!await toast.confirm({
+      title: 'Remove this mockup?',
+      message: m.sent_at ? 'It is taken off the list here; the customer still has the copy that went to them.' : 'It has not been sent. Upload it again if you need it back.',
+      confirmLabel: 'Remove', danger: true,
+    })) return
     const r = await apiFetch(`${API}/conversations/${thread.id}/mockups/${m.id}`, { method: 'DELETE' })
     if (!r || r.error) return toast.error(r?.error || 'Could not remove that')
     setMockups(r.mockups)
@@ -2439,7 +2445,9 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                   </div>
                 ))}
 
-                {(thread.lead_status === 'need_mockup' || mockups.length > 0) && (
+                {/* Always there on an enquiry, so a designer can upload and send for approval whatever
+                    the lead's status — sending the pictures as plain photos skips the Confirm buttons. */}
+                {cf && thread.lead_id && (
                   <>
                     <div className="form-section wa-billing-head">
                       <span>Design mockups</span>
@@ -2458,11 +2466,14 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                         <div className="wa-mocks">
                           {mockups.map(m => (
                             <div key={m.id} className={`wa-mock${mockPick.includes(m.id) ? ' wa-mock-on' : ''}`}>
-                              <label className="wa-mock-pick">
-                                <input type="checkbox" checked={mockPick.includes(m.id)}
+                              <div className="wa-mock-pick">
+                                <input type="checkbox" aria-label={`Send ${m.file_name || 'this mockup'}`} checked={mockPick.includes(m.id)}
                                   onChange={e => setMockPick(p => (e.target.checked ? [...p, m.id] : p.filter(x => x !== m.id)))} />
-                                {/^image\//.test(m.mime || '') ? <img src={fileUrl(m.url)} alt={m.file_name || 'Mockup'} /> : <span className="wa-doc-icon wa-doc-pdf">PDF</span>}
-                              </label>
+                                {/* The picture opens it large; the tick box picks it to send. */}
+                                <button type="button" className="wa-mock-view" title="View" onClick={() => setPreview({ items: [{ url: fileUrl(m.url), name: m.file_name || 'Mockup', mime: m.mime || '' }], index: 0 })}>
+                                  {/^image\//.test(m.mime || '') ? <img src={fileUrl(m.url)} alt={m.file_name || 'Mockup'} /> : <span className="wa-doc-icon wa-doc-pdf">PDF</span>}
+                                </button>
+                              </div>
                               <span className="wa-mock-meta">{m.pending_at ? 'Goes when the customer replies' : m.sent_at ? `Sent ${day(m.sent_at)}` : 'Not sent yet'}</span>
                               <button type="button" className={`wa-mock-order${m.for_order ? ' on' : ''}`} aria-pressed={!!m.for_order} onClick={() => pickForOrder(m)}
                                 title="Put this mockup in the order form's design mock when the order is created">
