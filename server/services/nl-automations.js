@@ -37,6 +37,7 @@ const EVENTS = [
     { key: 'order_prepaid', group: 'order', label: 'New prepaid order', hint: 'Paid online in full.', links: ['order', 'store'] },
     { key: 'order_partial_cod', group: 'order', label: 'New partial COD order', hint: 'An advance paid, the rest on delivery.', links: ['order', 'store'] },
     { key: 'order_cod', group: 'order', label: 'New COD order', hint: 'Nothing paid yet. Use this or COD confirmation, not usually both.', links: ['order', 'store'] },
+    { key: 'dispatch_delay', group: 'order', label: 'Dispatch delay notice', hint: 'A new order with a product and size that is out of stock: when it will be dispatched. Runs between the dates set here.', links: ['order', 'store'] },
     { key: 'order_cancelled', group: 'order', label: 'Order cancelled', hint: 'When an order is cancelled in Shopify.', links: ['store', 'order'] },
     { key: 'cod_confirm', group: 'cod', label: 'COD confirmation', hint: 'Asks a COD customer to confirm or cancel before it ships.', links: ['order', 'store'] },
     { key: 'fulfilled', group: 'fulfillment', label: 'Shipped with tracking', hint: 'When an order is fulfilled with a tracking number.', links: ['tracking', 'order', 'store'] },
@@ -65,8 +66,12 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 const blankEvent = (e) => {
     const t = set.byEvent(e.key);
-    return { enabled: false, template: null, vars: t ? [...t.vars] : [], link: t?.link?.source || e.links[0], delay: e.delay ?? 0, coupon: '' };
+    return { enabled: false, template: null, vars: t ? [...t.vars] : [], link: t?.link?.source || e.links[0], delay: e.delay ?? 0, coupon: '',
+        ...(e.key === 'dispatch_delay' ? DELAY_BLANK : {}) };
 };
+// The dispatch delay notice's own settings: which products and sizes, the date they go out, and
+// the orders it covers — placed from `from` (when it was switched on) to the end of `until`.
+const DELAY_BLANK = { products: '', sizes: '', dispatch_date: '', from: null, until: '' };
 
 /** The automations as saved on the line, over the blanks. Makes the webhook secret the first time. */
 async function config(lineId) {
@@ -105,6 +110,13 @@ function cleanEvent(e, v) {
         link: e.links.includes(v?.link) ? v.link : e.links[0],
         delay: e.group === 'cart' ? Math.min(7 * 24 * 60, Math.max(5, Math.round(Number(v?.delay) || e.delay))) : 0,
         coupon: String(v?.coupon || '').trim().slice(0, 40),
+        ...(e.key === 'dispatch_delay' ? {
+            products: String(v?.products || '').slice(0, 500),
+            sizes: String(v?.sizes || '').slice(0, 100),
+            dispatch_date: String(v?.dispatch_date || '').trim().slice(0, 40),
+            from: v?.from && !Number.isNaN(Date.parse(v.from)) ? new Date(v.from).toISOString() : null,
+            until: /^\d{4}-\d{2}-\d{2}$/.test(String(v?.until || '')) ? v.until : '',
+        } : {}),
     };
 }
 
@@ -113,6 +125,9 @@ async function saveEvents(lineId, incoming) {
     await saveRaw(lineId, (a) => {
         const events = { ...(a.events || {}) };
         for (const e of EVENTS) if (incoming?.[e.key]) events[e.key] = cleanEvent(e, incoming[e.key]);
+        // The dispatch delay notice covers orders from the moment it is switched on, never older ones.
+        const dd = events.dispatch_delay;
+        if (dd?.enabled && !dd.from) dd.from = new Date().toISOString();
         const anyOn = Object.values(events).some(x => x.enabled);
         return { ...a, events, started_at: a.started_at || (anyOn ? new Date().toISOString() : null) };
     });
@@ -458,10 +473,45 @@ async function state(lineId, key, value) {
 const isCod = (o) => (o.payment_gateway_names || []).some(g => /cod|cash/i.test(g));
 
 /** What one order's events are, given when automations started. */
-function orderEvents(o, startedAt) {
+const listOf = (s) => String(s || '').split(/[,\n]/).map(x => x.trim()).filter(Boolean);
+const sizeKey = (s) => { const u = String(s || '').trim().toUpperCase(); const xs = u.match(/^(X{2,5})L$/); return xs ? `${xs[1].length}XL` : u; };
+const todayIst = () => new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
+
+/**
+ * An order's lines the dispatch delay notice is about: one of its products ("Dr Doom Hoodie" matches
+ * that title, in any case) in one of its sizes (read from the variant, "Green / L"; XXL is 2XL).
+ */
+function delayedItems(o, rule) {
+    const products = listOf(rule?.products).map(x => x.toLowerCase());
+    const sizes = listOf(rule?.sizes).map(sizeKey);
+    if (!products.length || !sizes.length) return [];
+    return (o.line_items || []).filter(li => (li.current_quantity ?? li.quantity) > 0).flatMap(li => {
+        const title = String(li.title || '').toLowerCase();
+        if (!products.some(p => title === p || title.includes(p))) return [];
+        const size = String(li.variant_title || '').split('/').map(sizeKey).find(x => sizes.includes(x));
+        return size ? [{ title: li.title, variant: li.variant_title || '', size, quantity: li.current_quantity ?? li.quantity,
+            product_id: li.product_id, variant_id: li.variant_id, image: null }] : [];
+    });
+}
+/** "Dr Doom Hoodie (XL) × 2, Venom Suit Hoodie (L)": the same item on two orders is counted once. */
+const delayedLine = (items) => {
+    const count = new Map();
+    for (const i of items) { const k = `${i.title} (${i.size})`; count.set(k, (count.get(k) || 0) + (Number(i.quantity) || 1)); }
+    return [...count].map(([k, n]) => (n > 1 ? `${k} × ${n}` : k)).join(', ');
+};
+
+/** Is the dispatch delay notice running for an order placed at `createdAt`? */
+const delayCovers = (rule, createdAt) => !!(rule?.dispatch_date && rule.from && rule.until
+    && new Date(createdAt) >= new Date(rule.from) && todayIst() <= rule.until);
+
+function orderEvents(o, startedAt, rules = {}) {
     const after = (t) => t && new Date(t) >= startedAt;
     const out = [];
     const facts = orderFacts(o);
+    if (!o.cancelled_at && delayCovers(rules.dispatch_delay, o.created_at)) {
+        const items = delayedItems(o, rules.dispatch_delay);
+        if (items.length) out.push(['dispatch_delay', o.id, { delayed_items: delayedLine(items), dispatch_date: rules.dispatch_delay.dispatch_date, itemList: items }]);
+    }
     if (after(o.created_at) && !o.cancelled_at) {
         const fs = String(o.financial_status || '').toLowerCase();
         if (fs === 'partially_paid') out.push(['order_partial_cod', o.id]);
@@ -536,7 +586,7 @@ async function orderTick(lineId) {
     await recoverCarts(lineId, orders.filter(o => new Date(o.created_at) >= new Date(new Date(since).getTime() - 3600000)));
     let sent = 0;
     for (const o of orders) {
-        for (const ev of orderEvents(o, startedAt)) {
+        for (const ev of orderEvents(o, startedAt, cfg.events)) {
             if (!cfg.events[ev.event].enabled) continue;
             const out = await fire(lineId, ev.event, ev.ref, ev.facts, { label: o.name });
             if (out?.status === 'sent') sent++;
@@ -640,6 +690,50 @@ async function cartStats(lineId) {
 }
 
 /**
+ * The dispatch delay notice, sent by hand to orders already placed (Shopify order names, "#13444").
+ * One message per customer: two orders from the same number go together. The items are the ones
+ * the notice's products and sizes match, or the whole order when none do. Returns one row per
+ * customer: { orders, phone, status, error }.
+ */
+async function sendDispatchDelay(lineId, names) {
+    const cfg = (await config(lineId)).events.dispatch_delay;
+    if (!cfg.template) throw Object.assign(new Error('Choose the template for the dispatch delay notice first'), { status: 400 });
+    if (!cfg.dispatch_date) throw Object.assign(new Error('Set the dispatch date first'), { status: 400 });
+    const wanted = [...new Set(listOf(String(names || '').replace(/\s+/g, ',')).map(n => (n.startsWith('#') ? n : `#${n}`)))].slice(0, 300);
+    if (!wanted.length) throw Object.assign(new Error('List the order numbers'), { status: 400 });
+    const found = [];
+    const out = [];
+    for (const name of wanted) {
+        const url = `https://${process.env.SHOPIFY_STORE_DOMAIN}/admin/api/2026-04/orders.json?status=any&name=${encodeURIComponent(name)}&fields=${ORDER_FIELDS}`;
+        const res = await fetch(url, { headers: { 'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN } });
+        if (!res.ok) throw new Error(`Shopify ${res.status}`);
+        const o = ((await res.json()).orders || []).find(x => x.name === name);
+        if (!o) out.push({ orders: name, status: 'failed', error: 'No such order in Shopify' });
+        else if (o.cancelled_at) out.push({ orders: name, status: 'skipped', error: 'Cancelled' });
+        else found.push(o);
+    }
+    const byPhone = new Map();
+    for (const o of found) {
+        const phone = orderFacts(o).phone;
+        if (!phone) { out.push({ orders: o.name, status: 'failed', error: 'No phone number on the order' }); continue; }
+        byPhone.set(phone, [...(byPhone.get(phone) || []), o]);
+    }
+    for (const [phone, orders] of byPhone) {
+        const facts = orderFacts(orders[0]);
+        const items = orders.flatMap(o => {
+            const hit = delayedItems(o, cfg);
+            return hit.length ? hit : orderFacts(o).itemList.map(i => ({ ...i, size: String(i.variant || '').split('/').pop().trim() }));
+        });
+        const r = await fire(lineId, 'dispatch_delay', orders[0].id, {
+            ...facts, order_number: orders.map(o => o.name).join(' and '),
+            delayed_items: delayedLine(items), dispatch_date: cfg.dispatch_date, itemList: items,
+        }, { label: orders.map(o => o.name).join(', '), force: true });
+        out.push({ orders: orders.map(o => o.name).join(', '), phone, status: r?.status || 'skipped', error: r?.error || (r ? null : 'Already sent') });
+    }
+    return out;
+}
+
+/**
  * Submit our own template for an event to Meta. A photo header needs a sample photo, uploaded
  * from one of the shop's products.
  */
@@ -695,5 +789,5 @@ function start() {
 
 module.exports = {
     EVENTS, config, saveEvents, fire, onAbandoned, onText, onOptOut, cartTick, orderTick, shipmentTick, orderEvents, onReply, recent, cartStats,
-    createSetTemplate, recoverCarts, start, CART_HOURS, saveVendorHold,
+    createSetTemplate, recoverCarts, start, CART_HOURS, saveVendorHold, sendDispatchDelay, delayedItems,
 };

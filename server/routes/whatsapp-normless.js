@@ -280,6 +280,17 @@ router.post('/automations/vendor-templates', manager, async (req, res) => {
     }
 });
 
+/** The dispatch delay notice, by hand, to orders already placed: { orders: "#13444 #13458 …" }. */
+router.post('/automations/dispatch_delay/send', manager, async (req, res) => {
+    try {
+        if (!wa.configured()) return res.status(503).json({ error: 'Connect Normless’s WhatsApp number first' });
+        res.json({ results: await auto.sendDispatchDelay(req.waLine.id, req.body?.orders) });
+    } catch (err) {
+        console.error('normless dispatch delay send error:', err.message);
+        res.status(err.status || 500).json({ error: err.message });
+    }
+});
+
 /** Submit the CRM's own template for an event to Meta. */
 router.post('/automations/:event/template', manager, async (req, res) => {
     try {

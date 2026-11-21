@@ -29,6 +29,9 @@ const SOURCES = {
     refund_amount_inr: { label: 'Refund amount, with ₹', example: '₹699' },
     refund_note: { label: 'Refund note', example: 'Refund' },
     address: { label: 'Delivery address', example: '12 MG Road, Bengaluru, Karnataka, 560001' },
+    // Dispatch delay notice: the delayed items and the day they go out (from the event's settings).
+    delayed_items: { label: 'Delayed items', example: 'Dr Doom Hoodie (L)' },
+    dispatch_date: { label: 'Dispatch date', example: '27 November' },
     store_name: { label: 'Store name (Normless)', example: 'Normless' },
     currency: { label: 'Currency (INR)', example: 'INR' },
     // Vendors (Purchasing): filled by services/vendor-wa.
@@ -91,6 +94,11 @@ const SET = [
         event: 'order_prepaid', name: 'nlcrm_order_prepaid', category: 'UTILITY', image: true,
         body: 'Hi {{1}}, thank you for shopping with Normless! 🎉\n\nYour order {{2}} of ₹{{3}} is paid and confirmed.\nItems: {{4}}\n\nWe’ll message you here when it ships.',
         vars: ['first_name', 'order_number', 'order_total', 'items'], link: { text: 'View my order', source: 'order' },
+    },
+    {
+        event: 'dispatch_delay', name: 'nlcrm_dispatch_delay', category: 'UTILITY', image: true,
+        body: 'Hi {{1}}, thank you for your Normless order {{2}} 🙏\n\nYour {{3}} is in high demand, so it will be dispatched on {{4}}. Delivery takes 5–7 days after dispatch, depending on your location.\n\nWe’ll send you the tracking details as soon as it ships.',
+        vars: ['first_name', 'order_number', 'delayed_items', 'dispatch_date'], link: { text: 'View my order', source: 'order' },
     },
     {
         event: 'order_partial_cod', name: 'nlcrm_order_partial_cod', category: 'UTILITY', image: true,

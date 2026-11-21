@@ -329,6 +329,7 @@ function EventCard({ ev, cfg, data, templates, onChange, onEdit, canEdit }) {
               ))}
             </details>
           )}
+          {ev.key === 'dispatch_delay' && <DispatchDelayRule cfg={cfg} onChange={onChange} canEdit={canEdit} />}
         </div>
         <div className="nl-auto-preview">
           {f ? <TemplatePreview header={f.header} headerExample={data.sources.first_name.example} body={f.body} examples={examples} footer={f.footer} buttons={f.buttons} image={hasImage || null} />
@@ -337,6 +338,79 @@ function EventCard({ ev, cfg, data, templates, onChange, onEdit, canEdit }) {
         </div>
       </div>
     </section>
+  )
+}
+
+const istToday = () => new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10)
+
+/**
+ * The dispatch delay notice's own settings — which products and sizes, the dispatch date, the last
+ * day it runs — and a way to send it now to orders already placed.
+ */
+function DispatchDelayRule({ cfg, onChange, canEdit }) {
+  const apiFetch = useApi()
+  const toast = useToast()
+  const brand = useWaBrand()
+  const [orders, setOrders] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [results, setResults] = useState(null)
+  const over = cfg.until && istToday() > cfg.until
+  const send = async () => {
+    const n = new Set(orders.split(/[\s,]+/).filter(Boolean)).size
+    if (!await toast.confirm({ title: `Send the dispatch delay notice for ${n} order${n === 1 ? '' : 's'}?`,
+      message: 'Each customer gets it once on WhatsApp — two orders from one number go in one message. Save any changes above first.', confirmLabel: 'Send' })) return
+    setBusy(true)
+    const r = await apiFetch(`${brand.api}/nl/automations/dispatch_delay/send`, { method: 'POST', body: JSON.stringify({ orders }) })
+    setBusy(false)
+    if (!r || r.error) return toast.error(r?.error || 'Could not send', { duration: 0 })
+    setResults(r.results)
+    toast.success(`${r.results.filter(x => x.status === 'sent').length} sent`)
+  }
+  return (
+    <div className="nl-delay">
+      <div className="form-row">
+        <div className="input-group">
+          <label htmlFor="dd-products">Products <span className="label-hint">as named in Shopify, comma separated</span></label>
+          <input id="dd-products" value={cfg.products || ''} disabled={!canEdit} placeholder="Dr Doom Hoodie, Venom Suit Hoodie" onChange={e => onChange({ products: e.target.value })} />
+        </div>
+        <div className="input-group">
+          <label htmlFor="dd-sizes">Sizes</label>
+          <input id="dd-sizes" value={cfg.sizes || ''} disabled={!canEdit} placeholder="M, L, XL, 2XL" onChange={e => onChange({ sizes: e.target.value })} />
+        </div>
+      </div>
+      <div className="form-row">
+        <div className="input-group">
+          <label htmlFor="dd-date">Dispatch date <span className="label-hint">as it reads in the message</span></label>
+          <input id="dd-date" value={cfg.dispatch_date || ''} disabled={!canEdit} placeholder="27 November" maxLength={40} onChange={e => onChange({ dispatch_date: e.target.value })} />
+        </div>
+        <div className="input-group">
+          <label htmlFor="dd-until">Send until <span className="label-hint">the last day of new orders it covers</span></label>
+          <input id="dd-until" type="date" value={cfg.until || ''} disabled={!canEdit} onChange={e => onChange({ until: e.target.value })} />
+        </div>
+      </div>
+      <p className={over ? 'was-bad' : 'was-hint'}>
+        {over ? `Stopped: the last day was ${cfg.until}.`
+          : cfg.from ? `Covers new orders placed since ${new Date(cfg.from).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}${cfg.until ? `, until the end of ${cfg.until}` : ''}.`
+            : 'Covers new orders from the moment it is switched on.'}
+      </p>
+      {canEdit && (
+        <div className="input-group">
+          <label htmlFor="dd-orders">Send now to orders already placed <span className="label-hint">order numbers, e.g. #13444 #13458</span></label>
+          <textarea id="dd-orders" rows={3} value={orders} placeholder="#13444, #13458, #13460" onChange={e => setOrders(e.target.value)} />
+          <div className="was-inline">
+            <button type="button" className="btn btn-secondary btn-sm" disabled={busy || !orders.trim() || !cfg.template || !cfg.dispatch_date} onClick={send}>
+              {busy ? 'Sending…' : 'Send to these orders'}
+            </button>
+            {(!cfg.template || !cfg.dispatch_date) && <span className="was-hint">Choose the template and set the dispatch date, then save.</span>}
+          </div>
+          {results && (
+            <ul className="nl-delay-results">
+              {results.map(x => <li key={x.orders}><b>{x.orders}</b> — {x.status === 'sent' ? 'sent' : <span className={x.status === 'failed' ? 'was-bad' : 'was-hint'}>{x.status}{x.error ? `: ${x.error}` : ''}</span>}</li>)}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
   )
 }
 

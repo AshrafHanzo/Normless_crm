@@ -4522,3 +4522,7 @@ p.wdb-sub { margin: 0; }
 .vi-date { display: grid; grid-template-columns: 100px 170px minmax(0, 1fr); gap: 10px; align-items: center; font-size: 13px; padding: 4px 8px; border-radius: 8px; }
 .vi-date.flag { background: var(--warning-bg); }
 @media (max-width: 560px) { .vi-date { grid-template-columns: 1fr 1fr; } .vi-date > span:last-child { grid-column: 1 / -1; } }
+
+/* The dispatch delay notice's own settings, inside its automation card. */
+.nl-delay { display: flex; flex-direction: column; gap: 10px; border-top: 1px solid var(--border); padding-top: 12px; }
+.nl-delay-results { margin: 6px 0 0; padding-left: 18px; font-size: 12.5px; display: grid; gap: 2px; }
