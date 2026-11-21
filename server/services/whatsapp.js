@@ -373,10 +373,25 @@ async function fetchTemplates() {
  * Values go in positionally, which is how Meta reads them: the first value fills {{1}}. A missing
  * value is refused by Meta rather than sent with a gap in it, so they are checked before sending.
  */
+/**
+ * A template's photo as WhatsApp will take it: JPG or PNG only. A Shopify image in any other format
+ * (a GIF product photo failed 512 cart reminders as "Media upload error") is asked of Shopify's CDN
+ * as a JPG instead, which it converts on the fly.
+ */
+function headerImageLink(url) {
+    const s = String(url);
+    try {
+        const u = new URL(s);
+        if (u.hostname !== 'cdn.shopify.com' || /\.(jpe?g|png)$/i.test(u.pathname) || u.searchParams.has('format')) return s;
+        u.searchParams.set('format', 'jpg');
+        return u.toString();
+    } catch { return s; }
+}
+
 async function sendTemplate(phone, { name, language = 'en_US', variables = [], headerImage = null, headerText = null, buttons = [] }) {
     const components = [];
     // An image header is filled with a photo by its address; a text header with its one gap.
-    if (headerImage) components.push({ type: 'header', parameters: [{ type: 'image', image: { link: String(headerImage) } }] });
+    if (headerImage) components.push({ type: 'header', parameters: [{ type: 'image', image: { link: headerImageLink(headerImage) } }] });
     else if (headerText) components.push({ type: 'header', parameters: [{ type: 'text', text: String(headerText).slice(0, 60) }] });
     if (variables.length) components.push({ type: 'body', parameters: variables.map(v => ({ type: 'text', text: String(v ?? '').slice(0, 1024) })) });
     // Buttons by their place on the template: a link's {{1}}, or what a quick reply sends back.
@@ -517,6 +532,7 @@ function verifySignature(rawBody, header) {
 }
 
 module.exports = {
+    headerImageLink,
     configured, checkToken, phoneNumberId: PHONE_ID, wabaId: WABA_ID, graph, GRAPH, normalisePhone, prettyPhone, windowOpen, windowLeftMs,
     sendText, sendMedia, sendImageLink, sendCtaUrl, sendLocation, sendButtons, sendList, createTemplate, downloadMedia, markRead, verifySignature, CAP,
     fetchTemplates, sendTemplate, renderTemplate, whatsappImage, uploadSample,
