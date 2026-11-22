@@ -39,6 +39,7 @@ const EVENTS = [
     { key: 'order_cod', group: 'order', label: 'New COD order', hint: 'Nothing paid yet. Use this or COD confirmation, not usually both.', links: ['order', 'store'] },
     { key: 'dispatch_delay', group: 'order', label: 'Dispatch delay notice', hint: 'A new order with a product and size that is out of stock: when it will be dispatched. Runs between the dates set here.', links: ['order', 'store'] },
     { key: 'order_cancelled', group: 'order', label: 'Order cancelled', hint: 'When an order is cancelled in Shopify.', links: ['store', 'order'] },
+    { key: 'ticket_raised', group: 'order', label: 'Support ticket raised', hint: 'When a support ticket is raised: the ticket number and what it is about. Inside the 24-hour window it goes as a plain message; outside it, as this template. On unless switched off.', links: ['store'] },
     { key: 'cod_confirm', group: 'cod', label: 'COD confirmation', hint: 'Asks a COD customer to confirm or cancel before it ships.', links: ['order', 'store'] },
     { key: 'fulfilled', group: 'fulfillment', label: 'Shipped with tracking', hint: 'When an order is fulfilled with a tracking number.', links: ['tracking', 'order', 'store'] },
     { key: 'out_for_delivery', group: 'fulfillment', label: 'Out for delivery', hint: 'When the courier marks the parcel out for delivery (Delhivery’s tracking, as Shopify has it).', links: ['tracking', 'order', 'store'] },
@@ -67,7 +68,9 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const blankEvent = (e) => {
     const t = set.byEvent(e.key);
     return { enabled: false, template: null, vars: t ? [...t.vars] : [], link: t?.link?.source || e.links[0], delay: e.delay ?? 0, coupon: '',
-        ...(e.key === 'dispatch_delay' ? DELAY_BLANK : {}) };
+        ...(e.key === 'dispatch_delay' ? DELAY_BLANK : {}),
+        // Telling a customer their ticket number is part of raising it, so it starts switched on.
+        ...(e.key === 'ticket_raised' ? { enabled: true, template: `${t.name}|en` } : {}) };
 };
 // The dispatch delay notice's own settings: which products and sizes, the date they go out, and
 // the orders it covers — placed from `from` (when it was switched on) to the end of `until`.
@@ -345,6 +348,75 @@ async function threadFor(lineId, facts) {
              ON CONFLICT (contact_id) DO UPDATE SET updated_at = CURRENT_TIMESTAMP RETURNING id`,
             [contact.id, lineId])).rows[0];
     });
+}
+
+/* ── Support tickets ──────────────────────────────────────────────────────────────────────── */
+
+/** A ticket's phone number as WhatsApp writes it: "+91 70208 63860" → "917020863860". */
+function ticketPhone(v) {
+    const d = String(v || '').replace(/\D+/g, '');
+    if (d.length === 10) return `91${d}`;
+    if (d.length === 11 && d.startsWith('0')) return `91${d.slice(1)}`;
+    return d.length >= 11 && d.length <= 15 ? d : null;
+}
+
+/**
+ * A support ticket was raised: tell the customer its number, once. Inside the 24-hour window it
+ * goes as a plain message (no template needed); outside it, as the ticket_raised template.
+ * Returns { status, error } for the person who raised it, or null when it was already sent.
+ */
+async function ticketRaised(ticket) {
+    const line = lines.get('normless');
+    if (!line?.id || !ticket?.id) return null;
+    const lineId = line.id;
+    const cfg = (await config(lineId)).events.ticket_raised;
+    if (!cfg?.enabled) return { status: 'off' };
+
+    const chatBy = (where, arg) => db.query(
+        `SELECT c.id, c.last_inbound_at, k.phone FROM wa_conversations c JOIN wa_contacts k ON k.id = c.contact_id
+          WHERE c.line_id = $1 AND ${where} LIMIT 1`, [lineId, arg]).then(r => r.rows[0] || null);
+    let conv = ticket.wa_conversation_id ? await chatBy('c.id = $2', ticket.wa_conversation_id) : null;
+    const phone = conv?.phone || ticketPhone(ticket.customer_phone);
+    if (!phone || phone === DEMO_PHONE) return { status: 'skipped', error: 'No WhatsApp number on the ticket' };
+    if (!conv) conv = await chatBy('k.phone = $2', phone);
+
+    const ref = `CS-${String(ticket.ref_no ?? 0).padStart(4, '0')}`;
+    const word = String(ticket.customer_name || '').trim().split(/\s+/)[0].replace(/[^\p{L}'-]/gu, '');
+    const first = word ? word.charAt(0).toUpperCase() + word.slice(1).toLowerCase() : 'there';
+    const reason = String(ticket.reason || '').trim();
+    const what = reason && reason !== 'Other' ? reason.toLowerCase() : null;
+    const order = ticket.order_number || null;
+    const subject = what && order ? `${what} on order ${order}` : what || (order ? `order ${order}` : 'help from our team');
+    const facts = { phone, name: ticket.customer_name || null, first_name: first, ticket_ref: ref, ticket_subject: subject };
+
+    if (!conv || !wa.windowOpen(conv.last_inbound_at)) {
+        return fire(lineId, 'ticket_raised', ticket.id, facts, { label: ref });
+    }
+
+    const claim = (await db.query(
+        `INSERT INTO nl_auto_sends (line_id, event, ref, label, phone, template, conversation_id) VALUES ($1,'ticket_raised',$2,$3,$4,'text',$5)
+         ON CONFLICT (line_id, event, ref) DO NOTHING RETURNING id`,
+        [lineId, String(ticket.id), ref, phone, conv.id])).rows[0];
+    if (!claim) return null;
+    const text = `Hi ${first}, we have raised support ticket ${ref} for your request: ${subject}.\n\n`
+        + 'Our team will get back to you here between 9 am and 6 pm. You can reply in this chat anytime to ask about it.';
+    try {
+        const wamid = await lines.run('normless', () => wa.sendText(phone, text));
+        await db.query(
+            `INSERT INTO wa_messages (conversation_id, wamid, direction, sender_type, type, body, status)
+             VALUES ($1,$2,'out','auto','text',$3,'sent')`, [conv.id, wamid, text]);
+        await db.query(
+            `UPDATE wa_conversations SET last_message_at = CURRENT_TIMESTAMP, last_message_preview = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
+            [conv.id, text.slice(0, 200)]);
+        await db.query(`INSERT INTO wa_activity (conversation_id, kind, body) VALUES ($1,'automation',$2)`,
+            [conv.id, `Sent “Support ticket raised” for ${ref}`]);
+        await db.query(`UPDATE nl_auto_sends SET status = 'sent', wamid = $2 WHERE id = $1`, [claim.id, wamid]);
+        return { id: claim.id, status: 'sent', wamid };
+    } catch (err) {
+        console.error(`normless ticket message ${ref}:`, err.message);
+        await db.query(`UPDATE nl_auto_sends SET status = 'failed', error = $2 WHERE id = $1`, [claim.id, String(err.message).slice(0, 500)]);
+        return { id: claim.id, status: 'failed', error: err.message };
+    }
 }
 
 /* ── Abandoned carts (Razorpay) ───────────────────────────────────────────────────────────── */
@@ -789,5 +861,5 @@ function start() {
 
 module.exports = {
     EVENTS, config, saveEvents, fire, onAbandoned, onText, onOptOut, cartTick, orderTick, shipmentTick, orderEvents, onReply, recent, cartStats,
-    createSetTemplate, recoverCarts, start, CART_HOURS, saveVendorHold, sendDispatchDelay, delayedItems,
+    createSetTemplate, recoverCarts, start, CART_HOURS, saveVendorHold, sendDispatchDelay, delayedItems, ticketRaised,
 };

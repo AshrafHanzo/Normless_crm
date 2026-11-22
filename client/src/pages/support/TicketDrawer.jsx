@@ -186,6 +186,9 @@ export default function TicketDrawer({ ticket, options, onClose, onSaved, onDele
       setPending([])
     }
     toast.success(isNew ? `${refOf(res.ticket)} raised` : `${refOf(res.ticket)} saved`)
+    // The server tells the customer the ticket number on WhatsApp; say when that did not happen.
+    if (isNew && res.notified?.status === 'sent') toast.success('The customer was sent the ticket number on WhatsApp')
+    else if (isNew && ['failed', 'skipped'].includes(res.notified?.status)) toast.error(`The customer wasn’t messaged: ${res.notified.error}`)
     guard.reset(asForm(res.ticket))
     // A new ticket is finished with: it goes back to the list, where it can now be seen. An edit
     // stays open, because the next thing anyone does with it is usually the next field.

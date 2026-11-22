@@ -32,6 +32,9 @@ const SOURCES = {
     // Dispatch delay notice: the delayed items and the day they go out (from the event's settings).
     delayed_items: { label: 'Delayed items', example: 'Dr Doom Hoodie (L)' },
     dispatch_date: { label: 'Dispatch date', example: '27 November' },
+    // Support tickets: the reference and what it is about ("address update on order #13533").
+    ticket_ref: { label: 'Support ticket number', example: 'CS-0068' },
+    ticket_subject: { label: 'What the ticket is about', example: 'size change on order #13091' },
     store_name: { label: 'Store name (Normless)', example: 'Normless' },
     currency: { label: 'Currency (INR)', example: 'INR' },
     // Vendors (Purchasing): filled by services/vendor-wa.
@@ -139,6 +142,11 @@ const SET = [
         event: 'refund', name: 'nlcrm_refund_issued', category: 'UTILITY', image: false,
         body: 'Hi {{1}}, we’ve issued a refund of ₹{{2}} for your order {{3}}.\n\nBanks usually take 5–7 business days to show it in your account.',
         vars: ['first_name', 'refund_amount', 'order_number'], link: { text: 'View my order', source: 'order' },
+    },
+    {
+        event: 'ticket_raised', name: 'nlcrm_ticket_raised', category: 'UTILITY', image: false,
+        body: 'Hi {{1}}, we have raised support ticket {{2}} for your request: {{3}}.\n\nOur team will get back to you here between 9 am and 6 pm. You can reply to this message anytime to ask about it.',
+        vars: ['first_name', 'ticket_ref', 'ticket_subject'],
     },
 ];
 

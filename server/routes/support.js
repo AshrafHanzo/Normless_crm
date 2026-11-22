@@ -319,7 +319,16 @@ router.post('/tickets', canEdit, async (req, res) => {
             return r.rows[0].id;
         });
         const row = (await db.query(`SELECT ${FIELDS} FROM support_tickets WHERE id = $1`, [ticket])).rows[0];
-        res.status(201).json({ ticket: hydrate(row) });
+        // The customer is told the ticket number on WhatsApp, whichever page raised it. A failed
+        // message never fails the ticket: it is on the Automations page, and said to whoever raised it.
+        let notified = null;
+        try {
+            notified = await require('../services/nl-automations').ticketRaised(row);
+        } catch (err) {
+            console.error('support ticket message error:', err.message);
+            notified = { status: 'failed', error: 'Could not message the customer' };
+        }
+        res.status(201).json({ ticket: hydrate(row), notified });
     } catch (err) {
         console.error('support create error:', err);
         res.status(500).json({ error: 'Could not raise the ticket' });

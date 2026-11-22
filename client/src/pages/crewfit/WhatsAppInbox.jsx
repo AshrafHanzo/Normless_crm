@@ -411,7 +411,6 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
   const [ticketDraft, setTicketDraft] = useState(null)  // the new ticket's prefill, while the drawer is open
   const [ticketOptions, setTicketOptions] = useState(null)
   const [ticketPhotos, setTicketPhotos] = useState([])  // chat photo message ids to copy onto it
-  const [ticketNotify, setTicketNotify] = useState(true)
 
   const feedRef = useRef(null)
   const threadRef = useRef(null)
@@ -730,7 +729,6 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
     const c = shop?.customer
     // The latest photos the customer sent are the likely proof; a person unticks what is not.
     setTicketPhotos(chatPhotos.slice(-8).map(m => m.id))
-    setTicketNotify(!!thread.window_open)
     setTicketDraft({
       order_number: order?.order_number || '',
       customer_name: c?.name || thread.profile_name || '',
@@ -748,14 +746,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
     })
     if (!link || link.error) toast.error(link?.error || 'The ticket was raised, but not tied to this chat')
     else if (link.copied) toast.success(`${link.copied} photo${link.copied === 1 ? '' : 's'} from the chat added to ${refOf(ticket)}`)
-    if (ticketNotify && thread.window_open) {
-      const first = (shop?.customer?.first_name || thread.profile_name || '').split(' ')[0]
-      const text = `Thanks${first ? ` ${first}` : ''}, we've raised ticket ${refOf(ticket)}${ticket.order_number ? ` for order ${ticket.order_number}` : ''}. `
-        + 'Our team will get back to you here between 9 am and 6 pm. You can reply in this chat anytime to ask about it.'
-      const r = await apiFetch(`${API}/conversations/${thread.id}/messages`, { method: 'POST', body: JSON.stringify({ body: text }) })
-      if (r && !r.error && r.message) appendSent(r.message)
-      else toast.error(r?.error || 'The ticket was raised, but the message to the customer did not go')
-    }
+    // The server has already told the customer the ticket number; the chat picks it up on its next poll.
     setSideTab('tickets')
     loadShop()
     loadActivity()
@@ -2622,11 +2613,9 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
             </div>
           ) : <p className="label-hint">The customer hasn’t sent any photos in this chat.</p>}
           <p className="label-hint">Ticked photos are copied onto the ticket. Videos stay in the chat, which the ticket links to.</p>
-          <label className="page-check">
-            <input type="checkbox" checked={ticketNotify && !!thread.window_open} disabled={!thread.window_open}
-              onChange={e => setTicketNotify(e.target.checked)} />
-            {thread.window_open ? 'Tell the customer the ticket number on WhatsApp' : 'Can’t message the customer — the 24-hour window has closed'}
-          </label>
+          <p className="label-hint">
+            The customer is sent the ticket number on WhatsApp when it is raised{thread.window_open ? '.' : ' — as a template, since the 24-hour window has closed.'}
+          </p>
         </TicketDrawer>
       )}
 
