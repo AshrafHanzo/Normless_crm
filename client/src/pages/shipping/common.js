@@ -2,8 +2,8 @@
 
 export const BUCKETS = [
   { key: 'pending', label: 'Pending AWB' },
-  { key: 'waiting_pickup', label: 'Waiting for pickup' },
-  { key: 'not_ready', label: 'Not ready at pickup', sub: true },
+  { key: 'ready_to_ship', label: 'Ready to ship' },
+  { key: 'ready_for_pickup', label: 'Ready for pickup' },
   { key: 'in_transit', label: 'In transit' },
   { key: 'out_for_delivery', label: 'Out for delivery' },
   { key: 'ndr', label: 'Delivery failed', tone: 'warning' },
@@ -24,6 +24,7 @@ export const RETURN_BUCKETS = ['return_pickup', 'return_transit', 'return_done',
 
 export const BUCKET_LABEL = Object.fromEntries(BUCKETS.map(b => [b.key, b.label]))
 BUCKET_LABEL.lost = 'Lost'
+BUCKET_LABEL.waiting_pickup = 'Awaiting pickup'
 Object.assign(BUCKET_LABEL, { return_pickup: 'Return: waiting for pickup', return_transit: 'Return: on the way back', return_done: 'Return received', return_closed: 'Return closed' })
 
 // Which status-badge colour each bucket wears.
@@ -55,7 +56,9 @@ export const ago = (v) => {
 export const statusText = (s) => {
   if (!s) return '—'
   if (s.status_code === 'FMEOD-152') return 'Not ready when Delhivery came'
-  if (s.status_code === 'X-PNP') return 'Not handed over to Delhivery'
+  if (s.status_code === 'FMEOD-106') return 'Pickup not attempted yet'
+  if (s.status_code === 'X-UCI') return 'AWB ready, no pickup scheduled'
+  if (s.status_code === 'X-PNP') return 'Not picked up, so Delhivery cancelled it'
   return s.instructions || s.status || '—'
 }
 

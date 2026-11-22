@@ -125,6 +125,8 @@ async function ensureShippingSchema() {
             -- forward = to the customer; return = a return or exchange pickup from the customer
             -- (Delhivery's OrderType "Pickup"). NULL until tracking has said which.
             ALTER TABLE shipments ADD COLUMN IF NOT EXISTS direction TEXT;
+            -- When the bell was told about this auto-cancel (once per cancel).
+            ALTER TABLE shipments ADD COLUMN IF NOT EXISTS cancel_alerted_at TIMESTAMP;
             CREATE INDEX IF NOT EXISTS shipments_order_idx ON shipments (order_number);
             CREATE INDEX IF NOT EXISTS shipments_bucket_idx ON shipments (bucket);
             CREATE INDEX IF NOT EXISTS shipments_created_idx ON shipments (created_at DESC);

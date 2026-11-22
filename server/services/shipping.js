@@ -115,9 +115,11 @@ async function finishJob(id, { ok = 0, failed = 0, summary = '', errors = [] }) 
  * Where a parcel is, in the CRM's words. Delhivery's status type (UD/DL/RT/CN/PP/PU) and status
  * come first; the NSL code tells a failed delivery (EOD-…) from a parcel merely sitting at a hub.
  *
- * Delhivery does not document how an auto-cancel shows in tracking, so anything that says
- * "cancel" before pickup counts, except EOD-6O, which is the customer cancelling at the door — a
- * failed delivery, not a cancelled shipment.
+ * An auto-cancel shows in tracking as "Not Picked" (X-PNP, "Shipment not received from client"):
+ * the portal lists exactly these as CANCELLED. A few are picked up later the same day; tracking
+ * then moves them on and the cancel mark comes off. Anything else that says "cancel" before
+ * pickup counts too, except EOD-6O, which is the customer cancelling at the door (a failed
+ * delivery, not a cancelled shipment).
  */
 function bucketOf(st = {}, direction = 'forward') {
     const type = String(st.StatusType || '').toUpperCase();
@@ -136,6 +138,7 @@ function bucketOf(st = {}, direction = 'forward') {
     if (type === 'CN' || /cancel/.test(s)) return 'cancelled';
     if (type === 'RT') return 'rto_transit';
     if (s === 'lost') return 'lost';
+    if (s === 'not picked' || code === 'X-PNP') return 'cancelled';
     if (s === 'manifested' || s === 'not picked' || s === 'open' || s === 'scheduled') {
         if (/cancel/i.test(ins) && code !== 'EOD-6O') return 'cancelled';
         return 'waiting_pickup';
@@ -214,6 +217,8 @@ async function applyTracking(S, { createdVia = 'portal' } = {}) {
     let cancelKind = t.direction === 'return' ? null : (prev?.cancel_kind || null);
     let cancelledAt = t.direction === 'return' ? null : (prev?.cancelled_at || null);
     if (t.bucket === 'cancelled' && !cancelKind) { cancelKind = 'auto'; cancelledAt = t.status_at || new Date(); }
+    // Picked up after all: no longer an auto-cancel (unless someone already re-created it).
+    if (t.bucket !== 'cancelled' && cancelKind === 'auto' && !prev?.cancel_handled) { cancelKind = null; cancelledAt = null; }
 
     const cols = ['direction', 'bucket', 'status_type', 'status', 'status_code', 'instructions', 'status_location', 'status_at', 'scans',
         'consignee_name', 'consignee_city', 'consignee_state', 'consignee_pincode', 'destination', 'pickup_location',
@@ -299,7 +304,6 @@ async function sync({ actor } = {}) {
                 if (!r) continue;
                 checked++;
                 if (r.was && r.was.bucket !== r.row.bucket) moved++;
-                if (r.row.bucket === 'cancelled' && r.row.cancel_kind === 'auto' && r.was?.bucket !== 'cancelled') newlyCancelled.push(r.row);
             }
 
             // 2. Orders from the last few weeks that we hold no shipment for: shipped from the
@@ -313,16 +317,19 @@ async function sync({ actor } = {}) {
             const due = recent.filter(n => !lookedUp.has(n) || Date.now() - lookedUp.get(n) > 6 * 3600 * 1000);
             for (const S of await dlv.trackByOrder(due)) {
                 const r = await applyTracking(S, { createdVia: 'portal' });
-                if (r?.row && !r.was) {
-                    found++;
-                    // Found already cancelled: only news if it happened in the last two days.
-                    if (r.row.bucket === 'cancelled' && r.row.cancel_kind === 'auto'
-                        && r.row.status_at && Date.now() - new Date(r.row.status_at) < 2 * 86400000) newlyCancelled.push(r.row);
-                }
+                if (r?.row && !r.was) found++;
             }
             for (const n of due) lookedUp.set(n, Date.now());
 
-            // 3. Alerts.
+            // 3. Alerts. An auto-cancel is news once it has stood for three hours (some are picked
+            //    up later the same day) and if it is from the last three days; older ones are
+            //    listed on the Auto-cancelled tab without a ping.
+            newlyCancelled.push(...(await db.query(
+                `UPDATE shipments SET cancel_alerted_at = CURRENT_TIMESTAMP
+                  WHERE bucket = 'cancelled' AND cancel_kind = 'auto' AND cancel_handled IS NULL AND cancel_alerted_at IS NULL
+                    AND COALESCE(status_at, cancelled_at) < NOW() - INTERVAL '3 hours'
+                    AND COALESCE(status_at, cancelled_at) > NOW() - INTERVAL '3 days'
+                RETURNING order_number, awb`)).rows);
             if (newlyCancelled.length) {
                 const n = newlyCancelled.length;
                 const e = await alert({

@@ -39,7 +39,7 @@ export default function Overview({ go, rev }) {
       {c.not_ready > 0 && (
         <div className="ship-alert warning">
           <strong>{plural(c.not_ready, 'parcel')} not ready when Delhivery came</strong>
-          <span>Delhivery's pickup person marked these "not ready for pickup". Unpicked parcels get auto-cancelled.</span>
+          <span>Delhivery's pickup person marked these "not ready for pickup". If they still aren't handed over, Delhivery cancels them.</span>
           <button className="btn btn-secondary btn-sm ship-alert-action" onClick={() => go('pickups')}>See them</button>
         </div>
       )}
@@ -48,8 +48,8 @@ export default function Overview({ go, rev }) {
         <section className="ship-group">
           <h3>Before shipping</h3>
           <Tile label="Pending AWB" n={c.pending_awb} onClick={() => go('shipments', 'pending')} />
-          <Tile label="Waiting for pickup" n={c.waiting_pickup} foot={oldest ? `Oldest: ${plural(oldest, 'day')}` : null} onClick={() => go('pickups')} />
-          <Tile label="Not ready at pickup" n={c.not_ready} tone={c.not_ready ? 'warning' : null} onClick={() => go('shipments', 'not_ready')} />
+          <Tile label="Ready to ship" n={c.ready_to_ship} foot="AWB made, no pickup yet" onClick={() => go('shipments', 'ready_to_ship')} />
+          <Tile label="Ready for pickup" n={c.ready_for_pickup} foot={oldest ? `Oldest: ${plural(oldest, 'day')}` : null} onClick={() => go('shipments', 'ready_for_pickup')} />
         </section>
         <section className="ship-group">
           <h3>On the way</h3>
