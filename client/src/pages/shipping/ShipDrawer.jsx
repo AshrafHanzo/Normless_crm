@@ -8,16 +8,19 @@ import { money, plural } from './common'
  * Create Delhivery shipments for one order or many.
  *
  * One order: the drawer checks it first (address, phone, pincode, COD, charge) so a bad address
- * is caught here rather than as a failed manifest. Many orders: one box and mode for all, and the
- * server checks each; the result lists what failed and why, next to the labels for what worked.
+ * is caught here rather than as a failed manifest. Many orders: the server checks each; the result
+ * lists what failed and why, next to the labels for what worked.
+ *
+ * Packaging and weight come from the packing rules in settings, per order, unless someone picks a
+ * packaging (or types a weight) here.
  */
 export default function ShipDrawer({ orders, settings, onClose, onDone }) {
   const apiFetch = useApi()
   const toast = useToast()
   const single = orders.length === 1 ? orders[0] : null
   const boxes = settings?.boxes || []
-  const [box, setBox] = useState(boxes[0]?.key || '')
-  const [weight, setWeight] = useState(boxes[0]?.grams || 500)
+  const [box, setBox] = useState('')                  // '' = what the packing rules say
+  const [weight, setWeight] = useState('')            // '' = worked out from the packaging and items
   const [mode, setMode] = useState(settings?.default_mode || 'Surface')
   const [payment, setPayment] = useState('')          // '' = as Shopify says
   const [cod, setCod] = useState('')
@@ -26,14 +29,16 @@ export default function ShipDrawer({ orders, settings, onClose, onDone }) {
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState(null)
 
-  const pickBox = (b) => { setBox(b.key); setWeight(b.grams) }
+  const pickBox = (key) => { setBox(key); setWeight('') }
+  const suggested = quote?.suggested
+  const boxLabel = (k) => boxes.find(b => b.key === k)?.name || k
 
   useEffect(() => {
     if (!single) return
     let live = true
     setChecking(true)
     const t = setTimeout(async () => {
-      const r = await apiFetch('/api/shipping/quote', { method: 'POST', body: JSON.stringify({ order_number: single.order_number, box, weight_g: Number(weight), shipping_mode: mode, payment_mode: payment || undefined, cod_amount: cod === '' ? undefined : Number(cod) }) })
+      const r = await apiFetch('/api/shipping/quote', { method: 'POST', body: JSON.stringify({ order_number: single.order_number, box: box || undefined, weight_g: weight === '' ? undefined : Number(weight), shipping_mode: mode, payment_mode: payment || undefined, cod_amount: cod === '' ? undefined : Number(cod) }) })
       if (!live) return
       setChecking(false)
       setQuote(r && !r.error ? r : { error: r?.error || 'Could not check this order' })
@@ -46,7 +51,7 @@ export default function ShipDrawer({ orders, settings, onClose, onDone }) {
   const submit = async () => {
     setBusy(true)
     const items = orders.map(o => ({
-      order_number: o.order_number, box, weight_g: Number(weight) || undefined, shipping_mode: mode,
+      order_number: o.order_number, box: box || undefined, weight_g: weight === '' ? undefined : Number(weight) || undefined, shipping_mode: mode,
       ...(single && payment ? { payment_mode: payment } : {}),
       ...(single && (payment || quote?.payment_mode) === 'COD' && cod !== '' ? { cod_amount: Number(cod) } : {}),
     }))
@@ -125,6 +130,7 @@ export default function ShipDrawer({ orders, settings, onClose, onDone }) {
                         {quote.pincode?.oda && <span className="ship-chip warn">Remote area (extra charge)</span>}
                       </div>
                       {quote.problems?.map((p, i) => <div key={i} className="ship-err"><span>{p}</span></div>)}
+                      {quote.check_error && <div className="ship-alert warning" style={{ margin: 0 }}><span>{quote.check_error}. Creating will check again and stop if it still can't.</span></div>}
                       {quote.problems?.length > 0 && <p className="packed-sub" style={{ maxWidth: 'none' }}>Fix the address or phone in Shopify, then open this again.</p>}
                     </>
                   )}
@@ -132,18 +138,24 @@ export default function ShipDrawer({ orders, settings, onClose, onDone }) {
               )}
 
               <section style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                <p className="ship-section-title">Package{!single && ' (same for every order)'}</p>
-                <div className="ship-pills" role="radiogroup" aria-label="Box">
+                <p className="ship-section-title">Packaging</p>
+                <div className="ship-pills" role="radiogroup" aria-label="Packaging">
+                  <button type="button" role="radio" aria-checked={box === ''} className={`ship-pill ${box === '' ? 'active' : ''}`} onClick={() => pickBox('')}>
+                    {single ? (suggested ? boxLabel(suggested.box) : 'Packing rules') : 'Packing rules'}
+                    <small>{single ? (suggested ? `suggested · ${suggested.why}` : 'working it out…') : 'each order gets what its items need'}</small>
+                  </button>
                   {boxes.map(b => (
                     <button key={b.key} type="button" role="radio" aria-checked={box === b.key}
-                      className={`ship-pill ${box === b.key ? 'active' : ''}`} onClick={() => pickBox(b)}>
-                      {b.name}<small>{b.l}×{b.b}×{b.h} cm · {b.grams / 1000} kg</small>
+                      className={`ship-pill ${box === b.key ? 'active' : ''}`} onClick={() => pickBox(b.key)}>
+                      {b.name}<small>{b.l}×{b.b}×{b.h} cm{!single ? ' · every order' : ''}</small>
                     </button>
                   ))}
                 </div>
                 <div className="form-row">
-                  <div className="input-group"><label htmlFor="ship-w">Weight (grams)</label>
-                    <input id="ship-w" type="number" min="50" step="50" value={weight} onChange={e => setWeight(e.target.value)} /></div>
+                  <div className="input-group"><label htmlFor="ship-w">Weight (grams) <span className="label-hint">{weight === '' ? 'worked out' : 'typed'}</span></label>
+                    <input id="ship-w" type="number" min="50" step="50" placeholder={single ? '' : 'Worked out per order'}
+                      value={weight !== '' ? weight : (single && quote?.weight_g ? quote.weight_g : '')} onChange={e => setWeight(e.target.value)} />
+                    {single && suggested && weight === '' && <span className="ship-pack-why">{plural(suggested.pieces, 'piece')} · {suggested.items_g} g of items plus the packaging</span>}</div>
                   <div className="input-group"><label htmlFor="ship-mode">Shipping mode</label>
                     <select id="ship-mode" value={mode} onChange={e => setMode(e.target.value)}><option>Surface</option><option>Express</option></select></div>
                 </div>

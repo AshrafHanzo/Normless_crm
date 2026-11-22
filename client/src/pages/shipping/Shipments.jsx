@@ -1,9 +1,9 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, Fragment } from 'react'
 import { useApi } from '../../App'
 import Icon from '../../components/Icon'
 import { BUCKETS, BUCKET_BADGE, BUCKET_LABEL, day, dayTime, money, statusText, daysSince, plural } from './common'
 
-const countOf = (counts, key) => (key === 'pending' ? counts.pending_awb : key === 'all' ? counts.all : counts[key])
+const countOf = (counts, key) => (key === 'pending' ? counts.pending_awb : counts[key])
 
 function Pager({ page, size, total, onPage }) {
   const last = Math.max(1, Math.ceil(total / size))
@@ -79,12 +79,15 @@ export default function Shipments({ counts, bucket, setBucket, canManage, ship, 
         {BUCKETS.map(b => {
           const n = countOf(counts, b.key)
           return (
-            <button key={b.key} type="button" aria-current={bucket === b.key ? 'page' : undefined}
+            <Fragment key={b.key}>
+            {b.heading && <p className="ship-nav-heading">{b.heading}</p>}
+            <button type="button" aria-current={bucket === b.key ? 'page' : undefined}
               className={[bucket === b.key && 'active', b.sub && 'sub', b.tone].filter(Boolean).join(' ')}
               onClick={() => (b.key === 'cancelled_open' ? go('cancelled') : setBucket(b.key))}>
               {b.label}
               {n != null && <span className={`ship-count ${b.key === 'cancelled_open' && n > 0 ? 'hot' : ''}`}>{n.toLocaleString('en-IN')}</span>}
             </button>
+            </Fragment>
           )
         })}
       </nav>
@@ -105,7 +108,7 @@ export default function Shipments({ counts, bucket, setBucket, canManage, ship, 
             <select value={packed} style={{ width: 'auto' }} onChange={e => setPacked(e.target.value)} aria-label="Packed">
               <option value="">Packed or not</option><option value="yes">Packed</option><option value="no">Not packed yet</option>
             </select>
-          ) : (
+          ) : bucket.startsWith('return') ? null : (
             <select value={payment} style={{ width: 'auto' }} onChange={e => setPayment(e.target.value)} aria-label="Payment">
               <option value="">COD and prepaid</option><option value="COD">COD</option><option value="Prepaid">Prepaid</option>
             </select>

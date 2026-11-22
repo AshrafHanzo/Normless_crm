@@ -13,15 +13,24 @@ export const BUCKETS = [
   { key: 'cancelled_open', label: 'Auto-cancelled', tone: 'danger' },
   { key: 'cancelled', label: 'All cancelled', sub: true },
   { key: 'all', label: 'All shipments' },
+  { key: 'returns', label: 'All returns', heading: 'Customer returns' },
+  { key: 'return_pickup', label: 'Waiting for pickup', sub: true },
+  { key: 'return_transit', label: 'On the way back', sub: true },
+  { key: 'return_done', label: 'Received', sub: true },
+  { key: 'return_closed', label: 'Closed, not picked', sub: true },
 ]
+
+export const RETURN_BUCKETS = ['return_pickup', 'return_transit', 'return_done', 'return_closed']
 
 export const BUCKET_LABEL = Object.fromEntries(BUCKETS.map(b => [b.key, b.label]))
 BUCKET_LABEL.lost = 'Lost'
+Object.assign(BUCKET_LABEL, { return_pickup: 'Return: waiting for pickup', return_transit: 'Return: on the way back', return_done: 'Return received', return_closed: 'Return closed' })
 
 // Which status-badge colour each bucket wears.
 export const BUCKET_BADGE = {
   waiting_pickup: 'pending', in_transit: 'partial', out_for_delivery: 'partial', ndr: 'on-hold',
   rto_transit: 'refunded', rto_returned: 'refunded', delivered: 'fulfilled', cancelled: 'cancelled', lost: 'error',
+  return_pickup: 'pending', return_transit: 'partial', return_done: 'fulfilled', return_closed: 'cancelled',
 }
 
 export const NOT_READY_CODES = ['FMEOD-152', 'X-PNP']

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useApi } from '../../App'
 import { useToast } from '../../components/Toast'
 import Icon from '../../components/Icon'
@@ -18,7 +18,24 @@ export default function ShippingSettings({ settings, isAdmin, onSaved }) {
   const set = (patch) => setF(x => ({ ...x, ...patch }))
   const setRet = (patch) => setF(x => ({ ...x, return_address: { ...x.return_address, ...patch } }))
   const setBox = (i, patch) => setF(x => ({ ...x, boxes: x.boxes.map((b, j) => (j === i ? { ...b, ...patch } : b)) }))
+  const setRule = (i, patch) => setF(x => ({ ...x, pack_rules: x.pack_rules.map((r, j) => (j === i ? { ...r, ...patch } : r)) }))
   const ro = !isAdmin
+  const [cat, setCat] = useState(null)     // { products, types } from Shopify, for the rule picker
+  const [catError, setCatError] = useState('')
+
+  useEffect(() => {
+    if (!isAdmin) return
+    apiFetch('/api/shipping/catalog').then(r => { if (r && !r.error) setCat(r); else setCatError(r?.error || 'Could not load products from Shopify') })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAdmin])
+
+  const boxName = (k) => f.boxes.find(b => b.key === k)?.name
+  const ruleLabel = (r) => r.label || (r.match === 'type' ? r.value : cat?.products.find(p => p.id === r.value)?.title) || r.value
+  const pickTarget = (i, v) => {
+    const [match, ...rest] = v.split(':'); const value = rest.join(':')
+    const label = match === 'type' ? value : (cat?.products.find(p => p.id === value)?.title || '')
+    setRule(i, { match, value, label })
+  }
 
   const save = async () => {
     setBusy(true)
@@ -47,12 +64,12 @@ export default function ShippingSettings({ settings, isAdmin, onSaved }) {
         <section className="ship-card" style={{ margin: 0 }}>
           <h3>Warehouse</h3>
           <div className="form-row">
-            <div className="input-group"><label htmlFor="st-loc">Pickup location</label>
-              <input id="st-loc" value={f.pickup_location} disabled={ro} onChange={e => set({ pickup_location: e.target.value })} />
-              <span className="packed-sub" style={{ margin: 0 }}>Exactly as registered with Delhivery</span></div>
-            <div className="input-group"><label htmlFor="st-pin">Warehouse pincode</label>
+            <div className="input-group"><span className="ship-field-label">Pickup location</span>
+              <div className="ship-readonly">{settings.pickup_location || '—'}</div>
+              <span className="packed-sub" style={{ margin: 0 }}>{settings.pickup_location_from === 'delhivery' ? 'From your Delhivery account, as on your shipments' : 'Shown here once Delhivery tracking has run'}</span></div>
+            <div className="input-group"><label htmlFor="st-pin">Warehouse pincode <span className="label-hint">optional</span></label>
               <input id="st-pin" inputMode="numeric" maxLength={6} value={f.origin_pincode} disabled={ro} onChange={e => set({ origin_pincode: e.target.value })} />
-              <span className="packed-sub" style={{ margin: 0 }}>Used for charge estimates</span></div>
+              <span className="packed-sub" style={{ margin: 0 }}>Only to show the charge before shipping</span></div>
           </div>
           <p className="ship-section-title">Return address</p>
           <p className="packed-sub" style={{ margin: '-6px 0 0', maxWidth: 'none' }}>Leave blank to use the pickup location.</p>
@@ -69,20 +86,23 @@ export default function ShippingSettings({ settings, isAdmin, onSaved }) {
         </section>
 
         <section className="ship-card" style={{ margin: 0, gridColumn: '1 / -1' }}>
-          <div style={{ display: 'flex', alignItems: 'center' }}>
-            <h3>Box sizes</h3>
-            {!ro && <button className="btn btn-secondary btn-sm" style={{ marginLeft: 'auto' }}
-              onClick={() => set({ boxes: [...f.boxes, { key: `box${Date.now()}`, name: 'New box', l: 30, b: 25, h: 5, grams: 500 }] })}><Icon name="plus" size={14} /> Add box</button>}
+          <div className="ship-card-head">
+            <div><h3>Packaging</h3>
+              <p className="packed-sub" style={{ maxWidth: 'none', margin: '2px 0 0' }}>The polybags and boxes you pack in. Delhivery charges on size and weight, so keep these close to the real thing.</p></div>
+            {!ro && <button className="btn btn-secondary btn-sm"
+              onClick={() => set({ boxes: [...f.boxes, { key: `pack${Date.now()}`, name: 'New packaging', kind: 'box', l: 30, b: 25, h: 10, pack_g: 150, max_items: 4 }] })}><Icon name="plus" size={14} /> Add packaging</button>}
           </div>
           <div style={{ overflowX: 'auto' }}>
             <table className="data-table ship-boxes-table">
-              <thead><tr><th>Name</th><th>L cm</th><th>B cm</th><th>H cm</th><th>Weight g</th><th aria-label="Remove" /></tr></thead>
+              <thead><tr><th>Name</th><th>Type</th><th>L cm</th><th>B cm</th><th>H cm</th><th>Empty weight g</th><th>Fits pieces</th><th aria-label="Remove" /></tr></thead>
               <tbody>
                 {f.boxes.map((b, i) => (
                   <tr key={b.key}>
-                    <td><input aria-label="Box name" value={b.name} disabled={ro} onChange={e => setBox(i, { name: e.target.value })} /></td>
-                    {['l', 'b', 'h', 'grams'].map(k => (
-                      <td key={k}><input aria-label={k} type="number" min="1" value={b[k]} disabled={ro} onChange={e => setBox(i, { [k]: e.target.value })} /></td>
+                    <td><input aria-label="Packaging name" value={b.name} disabled={ro} onChange={e => setBox(i, { name: e.target.value })} /></td>
+                    <td><select aria-label="Type" value={b.kind || 'box'} disabled={ro} onChange={e => setBox(i, { kind: e.target.value })}>
+                      <option value="polybag">Polybag</option><option value="box">Box</option></select></td>
+                    {[['l', 'Length'], ['b', 'Breadth'], ['h', 'Height'], ['pack_g', 'Empty weight in grams'], ['max_items', 'Pieces it fits']].map(([k, label]) => (
+                      <td key={k}><input aria-label={label} type="number" min={k === 'pack_g' ? 0 : 1} value={b[k] ?? ''} disabled={ro} onChange={e => setBox(i, { [k]: e.target.value })} /></td>
                     ))}
                     <td>{!ro && f.boxes.length > 1 && <button className="mini-btn mini-btn-danger" onClick={() => set({ boxes: f.boxes.filter((_, j) => j !== i) })}>Remove</button>}</td>
                   </tr>
@@ -90,14 +110,59 @@ export default function ShippingSettings({ settings, isAdmin, onSaved }) {
               </tbody>
             </table>
           </div>
-          <div className="input-group" style={{ marginBottom: 0 }}><label htmlFor="st-mode">Default shipping mode</label>
-            <select id="st-mode" value={f.default_mode} disabled={ro} onChange={e => set({ default_mode: e.target.value })}><option>Surface</option><option>Express</option></select></div>
+          <div className="form-row" style={{ alignItems: 'flex-start' }}>
+            <div className="input-group" style={{ marginBottom: 0 }}><label htmlFor="st-defbox">Default packaging</label>
+              <select id="st-defbox" value={f.default_box} disabled={ro} onChange={e => set({ default_box: e.target.value })}>
+                {f.boxes.map(b => <option key={b.key} value={b.key}>{b.name}</option>)}</select>
+              <span className="packed-sub" style={{ margin: 0 }}>For products no rule below mentions</span></div>
+            <div className="input-group" style={{ marginBottom: 0 }}><label htmlFor="st-itemg">Weight per piece, grams</label>
+              <input id="st-itemg" type="number" min="10" value={f.default_item_g} disabled={ro} onChange={e => set({ default_item_g: e.target.value })} />
+              <span className="packed-sub" style={{ margin: 0 }}>When neither a rule nor Shopify has a weight</span></div>
+            <div className="input-group" style={{ marginBottom: 0 }}><label htmlFor="st-mode">Default shipping mode</label>
+              <select id="st-mode" value={f.default_mode} disabled={ro} onChange={e => set({ default_mode: e.target.value })}><option>Surface</option><option>Express</option></select></div>
+          </div>
+        </section>
+
+        <section className="ship-card" style={{ margin: 0, gridColumn: '1 / -1' }}>
+          <div className="ship-card-head">
+            <div><h3>Packing rules</h3>
+              <p className="packed-sub" style={{ maxWidth: 'none', margin: '2px 0 0' }}>
+                Which products need which packaging. Each order goes in the biggest packaging any of its items needs, so a hoodie with a mask goes in the mask's box.
+                If there are more pieces than it fits, the next size up. A rule for a product beats a rule for its type. You can still change it per order.</p></div>
+            {!ro && <button className="btn btn-secondary btn-sm" onClick={() => set({ pack_rules: [...f.pack_rules, { match: 'type', value: '', label: '', box: '', item_g: '' }] })}><Icon name="plus" size={14} /> Add rule</button>}
+          </div>
+          {catError && <div className="ship-alert warning" style={{ margin: 0 }}><span>Your products couldn't be loaded from Shopify, so rules can't be added or changed right now. ({catError})</span></div>}
+          {!f.pack_rules.length ? <p className="packed-sub" style={{ maxWidth: 'none', margin: 0 }}>No rules yet: every order goes in the {(boxName(f.default_box) || 'default packaging').toLowerCase()}.</p> : (
+            <div style={{ overflowX: 'auto' }}>
+              <table className="data-table ship-boxes-table ship-rules-table">
+                <thead><tr><th>Applies to</th><th>Packaging</th><th>Weight per piece g</th><th aria-label="Remove" /></tr></thead>
+                <tbody>
+                  {f.pack_rules.map((r, i) => (
+                    <tr key={i}>
+                      <td>{ro || !cat ? <span>{ruleLabel(r) || '—'}{r.match === 'type' && <span className="packed-sub"> · product type</span>}</span> : (
+                        <select aria-label="Product or product type" value={r.value ? `${r.match}:${r.value}` : ''} onChange={e => pickTarget(i, e.target.value)}>
+                          <option value="">Choose a product or type…</option>
+                          <optgroup label="Product types">{cat.types.map(t => <option key={t} value={`type:${t}`}>{t} (every product of this type)</option>)}</optgroup>
+                          <optgroup label="Products">{cat.products.map(p => <option key={p.id} value={`product:${p.id}`}>{p.title}{p.status !== 'ACTIVE' ? ` (${p.status.toLowerCase()})` : ''}</option>)}</optgroup>
+                        </select>
+                      )}</td>
+                      <td><select aria-label="Packaging" value={r.box || ''} disabled={ro} onChange={e => setRule(i, { box: e.target.value })}>
+                        <option value="">Default packaging</option>
+                        {f.boxes.map(b => <option key={b.key} value={b.key}>{b.name}</option>)}</select></td>
+                      <td><input aria-label="Weight per piece in grams" type="number" min="10" placeholder="From Shopify" value={r.item_g ?? ''} disabled={ro} onChange={e => setRule(i, { item_g: e.target.value })} /></td>
+                      <td>{!ro && <button className="mini-btn mini-btn-danger" onClick={() => set({ pack_rules: f.pack_rules.filter((_, j) => j !== i) })}>Remove</button>}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </section>
 
         <section className="ship-card" style={{ margin: 0 }}>
           <h3>Automatic steps</h3>
           <div>
-            <div className="ship-setting"><span>Mark the order fulfilled in Shopify with the AWB<small>Sends the customer the shipped WhatsApp. Needs fulfilment access for the CRM's Shopify app.</small></span>
+            <div className="ship-setting"><span>Mark the order fulfilled in Shopify with the AWB<small>Sends the customer the shipped WhatsApp. Only for shipments created in the CRM.</small></span>
               <Toggle label="Shopify fulfil" on={f.shopify_fulfil} onChange={v => !ro && set({ shopify_fulfil: v })} /></div>
             <div className="ship-setting"><span>Update tracking every 30 minutes<small>Also finds shipments made in the Delhivery portal, from the last {f.sync_days} days.</small></span>
               <Toggle label="Tracking sync" on={f.sync_enabled} onChange={v => !ro && set({ sync_enabled: v })} /></div>

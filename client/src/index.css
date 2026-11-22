@@ -4539,6 +4539,7 @@ p.wdb-sub { margin: 0; }
 .ship-status-nav button.sub { padding-left: 26px; font-size: 12.5px; }
 .ship-status-nav button.danger { color: var(--danger); }
 .ship-status-nav button.warning { color: var(--warning); }
+.ship-nav-heading { margin: 10px 12px 4px; padding-top: 10px; border-top: 1px solid var(--border); font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--text-muted); }
 .ship-count { margin-left: auto; font-size: 11.5px; font-weight: 600; color: var(--text-secondary); background: var(--border); border-radius: 999px; padding: 1px 8px; }
 .ship-count.hot { background: var(--danger); color: #fff; }
 .ship-alert { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 12px 16px; border-radius: var(--radius-md); margin-bottom: 14px; font-size: 13.5px; border: 1px solid var(--border); background: var(--surface); }
@@ -4597,8 +4598,16 @@ p.wdb-sub { margin: 0; }
 .ship-label-list { display: flex; flex-direction: column; gap: 6px; }
 .ship-boxes-table input { width: 100%; min-width: 70px; }
 .ship-boxes-table td:first-child input { min-width: 160px; }
+.ship-boxes-table select { width: 100%; min-width: 110px; }
+.ship-rules-table td:first-child { min-width: 240px; }
+.ship-card-head { display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+.ship-card-head > div { flex: 1 1 280px; }
+.ship-field-label { font-size: 12.5px; font-weight: 600; color: var(--text-secondary); }
+.ship-readonly { min-height: 40px; display: flex; align-items: center; padding: 0 12px; border-radius: var(--radius-sm, 8px); border: 1px dashed var(--border); color: var(--text-primary); font-size: 14px; }
+.ship-pack-why { font-size: 12px; color: var(--text-muted); margin-top: 6px; }
 @media (max-width: 768px) {
   .ship-status-nav { max-width: none; flex-direction: row; overflow-x: auto; }
   .ship-status-nav button { white-space: nowrap; }
   .ship-status-nav button.sub { padding-left: 12px; }
+  .ship-nav-heading { margin: 0 4px; padding: 0 0 0 10px; border-top: 0; border-left: 1px solid var(--border); align-self: center; white-space: nowrap; }
 }

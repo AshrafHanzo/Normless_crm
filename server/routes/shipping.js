@@ -35,15 +35,21 @@ const PENDING_WHERE = `
     AND o.cancelled_at IS NULL AND COALESCE(o.on_hold, false) = false
     AND UPPER(COALESCE(o.fulfillment_status, 'UNFULFILLED')) NOT IN ('FULFILLED')
     AND NOT EXISTS (SELECT 1 FROM shipments s WHERE s.order_number = o.order_number
+                      AND COALESCE(s.direction, 'forward') = 'forward'
                       AND (s.bucket <> 'cancelled' OR s.cancel_handled = 'not_shipping' OR s.cancel_handled IS NULL))`;
 
 const BUCKETS = ['waiting_pickup', 'in_transit', 'out_for_delivery', 'ndr', 'rto_transit', 'rto_returned', 'delivered', 'cancelled', 'lost'];
+const RETURNS = shipping.RETURN_BUCKETS;
+// Shipments to customers only; return pickups are listed on their own.
+const FORWARD = `bucket <> ALL('{${RETURNS.join(',')}}')`;
 
 async function counts() {
     const r = (await db.query(`SELECT bucket, COUNT(*)::int AS n FROM shipments GROUP BY bucket`)).rows;
-    const out = Object.fromEntries(BUCKETS.map(b => [b, 0]));
+    const out = Object.fromEntries([...BUCKETS, ...RETURNS].map(b => [b, 0]));
     for (const x of r) out[x.bucket] = x.n;
-    out.all = r.reduce((n, x) => n + x.n, 0);
+    out.all = r.filter(x => !RETURNS.includes(x.bucket)).reduce((n, x) => n + x.n, 0);
+    out.returns = RETURNS.reduce((n, b) => n + out[b], 0);
+    out.returns_open = out.return_pickup + out.return_transit;
     out.pending_awb = (await db.query(`SELECT COUNT(*)::int AS n FROM orders o WHERE ${PENDING_WHERE}`)).rows[0].n;
     out.cancelled_open = (await db.query(`SELECT COUNT(*)::int AS n FROM shipments WHERE bucket = 'cancelled' AND cancel_kind = 'auto' AND cancel_handled IS NULL`)).rows[0].n;
     out.ndr_open = (await db.query(`SELECT COUNT(*)::int AS n FROM shipments WHERE bucket = 'ndr' AND (ndr_action_at IS NULL OR ndr_action_at < status_at)`)).rows[0].n;
@@ -88,7 +94,7 @@ router.get('/overview', async (req, res) => {
                    COUNT(*) FILTER (WHERE first_attempt_at IS NOT NULL AND first_attempt_at <= expected_delivery)::int AS on_time,
                    AVG(EXTRACT(EPOCH FROM (first_attempt_at - picked_up_at)) / 86400) FILTER (WHERE first_attempt_at IS NOT NULL) AS avg_days
               FROM shipments
-             WHERE picked_up_at > NOW() - ($1 || ' days')::interval - INTERVAL '3 days'
+             WHERE ${FORWARD} AND picked_up_at > NOW() - ($1 || ' days')::interval - INTERVAL '3 days'
                AND picked_up_at < NOW() - INTERVAL '3 days'`, [String(days)])).rows[0];
         const pct = (a, b) => (b ? Math.round((a / b) * 1000) / 10 : null);
         res.json({
@@ -162,7 +168,9 @@ router.get('/shipments', async (req, res) => {
         const bucket = String(req.query.bucket || '');
         if (bucket === 'cancelled_open') where.push(`bucket = 'cancelled' AND cancel_kind = 'auto' AND cancel_handled IS NULL`);
         else if (bucket === 'not_ready') where.push(`bucket = 'waiting_pickup' AND status_code IN ('FMEOD-152','X-PNP')`);
-        else if (BUCKETS.includes(bucket)) { vals.push(bucket); where.push(`bucket = $${vals.length}`); }
+        else if (bucket === 'returns') where.push(`bucket = ANY('{${RETURNS.join(',')}}')`);
+        else if (BUCKETS.includes(bucket) || RETURNS.includes(bucket)) { vals.push(bucket); where.push(`bucket = $${vals.length}`); }
+        else where.push(FORWARD);
         if (req.query.payment === 'COD' || req.query.payment === 'Prepaid') { vals.push(req.query.payment); where.push(`payment_mode = $${vals.length}`); }
         if (req.query.via === 'crm' || req.query.via === 'portal') { vals.push(req.query.via); where.push(`created_via = $${vals.length}`); }
         const q = String(req.query.q || '').trim();
@@ -179,11 +187,11 @@ router.get('/shipments', async (req, res) => {
         const w = where.length ? `WHERE ${where.join(' AND ')}` : '';
         const total = (await db.query(`SELECT COUNT(*)::int AS n FROM shipments ${w}`, vals)).rows[0].n;
         // Oldest first where somebody has to act (waiting, failed, cancelled); newest first elsewhere.
-        const order = ['waiting_pickup', 'ndr', 'cancelled', 'cancelled_open', 'not_ready'].includes(bucket)
+        const order = ['waiting_pickup', 'ndr', 'cancelled', 'cancelled_open', 'not_ready', 'return_pickup'].includes(bucket)
             ? 'COALESCE(status_at, created_at) ASC' : 'COALESCE(status_at, created_at) DESC';
         vals.push(size, (page - 1) * size);
         const rows = (await db.query(
-            `SELECT id, awb, order_number, delhivery_order, created_via, bucket, status_type, status, status_code, instructions,
+            `SELECT id, awb, order_number, delhivery_order, created_via, direction, bucket, status_type, status, status_code, instructions,
                     status_location, status_at, payment_mode, cod_amount, total_amount, box, weight_g, shipping_mode,
                     consignee_name, consignee_city, consignee_pincode, destination, manifested_at, picked_up_at,
                     expected_delivery, delivered_at, ndr_attempts, ndr_reason, ndr_action, ndr_action_at,
@@ -312,6 +320,14 @@ router.get('/settings', async (req, res) => {
 router.put('/settings', admin, async (req, res) => {
     try { res.json({ settings: await shipping.saveSettings(req.body || {}, me(req)) }); }
     catch (err) { fail(res, err, 'save settings'); }
+});
+
+/** GET /catalog — Shopify products and product types, for the packing rules. */
+router.get('/catalog', admin, async (req, res) => {
+    try {
+        const c = await shipping.catalog({ fresh: req.query.fresh === '1' });
+        res.json({ products: c.products, types: c.types });
+    } catch (err) { fail(res, err, 'load products from Shopify'); }
 });
 
 /** POST /settings/test — a harmless call (pincode lookup) to prove the token works. */

@@ -80,7 +80,7 @@ export default function ShipmentDrawer({ id, canManage, onClose, onChanged, onRe
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
             <button className="btn btn-secondary btn-sm" onClick={copy}><Icon name="copy" size={14} /> Copy tracking link</button>
             <a className="btn btn-secondary btn-sm" href={link} target="_blank" rel="noreferrer"><Icon name="external" size={14} /> Delhivery tracking</a>
-            {!['cancelled'].includes(s.bucket) && <button className="btn btn-secondary btn-sm" onClick={label} disabled={busy === 'label'}><Icon name="printer" size={14} /> {busy === 'label' ? 'Fetching…' : 'Reprint label'}</button>}
+            {s.bucket !== 'cancelled' && s.direction !== 'return' && <button className="btn btn-secondary btn-sm" onClick={label} disabled={busy === 'label'}><Icon name="printer" size={14} /> {busy === 'label' ? 'Fetching…' : 'Reprint label'}</button>}
             {canManage && s.bucket === 'ndr' && <button className="btn btn-primary btn-sm" onClick={reattempt} disabled={!!busy}>Re-attempt delivery</button>}
             {canManage && ['waiting_pickup', 'in_transit', 'ndr'].includes(s.bucket) && !editing && (
               <button className="btn btn-secondary btn-sm" onClick={() => setEditing({ name: s.consignee_name || '', phone: '', add: '' })}>Change phone or address</button>
@@ -142,7 +142,8 @@ export default function ShipmentDrawer({ id, canManage, onClose, onChanged, onRe
                 {s.delivered_at && <><dt>Delivered</dt><dd>{dayTime(s.delivered_at)}</dd></>}
                 {s.ndr_attempts > 0 && <><dt>Delivery attempts</dt><dd>{s.ndr_attempts}</dd></>}
                 {s.ndr_action && <><dt>Our action</dt><dd>{s.ndr_action} · {dayTime(s.ndr_action_at)}</dd></>}
-                <dt>Shopify</dt><dd>{s.created_via === 'crm' ? (s.shopify_fulfilled ? 'Fulfilled with this AWB' : 'Not updated') : 'Handled by the portal'}</dd>
+                {s.direction === 'return' && <><dt>Type</dt><dd>Return or exchange pickup from the customer</dd></>}
+                <dt>Shopify</dt><dd>{s.direction === 'return' ? '—' : s.created_via === 'crm' ? (s.shopify_fulfilled ? 'Fulfilled with this AWB' : 'Not updated') : 'Handled by the portal'}</dd>
               </dl>
               {data.ticket ? <a href="/support">Support ticket #{data.ticket.ref_no} ({data.ticket.status})</a>
                 : <span className="packed-sub" style={{ maxWidth: 'none' }}>No support ticket for this order.</span>}

@@ -14,16 +14,26 @@
 const db = require('../db/connection');
 
 const DEFAULT_SETTINGS = {
-    pickup_location: 'Normless Warehouse',   // exactly as registered with Delhivery
-    origin_pincode: '',                      // for the pincode check and the charge estimate
+    // Delhivery's own name for the warehouse. Taken from tracking (every shipment carries it), so
+    // this is only the fallback before any shipment has been seen.
+    pickup_location: 'Normless Warehouse',
+    origin_pincode: '',                      // optional: only the charge estimate needs it
     return_address: { name: '', address: '', city: '', state: '', pincode: '', phone: '' },
     seller_name: 'Normless',
     default_mode: 'Surface',
+    // Packaging the warehouse uses. `pack_g` is the empty packaging; `max_items` is how many pieces
+    // fit. Which one an order gets comes from the packing rules below.
     boxes: [
-        { key: 'small', name: 'Small poly', l: 30, b: 25, h: 3, grams: 500 },
-        { key: 'medium', name: 'Medium box', l: 30, b: 25, h: 10, grams: 1000 },
-        { key: 'large', name: 'Large box', l: 40, b: 30, h: 15, grams: 2000 },
+        { key: 'poly_s', name: 'Small polybag', kind: 'polybag', l: 30, b: 25, h: 3, pack_g: 20, max_items: 2 },
+        { key: 'poly_l', name: 'Large polybag', kind: 'polybag', l: 40, b: 35, h: 5, pack_g: 30, max_items: 4 },
+        { key: 'box_m', name: 'Medium box', kind: 'box', l: 30, b: 25, h: 10, pack_g: 150, max_items: 4 },
+        { key: 'box_l', name: 'Large box', kind: 'box', l: 40, b: 30, h: 15, pack_g: 250, max_items: 8 },
     ],
+    default_box: 'poly_s',          // for products no rule mentions
+    default_item_g: 300,            // per piece, when Shopify has no weight for the variant
+    // [{ match: 'type' | 'product', value: 'Hoodie' | '<product id>', label, box, item_g }]
+    // A product rule beats a type rule.
+    pack_rules: [],
     // What happens around a shipment.
     shopify_fulfil: true,           // mark the order fulfilled in Shopify with the AWB
     sync_enabled: true,             // pull tracking from Delhivery on a timer
@@ -112,6 +122,9 @@ async function ensureShippingSchema() {
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
+            -- forward = to the customer; return = a return or exchange pickup from the customer
+            -- (Delhivery's OrderType "Pickup"). NULL until tracking has said which.
+            ALTER TABLE shipments ADD COLUMN IF NOT EXISTS direction TEXT;
             CREATE INDEX IF NOT EXISTS shipments_order_idx ON shipments (order_number);
             CREATE INDEX IF NOT EXISTS shipments_bucket_idx ON shipments (bucket);
             CREATE INDEX IF NOT EXISTS shipments_created_idx ON shipments (created_at DESC);
