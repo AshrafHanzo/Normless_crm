@@ -322,6 +322,8 @@ app.use('/api/scanner', authMiddleware, require('./routes/packing'));
 app.use('/api/banking', authMiddleware, require('./routes/banking'));
 // Customer support: returns, replacements and refunds arranged by hand.
 app.use('/api/support', authMiddleware, require('./routes/support'));
+// Shipping with Delhivery: shipments, pickups, failed deliveries and auto-cancel alerts
+app.use('/api/shipping', authMiddleware, require('./routes/shipping'));
 app.use('/api/myxture', authMiddleware, require('./routes/myxture'));
 // Purchasing — vendors shared by Normless and Crewfit.
 app.use('/api/vendors', authMiddleware, require('./routes/vendors'));
@@ -2464,6 +2466,8 @@ app.listen(PORT, async () => {
     await ensureSalesSchema();
     // Customer support tickets: returns, replacements and refunds handled by hand
     await ensureSupportSchema();
+    // Delhivery shipping: shipments, pickups, jobs and settings
+    await require('./services/shipping-schema').ensureShippingSchema();
     // Myxture print-on-demand: the batches exported to their portal
     await ensureMyxtureSchema();
     // Bank statements and the transactions parsed out of them
@@ -2481,6 +2485,8 @@ app.listen(PORT, async () => {
     require('./services/vendor-wa').start();
     // Marketing broadcasts that were going when the server stopped carry on.
     require('./services/wa-marketing').startWorker();
+    // Delhivery tracking every half hour: auto-cancels and parcels stuck waiting reach the bell.
+    require('./services/shipping').start();
 
     const thumbs = require('./routes/thumbs');
     setTimeout(() => thumbs.warm().catch(e => console.error('thumb warm:', e.message)), 60 * 1000).unref();

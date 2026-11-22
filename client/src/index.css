@@ -4526,3 +4526,79 @@ p.wdb-sub { margin: 0; }
 /* The dispatch delay notice's own settings, inside its automation card. */
 .nl-delay { display: flex; flex-direction: column; gap: 10px; border-top: 1px solid var(--border); padding-top: 12px; }
 .nl-delay-results { margin: 6px 0 0; padding-left: 18px; font-size: 12.5px; display: grid; gap: 2px; }
+
+/* ============================================================
+   SHIPPING — Delhivery from the CRM
+   ============================================================ */
+.ship-layout { display: flex; flex-wrap: wrap; gap: 18px; align-items: flex-start; }
+.ship-main { flex: 999 1 600px; min-width: 0; }
+.ship-status-nav { flex: 1 1 210px; max-width: 240px; display: flex; flex-direction: column; gap: 2px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 6px; }
+.ship-status-nav button { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 8px 12px; border-radius: 9px; border: 0; background: transparent; color: var(--text-secondary); font: inherit; font-size: 13.5px; font-weight: 500; cursor: pointer; text-align: left; }
+.ship-status-nav button:hover { background: var(--surface-hover); color: var(--text-primary); }
+.ship-status-nav button.active { background: var(--primary-glow); color: var(--text-primary); font-weight: 600; }
+.ship-status-nav button.sub { padding-left: 26px; font-size: 12.5px; }
+.ship-status-nav button.danger { color: var(--danger); }
+.ship-status-nav button.warning { color: var(--warning); }
+.ship-count { margin-left: auto; font-size: 11.5px; font-weight: 600; color: var(--text-secondary); background: var(--border); border-radius: 999px; padding: 1px 8px; }
+.ship-count.hot { background: var(--danger); color: #fff; }
+.ship-alert { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 12px 16px; border-radius: var(--radius-md); margin-bottom: 14px; font-size: 13.5px; border: 1px solid var(--border); background: var(--surface); }
+.ship-alert.danger { background: var(--danger-bg); border-color: color-mix(in srgb, var(--danger) 45%, transparent); }
+.ship-alert.danger strong { color: var(--danger); }
+.ship-alert.warning { background: var(--warning-bg); border-color: color-mix(in srgb, var(--warning) 45%, transparent); }
+.ship-alert.warning strong { color: var(--warning); }
+.ship-alert.info { background: var(--info-bg); border-color: color-mix(in srgb, var(--info) 40%, transparent); }
+.ship-alert .ship-alert-action { margin-left: auto; }
+.ship-bulkbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 10px 14px; border-radius: var(--radius-md); background: var(--primary-glow); border: 1px solid color-mix(in srgb, var(--primary) 45%, transparent); margin-bottom: 12px; font-size: 13.5px; }
+.ship-bulkbar .ship-bulk-actions { margin-left: auto; display: flex; flex-wrap: wrap; gap: 8px; }
+.ship-groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; margin-bottom: 22px; }
+.ship-group { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+.ship-group h3 { margin: 0 0 2px; font-size: 13.5px; font-weight: 600; color: var(--text-secondary); }
+.ship-tile { display: flex; flex-direction: column; gap: 2px; padding: 12px 14px; border-radius: var(--radius-md); background: var(--bg-secondary); border: 1px solid var(--border); cursor: pointer; text-align: left; color: inherit; font: inherit; }
+.ship-tile:hover { border-color: var(--border-hover); }
+.ship-tile .ship-tile-l { font-size: 12.5px; color: var(--text-secondary); }
+.ship-tile .ship-tile-n { font-size: 24px; font-weight: 700; color: var(--text-primary); }
+.ship-tile .ship-tile-f { font-size: 12px; color: var(--warning); }
+.ship-perf { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 14px; }
+.ship-perf div { display: flex; flex-direction: column; gap: 4px; }
+.ship-perf span { font-size: 12.5px; color: var(--text-secondary); }
+.ship-perf strong { font-size: 22px; }
+.ship-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 18px; display: flex; flex-direction: column; gap: 12px; margin-bottom: 18px; }
+.ship-card h3 { margin: 0; font-size: 15px; }
+.ship-section-title { margin: 0; font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-secondary); }
+.ship-kv { display: grid; grid-template-columns: auto 1fr; gap: 8px 16px; font-size: 13.5px; margin: 0; }
+.ship-kv dt { color: var(--text-secondary); }
+.ship-kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.ship-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.ship-chip { border-radius: 999px; padding: 3px 10px; font-size: 12px; font-weight: 600; background: var(--border); color: var(--text-secondary); }
+.ship-chip.good { background: var(--success-bg); color: var(--success); }
+.ship-chip.bad { background: var(--danger-bg); color: var(--danger); }
+.ship-chip.warn { background: var(--warning-bg); color: var(--warning); }
+.ship-pills { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+.ship-pill { min-height: 44px; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--bg-primary); color: var(--text-primary); font: inherit; font-size: 13px; font-weight: 500; text-align: left; cursor: pointer; }
+.ship-pill small { display: block; color: var(--text-muted); font-size: 11.5px; }
+.ship-pill.active { border-color: var(--primary); background: var(--primary-glow); }
+.ship-timeline { display: flex; flex-direction: column; gap: 14px; }
+.ship-ev { display: grid; grid-template-columns: 14px 1fr; gap: 10px; font-size: 13.5px; }
+.ship-ev::before { content: ''; width: 10px; height: 10px; border-radius: 50%; margin-top: 5px; background: var(--surface-active); }
+.ship-ev.latest::before { background: var(--info); box-shadow: 0 0 0 4px var(--info-bg); }
+.ship-ev .ship-ev-place { color: var(--text-secondary); font-size: 12.5px; }
+.ship-ev .ship-ev-time { color: var(--text-muted); font-size: 12px; }
+.ship-err { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 10px; border-radius: 8px; background: var(--danger-bg); font-size: 12.5px; margin-top: 6px; }
+.ship-err b { color: var(--text-primary); }
+.ship-ok { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 10px; border-radius: 8px; background: var(--success-bg); font-size: 12.5px; margin-top: 6px; }
+.ship-setting { display: flex; align-items: center; gap: 14px; padding: 12px 0; border-bottom: 1px solid var(--border); font-size: 13.5px; }
+.ship-setting:last-child { border-bottom: 0; }
+.ship-setting > span { flex: 1; }
+.ship-setting small { display: block; color: var(--text-muted); font-size: 12px; margin-top: 2px; }
+.ship-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+.ship-ndr { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 16px 18px; display: flex; flex-wrap: wrap; gap: 14px 24px; margin-bottom: 12px; }
+.ship-ndr > div { flex: 1 1 220px; min-width: 0; display: flex; flex-direction: column; gap: 3px; font-size: 13.5px; }
+.ship-ndr .ship-ndr-actions { flex: 1 1 100%; flex-direction: row; flex-wrap: wrap; gap: 8px; }
+.ship-label-list { display: flex; flex-direction: column; gap: 6px; }
+.ship-boxes-table input { width: 100%; min-width: 70px; }
+.ship-boxes-table td:first-child input { min-width: 160px; }
+@media (max-width: 768px) {
+  .ship-status-nav { max-width: none; flex-direction: row; overflow-x: auto; }
+  .ship-status-nav button { white-space: nowrap; }
+  .ship-status-nav button.sub { padding-left: 12px; }
+}

@@ -14,6 +14,7 @@ const COLUMNS = new Set([
   'can_view_marketing_reports',
   'can_view_offline_sales', 'can_edit_offline_sales',
   'can_view_support', 'can_edit_support',
+  'can_view_shipping', 'can_manage_shipping',
   'can_view_myxture',
   'can_view_vendors', 'can_edit_vendor_orders', 'can_record_vendor_payments', 'can_share_vendor_link',
   'can_view_banking', 'can_edit_banking',

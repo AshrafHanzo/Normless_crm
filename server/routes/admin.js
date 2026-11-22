@@ -25,6 +25,7 @@ const PERM_MAP = {
   marketing_approve: 'can_approve_marketing', marketing_reports: 'can_view_marketing_reports',
   offline_sales: 'can_view_offline_sales', offline_sales_edit: 'can_edit_offline_sales',
   support: 'can_view_support', support_edit: 'can_edit_support',
+  shipping: 'can_view_shipping', shipping_manage: 'can_manage_shipping',
   myxture: 'can_view_myxture',
   vendors: 'can_view_vendors', vendors_edit: 'can_edit_vendor_orders', vendor_payments: 'can_record_vendor_payments', vendor_share: 'can_share_vendor_link',
   banking: 'can_view_banking', banking_edit: 'can_edit_banking',
