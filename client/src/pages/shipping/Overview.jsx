@@ -50,6 +50,7 @@ export default function Overview({ go, rev }) {
           <Tile label="Pending AWB" n={c.pending_awb} onClick={() => go('shipments', 'pending')} />
           <Tile label="Ready to ship" n={c.ready_to_ship} foot="AWB made, no pickup yet" onClick={() => go('shipments', 'ready_to_ship')} />
           <Tile label="Ready for pickup" n={c.ready_for_pickup} foot={oldest ? `Oldest: ${plural(oldest, 'day')}` : null} onClick={() => go('shipments', 'ready_for_pickup')} />
+          <Tile label="Not picked" n={c.not_picked} tone={c.not_picked ? 'warning' : null} foot="Delhivery came, didn't get it" onClick={() => go('shipments', 'not_picked')} />
         </section>
         <section className="ship-group">
           <h3>On the way</h3>

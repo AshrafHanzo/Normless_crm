@@ -37,7 +37,7 @@ const DEFAULT_SETTINGS = {
     // What happens around a shipment.
     shopify_fulfil: true,           // mark the order fulfilled in Shopify with the AWB
     sync_enabled: true,             // pull tracking from Delhivery on a timer
-    sync_days: 45,                  // how far back to look for orders shipped from the portal
+    sync_days: 120,                 // how far back to look for orders shipped from the portal
     auto_pickup: false,             // book the daily pickup automatically
     pickup_time: '18:00:00',
     // Alerts
@@ -173,6 +173,8 @@ async function ensureShippingSchema() {
         `);
         await db.query(`INSERT INTO shipping_settings (id, data) VALUES (1, $1) ON CONFLICT (id) DO NOTHING`,
             [JSON.stringify(DEFAULT_SETTINGS)]);
+        // 45 days left most of the portal's history out of the counts; look back four months.
+        await db.query(`UPDATE shipping_settings SET data = jsonb_set(data, '{sync_days}', '120') WHERE id = 1 AND data->>'sync_days' = '45'`);
 
         if (!hadPerm) {
             await db.query(`UPDATE admin_users SET can_view_shipping = true, can_manage_shipping = true

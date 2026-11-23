@@ -4,6 +4,7 @@ export const BUCKETS = [
   { key: 'pending', label: 'Pending AWB' },
   { key: 'ready_to_ship', label: 'Ready to ship' },
   { key: 'ready_for_pickup', label: 'Ready for pickup' },
+  { key: 'not_picked', label: 'Not picked', tone: 'warning' },
   { key: 'in_transit', label: 'In transit' },
   { key: 'out_for_delivery', label: 'Out for delivery' },
   { key: 'ndr', label: 'Delivery failed', tone: 'warning' },

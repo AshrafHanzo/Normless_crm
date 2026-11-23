@@ -88,7 +88,7 @@ async function saveSettings(patch, by) {
             .filter(r => r.value && (r.box || r.item_g) && !seen.has(`${r.match}:${r.value}`) && seen.add(`${r.match}:${r.value}`));
     }
     for (const k of ['shopify_fulfil', 'sync_enabled', 'auto_pickup', 'alert_whatsapp']) if (k in patch) next[k] = !!patch[k];
-    if ('sync_days' in patch) next.sync_days = Math.min(90, Math.max(7, parseInt(patch.sync_days, 10) || 45));
+    if ('sync_days' in patch) next.sync_days = Math.min(365, Math.max(7, parseInt(patch.sync_days, 10) || 120));
     if ('alert_risk_days' in patch) next.alert_risk_days = Math.min(10, Math.max(1, parseInt(patch.alert_risk_days, 10) || 2));
     if ('pickup_time' in patch) next.pickup_time = /^\d{2}:\d{2}(:\d{2})?$/.test(patch.pickup_time) ? (patch.pickup_time.length === 5 ? `${patch.pickup_time}:00` : patch.pickup_time) : cur.pickup_time;
     if ('ops_phone' in patch) next.ops_phone = digits(patch.ops_phone).slice(-10);
@@ -309,12 +309,15 @@ async function sync({ actor } = {}) {
             // 2. Orders from the last few weeks that we hold no shipment for: shipped from the
             //    portal or its Shopify channel. Each asked about at most every six hours.
             const recent = (await db.query(
-                `SELECT o.order_number FROM orders o
+                `SELECT o.order_number, o.created_at > NOW() - INTERVAL '14 days' AS fresh FROM orders o
                   WHERE o.created_at > NOW() - ($1 || ' days')::interval
                     AND o.cancelled_at IS NULL
                     AND NOT EXISTS (SELECT 1 FROM shipments s WHERE s.order_number = o.order_number)
-                  ORDER BY o.created_at DESC LIMIT 1500`, [String(s.sync_days)])).rows.map(r => r.order_number);
-            const due = recent.filter(n => !lookedUp.has(n) || Date.now() - lookedUp.get(n) > 6 * 3600 * 1000);
+                  ORDER BY o.created_at DESC LIMIT 5000`, [String(s.sync_days)])).rows;
+            // Orders from the last two weeks are asked about on every sync, so one manifested in the
+            // portal shows up within half an hour; older ones every six hours.
+            const due = recent.filter(r => r.fresh || !lookedUp.has(r.order_number) || Date.now() - lookedUp.get(r.order_number) > 6 * 3600 * 1000)
+                .map(r => r.order_number);
             for (const S of await dlv.trackByOrder(due)) {
                 const r = await applyTracking(S, { createdVia: 'portal' });
                 if (r?.row && !r.was) found++;

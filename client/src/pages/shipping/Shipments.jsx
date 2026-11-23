@@ -149,7 +149,8 @@ export default function Shipments({ counts, bucket, setBucket, canManage, ship, 
                     <tr key={o.order_number}>
                       <td><input type="checkbox" checked={!!picked[o.order_number]} onChange={() => toggle(o)} aria-label={`Select ${o.order_number}`} /></td>
                       <td data-label="Order" className="cell-primary">{o.order_number}<div className="packed-sub">{dayTime(o.created_at)}</div>
-                        {o.cancelled_awb && <div className="packed-sub" style={{ color: 'var(--danger)' }}>Auto-cancelled before</div>}</td>
+                        {o.cancelled_awb && <div className="packed-sub" style={{ color: 'var(--danger)' }}>Auto-cancelled before</div>}
+                        {o.on_hold && <span className="status-badge on-hold" style={{ marginTop: 4 }}>On hold</span>}</td>
                       <td data-label="Customer">{o.customer_name || '—'}<div className="packed-sub">{[o.city, o.pincode].filter(Boolean).join(' · ')}</div></td>
                       <td data-label="Items" style={{ maxWidth: 280 }}>{o.items.slice(0, 2).join(', ')}{o.items.length > 2 ? ` +${o.items.length - 2}` : ''}</td>
                       <td data-label="Payment">{money(o.total_price)} <span className={`status-badge ${o.cod ? 'pending' : 'paid'}`}>{o.cod ? 'COD' : 'Prepaid'}</span></td>
