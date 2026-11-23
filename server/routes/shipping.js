@@ -45,8 +45,10 @@ const RETURNS = shipping.RETURN_BUCKETS;
 const READY_TO_SHIP = `bucket = 'waiting_pickup' AND COALESCE(status_code, 'X-UCI') = 'X-UCI'`;
 // "Not Picked" (X-PNP): Delhivery came and didn't get the parcel. The portal keeps these out of
 // Ready for pickup (they show under All shipments), and they are not cancelled either.
-const NOT_PICKED = `bucket = 'waiting_pickup' AND status_code = 'X-PNP'`;
+const NOT_PICKED = `bucket = 'waiting_pickup' AND status_code = 'X-PNP' AND recreated_as IS NULL`;
 const READY_FOR_PICKUP = `bucket = 'waiting_pickup' AND NOT (${READY_TO_SHIP}) AND COALESCE(status_code, '') <> 'X-PNP'`;
+// Not picked and since re-made under a new AWB: done with, counted nowhere.
+const NOT_PICKED_REMADE = `bucket = 'waiting_pickup' AND status_code = 'X-PNP' AND recreated_as IS NOT NULL`;
 // Shipments to customers only; return pickups are listed on their own.
 const FORWARD = `bucket <> ALL('{${RETURNS.join(',')}}')`;
 
@@ -63,7 +65,8 @@ async function counts() {
     out.not_ready = (await db.query(`SELECT COUNT(*)::int AS n FROM shipments WHERE bucket = 'waiting_pickup' AND status_code IN ('FMEOD-152','X-PNP')`)).rows[0].n;
     out.ready_to_ship = (await db.query(`SELECT COUNT(*)::int AS n FROM shipments WHERE ${READY_TO_SHIP}`)).rows[0].n;
     out.not_picked = (await db.query(`SELECT COUNT(*)::int AS n FROM shipments WHERE ${NOT_PICKED}`)).rows[0].n;
-    out.ready_for_pickup = out.waiting_pickup - out.ready_to_ship - out.not_picked;
+    out.ready_for_pickup = (await db.query(`SELECT COUNT(*)::int AS n FROM shipments WHERE ${READY_FOR_PICKUP}`)).rows[0].n;
+    out.not_picked_remade = (await db.query(`SELECT COUNT(*)::int AS n FROM shipments WHERE ${NOT_PICKED_REMADE}`)).rows[0].n;
     return out;
 }
 

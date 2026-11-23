@@ -195,9 +195,32 @@ function fromTracking(S) {
 const orderOf = (ref) => {
     const r = clean(ref);
     if (!r) return null;
-    const base = r.replace(/-R\d+$/i, '');
+    // A re-made order carries a suffix: "12654A" when cloned in the portal (the team's way, and
+    // now the CRM's too), "#13584-R1" from the CRM's first version.
+    const base = r.replace(/-R\d+$/i, '').replace(/^(#?\d+)[A-Z]$/i, '$1');
     return base.startsWith('#') ? base : `#${base}`;
 };
+const digitsOf = (orderNumber) => String(orderNumber || '').replace(/\D/g, '');
+/** Delhivery reference for the n-th re-make of an order: 12654A, 12654B… */
+const remakeRef = (orderNumber, n) => `${digitsOf(orderNumber)}${String.fromCharCode(64 + Math.min(Math.max(n, 1), 26))}`;
+
+/**
+ * A shipment found under a re-make reference replaces the order's earlier one that was never
+ * picked up (or was cancelled): link the two, and take the old one off the to-do lists.
+ */
+async function linkRemake(row) {
+    if (!row?.order_number || !/^#?\d+(?:[A-Z]|-R\d+)$/i.test(clean(row.delhivery_order))) return;
+    const old = (await db.query(
+        `SELECT id, awb, bucket FROM shipments
+          WHERE order_number = $1 AND id <> $2 AND recreated_as IS NULL AND COALESCE(direction, 'forward') = 'forward'
+            AND (status_code = 'X-PNP' OR bucket = 'cancelled')
+          ORDER BY id DESC LIMIT 1`, [row.order_number, row.id])).rows[0];
+    if (!old) return;
+    await db.query(`UPDATE shipments SET recreated_as = $2,
+                           cancel_handled = CASE WHEN bucket = 'cancelled' THEN COALESCE(cancel_handled, 'recreated') ELSE cancel_handled END,
+                           updated_at = CURRENT_TIMESTAMP WHERE id = $1`, [old.id, row.awb]);
+    await db.query(`UPDATE shipments SET recreated_from = COALESCE(recreated_from, $2) WHERE id = $1`, [row.id, old.awb]);
+}
 
 /**
  * Write what tracking says onto the row. Returns { row, was } so callers can see what changed.
@@ -245,6 +268,7 @@ async function applyTracking(S, { createdVia = 'portal' } = {}) {
     const r = await db.query(
         `INSERT INTO shipments (${ins.join(', ')}) VALUES (${ins.map((_, i) => `$${i + 1}`).join(', ')})
          ON CONFLICT (awb) DO NOTHING RETURNING *`, vals);
+    if (r.rows[0]) await linkRemake(r.rows[0]);
     return { row: r.rows[0], was: null };
 }
 
@@ -323,6 +347,21 @@ async function sync({ actor } = {}) {
                 if (r?.row && !r.was) found++;
             }
             for (const n of due) lookedUp.set(n, Date.now());
+
+            // 2b. Parcels Delhivery never picked up (or cancelled) are usually re-made in the
+            //     portal by cloning the order, which gives it "12654A". Look for those.
+            const stuck = (await db.query(
+                `SELECT DISTINCT order_number, (SELECT COUNT(*) FROM shipments t WHERE t.order_number = s.order_number
+                                                  AND COALESCE(t.direction, 'forward') = 'forward')::int AS n
+                   FROM shipments s
+                  WHERE recreated_as IS NULL AND order_number IS NOT NULL AND COALESCE(direction, 'forward') = 'forward'
+                    AND (status_code = 'X-PNP' OR (bucket = 'cancelled' AND cancel_handled IS NULL))`)).rows;
+            const refs = stuck.flatMap(x => [remakeRef(x.order_number, x.n), remakeRef(x.order_number, x.n + 1)]);
+            for (const S of await dlv.trackByOrder(refs)) {
+                const r = await applyTracking(S, { createdVia: 'portal' });
+                if (r?.row && !r.was) found++;
+                else if (r?.row) await linkRemake(r.row);
+            }
 
             // 3. Alerts. An auto-cancel is news once it has stood for three hours (some are picked
             //    up later the same day) and if it is from the last three days; older ones are
@@ -671,8 +710,10 @@ async function createMany(items, { actor, kind = 'create' } = {}) {
             const probs = problemsOf(facts);
             if (probs.length) throw new Error(probs.join('; '));
             // Delhivery refuses an order id it has seen, so a re-create gets "-R1", "-R2"…
-            const earlier = (await db.query('SELECT COUNT(*)::int AS n FROM shipments WHERE order_number = $1', [orderNumber])).rows[0].n;
-            const delhiveryOrder = earlier ? `${orderNumber}-R${earlier}` : orderNumber;
+            const earlier = (await db.query(`SELECT COUNT(*)::int AS n FROM shipments WHERE order_number = $1 AND COALESCE(direction, 'forward') = 'forward'`, [orderNumber])).rows[0].n;
+            // Delhivery refuses an order id it has seen, so a re-make is "12654A", "12654B"…, the
+            // same as cloning the order in the portal.
+            const delhiveryOrder = earlier ? remakeRef(orderNumber, earlier) : orderNumber;
             const choice = old ? {
                 box: it.box || old.box, weight_g: it.weight_g || old.weight_g, payment_mode: it.payment_mode || old.payment_mode,
                 cod_amount: it.cod_amount ?? (old.payment_mode === 'COD' ? old.cod_amount : undefined), shipping_mode: it.shipping_mode || old.shipping_mode,
