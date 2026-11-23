@@ -4,12 +4,12 @@ import { useToast } from '../../components/Toast'
 import Icon from '../../components/Icon'
 import Pagination from '../../components/Pagination'
 import useServerTable from '../../hooks/useServerTable'
-import { BUCKETS, BUCKET_BADGE, BUCKET_LABEL, day, dayTime, money, statusText, daysSince, plural } from './common'
+import { BUCKETS, BUCKET_BADGE, BUCKET_LABEL, day, dayTime, money, statusText, daysSince, plural, openLabels } from './common'
 
 const countOf = (counts, key) => (key === 'pending' ? counts.pending_awb : counts[key])
 const ORDER_LISTS = ['pending', 'on_hold']
 // Lists whose parcels still have a label worth printing.
-const LABEL_LISTS = ['ready_to_ship', 'ready_for_pickup', 'waiting_pickup', 'manual', 'all', 'in_transit', 'not_ready']
+const LABEL_LISTS = ['ready_to_ship', 'ready_for_pickup', 'waiting_pickup', 'manual', 'all', 'in_transit', 'not_ready', 'recreated', 'recreated_all']
 const NO_FILTERS = { manifested_from: '', manifested_to: '', ordered_from: '', ordered_to: '', product: '', color: '', variant_size: '' }
 
 /**
@@ -17,7 +17,7 @@ const NO_FILTERS = { manifested_from: '', manifested_to: '', ordered_from: '', o
  * need a shipment (Pending AWB, and the ones on hold that can't ship yet). Filters, paging and the
  * CSV download all go through the server, so the download is exactly the filtered list.
  */
-export default function Shipments({ counts, bucket, setBucket, canManage, ship, open, go, rev, searchSeed }) {
+export default function Shipments({ counts, bucket, setBucket, canManage, ship, open, go, rev, searchSeed, hideNav }) {
   const apiFetch = useApi()
   const toast = useToast()
   const t = useServerTable({ limit: 50 })
@@ -31,7 +31,6 @@ export default function Shipments({ counts, bucket, setBucket, canManage, ship, 
   const [showFilters, setShowFilters] = useState(false)
   const [facets, setFacets] = useState({ products: [], colors: [], sizes: [] })
   const [picked, setPicked] = useState({})     // key → row
-  const [labels, setLabels] = useState(null)   // [{ waybill, url }] after "Print labels"
   const [busy, setBusy] = useState('')
   const isOrders = ORDER_LISTS.includes(bucket)
   const isHold = bucket === 'on_hold'
@@ -40,7 +39,7 @@ export default function Shipments({ counts, bucket, setBucket, canManage, ship, 
 
   useEffect(() => { apiFetch('/api/shipping/filters').then(r => { if (r && !r.error) setFacets(r) }) }, []) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { const x = setTimeout(() => setTerm(search.trim()), 350); return () => clearTimeout(x) }, [search])
-  useEffect(() => { t.resetPage(); setPicked({}); setLabels(null) }, [bucket, term, payment, packed, filters]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { t.resetPage(); setPicked({}) }, [bucket, term, payment, packed, filters]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const params = () => {
     const f = { q: term, ...filters }
@@ -81,12 +80,8 @@ export default function Shipments({ counts, bucket, setBucket, canManage, ship, 
 
   const printLabels = async (ids) => {
     setBusy('labels')
-    const r = await apiFetch('/api/shipping/labels', { method: 'POST', body: JSON.stringify({ ids }) })
+    await openLabels(apiFetch, toast, { ids })
     setBusy('')
-    const list = (r?.labels || []).filter(l => l.url)
-    if (!list.length) return toast.error(r?.error || 'Delhivery returned no labels')
-    if (list.length === 1) window.open(list[0].url, '_blank', 'noreferrer')
-    setLabels(list)
   }
 
   const pickedList = Object.values(picked)
@@ -101,7 +96,7 @@ export default function Shipments({ counts, bucket, setBucket, canManage, ship, 
 
   return (
     <div className="ship-layout">
-      <nav className="ship-status-nav" aria-label="Shipment status">
+      {!hideNav && <nav className="ship-status-nav" aria-label="Shipment status">
         {BUCKETS.map(b => {
           const n = countOf(counts, b.key)
           return (
@@ -109,14 +104,14 @@ export default function Shipments({ counts, bucket, setBucket, canManage, ship, 
               {b.heading && <p className="ship-nav-heading">{b.heading}</p>}
               <button type="button" aria-current={bucket === b.key ? 'page' : undefined}
                 className={[bucket === b.key && 'active', b.sub && 'sub', b.tone].filter(Boolean).join(' ')}
-                onClick={() => (b.key === 'cancelled_open' ? go('cancelled') : setBucket(b.key))}>
+                onClick={() => (b.key === 'cancelled_open' ? go('cancelled') : b.key === 'recreated' ? go('recreated') : setBucket(b.key))}>
                 {b.label}
                 {n != null && <span className={`ship-count ${b.key === 'cancelled_open' && n > 0 ? 'hot' : ''}`}>{n.toLocaleString('en-IN')}</span>}
               </button>
             </Fragment>
           )
         })}
-      </nav>
+      </nav>}
 
       <section className="ship-main">
         {counts.cancelled_open > 0 && (
@@ -189,7 +184,7 @@ export default function Shipments({ counts, bucket, setBucket, canManage, ship, 
             <strong>{pickedList.length} selected</strong>
             {isOrders && <span className="packed-sub" style={{ margin: 0 }}>{pickedList.filter(o => !o.packed_at).length ? `${pickedList.filter(o => !o.packed_at).length} not packed yet` : 'All packed'}</span>}
             <div className="ship-bulk-actions">
-              <button className="btn btn-secondary btn-sm" onClick={() => { setPicked({}); setLabels(null) }}>Clear</button>
+              <button className="btn btn-secondary btn-sm" onClick={() => { setPicked({}) }}>Clear</button>
               {isOrders && !isHold && canManage && (
                 <button className="btn btn-primary btn-sm" onClick={() => ship(pickedList)}>
                   <Icon name="truck" size={14} /> Get AWB and labels for {pickedList.length}
@@ -201,14 +196,6 @@ export default function Shipments({ counts, bucket, setBucket, canManage, ship, 
                 </button>
               )}
             </div>
-          </div>
-        )}
-        {labels && labels.length > 1 && (
-          <div className="ship-alert info">
-            <strong>Labels ready</strong>
-            <span style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              {labels.map((l, i) => <a key={i} className="btn btn-secondary btn-sm" href={l.url} target="_blank" rel="noreferrer"><Icon name="printer" size={14} /> File {i + 1} ({String(l.waybill).split(',').length})</a>)}
-            </span>
           </div>
         )}
 

@@ -31,6 +31,7 @@ Open **Shipping** in the left menu. A red number on it means auto-cancelled parc
 | **Overview** | What needs doing first, counts for every status, delivery performance, and freight spend with a link to the Delhivery wallet |
 | **Shipments** | Every order and parcel by status, like the Delhivery portal's Orders page |
 | **Auto-cancelled** | Parcels Delhivery cancelled that still need a new AWB, or marking as not shipping |
+| **Re-created** | The new AWBs made for cancelled parcels, so their labels can be printed together and swapped |
 | **Pickups** | Book a pickup and see every parcel waiting, oldest first |
 | **Failed deliveries** | Delivery attempts that failed: re-attempt, change the phone or address, or have it returned |
 | **Activity** | Every bulk action and automatic job, with each failure and its reason |
@@ -109,9 +110,17 @@ If the pickup person comes and the parcel isn't handed over, Delhivery marks it 
 
 1. Open **Auto-cancelled**. Every parcel there still needs action.
 2. Tick the ones to send and press **Re-create**. Each gets a new AWB (13143A, then 13143B) with the same address, COD amount and packaging; pick another packaging first if needed.
-3. Print the new labels and **swap them for the old ones**. The old label is dead: the scanner warns if someone scans it.
+3. Print the new labels and **swap them for the old ones**: **Print new labels** in the result, or later from the **Re-created** tab (tick them, **Labels for N**). The old label is dead: the scanner warns if someone scans it.
 4. Book a pickup if today's has gone.
 5. For parcels that shouldn't go (the customer cancelled, it went another way), tick them and press **Mark as not shipping**.
+
+**Older orders: "Needs address"**
+
+The CRM's Shopify connection only sees the last 60 days of orders, and a parcel first made in the Delhivery portal has no street address or phone in the CRM. Such a parcel shows **Needs address**. Press **Add details**, copy the address and mobile from the order in Shopify admin (or from the old AWB in the portal), save, then re-create it. The name, city, pincode, payment and products come from the old parcel. Shopify isn't updated for these, and no WhatsApp goes out.
+
+**The Re-created tab**
+
+Lists the new AWBs made for cancelled parcels, in the CRM or cloned in the portal. **Waiting for pickup** shows the ones whose labels still need swapping; **All re-created** shows every one. Tick them and press **Labels for N** to print them in one go.
 
 **What the CRM does for you**
 
@@ -224,8 +233,9 @@ After about three failed attempts Delhivery sends it back by itself: **RTO in tr
 **Labels**
 
 - One parcel: the printer icon on its row, or **Label** inside the shipment.
-- Several: tick them and press **Labels for N**. Delhivery returns PDF files of up to 25 labels each; open and print each file.
-- Labels are 4×6 inches, ready for the thermal printer.
+- Several: tick them and press **Labels for N**. They open together in a new tab, one per page, and the print window comes up by itself.
+- Labels look the same as the Delhivery portal's (Settings → Shipping Label Config there): 4×6 inches for the thermal printer, with our logo, both barcodes, the sort code, payment and amount, seller and return address, and each product with its size, quantity and price. A parcel with many products runs onto a second page.
+- In the print window, choose the thermal printer, paper 4×6 in, margins None and scale 100%.
 
 ## Scanning at the packing table
 
@@ -297,7 +307,7 @@ Keep the balance above about a week of spend: when the wallet runs out, Delhiver
 | "Couldn't check Delhivery for existing AWBs" | Delhivery didn't answer. Nothing was created; try again in a minute |
 | A parcel stays in Ready for pickup for days | Make sure it is packed and labelled, book a pickup, and check the Pickups tab for "not ready when Delhivery came" |
 | The customer wants a new address after pickup | It can't be changed from the CRM. Ask Delhivery support, or let it come back and re-send it |
-| A label won't open | Press **Label** again: Delhivery's label links expire after a while |
+| A label won't open | Allow pop-ups for the CRM in the browser, then press **Label** again |
 | Freight shows — | The warehouse pincode is missing in Settings, or the shipment hasn't been priced yet (fills in over the next syncs) |
 | Counts differ from the Delhivery portal | Pending AWB leaves out held orders (listed under On hold). Delivered and All shipments in the CRM cover about the last 120 days; the portal counts all time |
 | Shopify not updated (on a shipment) | The message says why. The AWB itself is fine; tell an admin if it repeats |

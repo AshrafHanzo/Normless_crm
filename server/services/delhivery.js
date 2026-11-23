@@ -91,6 +91,16 @@ async function labels(awbs, size = '4R') {
     return out;
 }
 
+/** The label data (no PDF) for these AWBs: barcodes, sort code, logos, addresses. */
+async function slips(awbs) {
+    const out = [];
+    for (const group of chunks(awbs, 25)) {
+        const d = await call(`/api/p/packing_slip?wbns=${group.map(encodeURIComponent).join(',')}&pdf=false`, { timeout: 90000 });
+        out.push(...(d?.packages || []));
+    }
+    return out;
+}
+
 /** Book a pickup. date YYYY-MM-DD, time hh:mm:ss. */
 async function requestPickup({ date, time, location, count }) {
     return call('/fm/request/new/', { method: 'POST', json: { pickup_time: time, pickup_date: date, pickup_location: location, expected_package_count: count } });
@@ -137,5 +147,5 @@ async function trackByOrder(orderNumbers) {
 
 module.exports = {
     configured, DelhiveryError,
-    pincode, charges, createShipments, labels, requestPickup, cancel, edit, reattempt, requestStatus, track, trackByOrder,
+    pincode, charges, createShipments, labels, slips, requestPickup, cancel, edit, reattempt, requestStatus, track, trackByOrder,
 };

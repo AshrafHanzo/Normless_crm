@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { useApi } from '../../App'
 import { useToast } from '../../components/Toast'
 import Icon from '../../components/Icon'
+import { openLabels } from './common'
 
 const pinOf = (text) => (String(text || '').match(/\b[1-9]\d{5}\b/) || [])[0] || ''
 
@@ -85,8 +86,7 @@ export default function ManualShipDrawer({ prefill = {}, onClose, onDone }) {
                 <h3 style={{ color: 'var(--success)' }}>AWB created</h3>
                 <div className="ship-ok"><b>{result.ref}</b><span className="ship-mono">{result.awb}</span></div>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  {result.label_url ? <a className="btn btn-primary btn-sm" href={result.label_url} target="_blank" rel="noreferrer"><Icon name="printer" size={14} /> Open label (4×6)</a>
-                    : <span className="packed-sub">Label not ready yet: use Reprint label on the shipment.</span>}
+                  <button type="button" className="btn btn-primary btn-sm" onClick={() => openLabels(apiFetch, toast, { awbs: [result.awb] })}><Icon name="printer" size={14} /> Print label (4×6)</button>
                   <a className="btn btn-secondary btn-sm" href={result.tracking_url} target="_blank" rel="noreferrer"><Icon name="external" size={14} /> Tracking</a>
                 </div>
                 {prefill.source_ref && <p className="packed-sub" style={{ maxWidth: 'none', margin: 0 }}>The AWB has been saved on the {prefill.source_ref.startsWith('support') ? 'ticket' : 'marketing order'}.</p>}

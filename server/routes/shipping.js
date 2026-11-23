@@ -116,6 +116,9 @@ function shipmentFilter(q) {
     else if (bucket === 'not_ready') where.push(`s.bucket = 'waiting_pickup' AND s.status_code IN ('FMEOD-152','X-PNP')`);
     else if (bucket === 'returns') where.push(`s.bucket = ANY('{${RETURNS.join(',')}}')`);
     else if (bucket === 'manual') where.push(`s.source = 'manual'`);
+    // Re-made parcels (from the CRM or cloned in the portal): the new labels to print and swap.
+    else if (bucket === 'recreated') where.push(`s.recreated_from IS NOT NULL AND s.bucket = 'waiting_pickup'`);
+    else if (bucket === 'recreated_all') where.push(`s.recreated_from IS NOT NULL`);
     else if (bucket === 'everything') { /* the top search: every shipment, returns too */ }
     else if (BUCKETS.includes(bucket) || RETURNS.includes(bucket)) { vals.push(bucket); where.push(`s.bucket = $${vals.length}`); }
     else where.push(FORWARD);
@@ -195,6 +198,7 @@ async function counts() {
     out.ready_to_ship = (await db.query(`SELECT COUNT(*)::int AS n FROM shipments s WHERE ${READY_TO_SHIP}`)).rows[0].n;
     out.ready_for_pickup = (await db.query(`SELECT COUNT(*)::int AS n FROM shipments s WHERE ${READY_FOR_PICKUP}`)).rows[0].n;
     out.manual = (await db.query(`SELECT COUNT(*)::int AS n FROM shipments WHERE source = 'manual'`)).rows[0].n;
+    out.recreated = (await db.query(`SELECT COUNT(*)::int AS n FROM shipments WHERE recreated_from IS NOT NULL AND bucket = 'waiting_pickup'`)).rows[0].n;
     return out;
 }
 
@@ -359,7 +363,10 @@ router.get('/shipments', async (req, res) => {
                     s.expected_delivery, s.delivered_at, s.ndr_attempts, s.ndr_reason, s.ndr_action, s.ndr_action_at,
                     s.cancelled_at, s.cancel_kind, s.cancel_handled, s.recreated_from, s.recreated_as, s.shopify_fulfilled, s.shopify_error,
                     s.label_url, s.created_by, s.created_at, s.products_desc, o.created_at AS ordered_at, o.line_items_json,
-                    s.charge_estimate, s.charge_zone, s.charge_cod, s.pieces, s.charged_weight_g
+                    s.charge_estimate, s.charge_zone, s.charge_cod, s.pieces, s.charged_weight_g,
+                    s.consignee_state, s.consignee_address, s.consignee_phone,
+                    (o.id IS NULL OR o.created_at < NOW() - INTERVAL '58 days') AS outside_shopify,
+                    (SELECT row_to_json(ov) FROM shipping_overrides ov WHERE ov.order_number = s.order_number) AS details
              ${SHIPMENTS_FROM(where)} ${t.orderBy} LIMIT $${vals.length - 1} OFFSET $${vals.length}`, vals)).rows;
         res.json({
             total, pagination: pagination(total, t),
@@ -478,6 +485,25 @@ router.post('/shipments/:id/edit', manage, async (req, res) => {
 router.post('/reattempt', manage, async (req, res) => {
     try { res.json(await shipping.reattempt(ids(req.body?.ids || []), me(req))); }
     catch (err) { fail(res, err, 'ask for a re-attempt'); }
+});
+
+/**
+ * POST /labels/print { ids } or { awbs } — the labels as the Delhivery portal prints them (4 × 6 in),
+ * as one printable page.
+ */
+router.post('/labels/print', async (req, res) => {
+    try {
+        let awbs = (Array.isArray(req.body?.awbs) ? req.body.awbs : []).map(String).filter(a => /^\d{6,20}$/.test(a));
+        const idList = ids(req.body?.ids || []);
+        if (idList.length) {
+            const rows = (await db.query('SELECT id, awb FROM shipments WHERE id = ANY($1)', [idList])).rows;
+            const byId = new Map(rows.map(r => [r.id, r.awb]));
+            awbs = [...awbs, ...idList.map(i => byId.get(i)).filter(Boolean)];
+        }
+        const { html, missing } = await require('../services/shipping-label').labelsHtml(awbs.slice(0, 300), (list) => dlv.slips(list));
+        if (missing.length) res.set('X-Labels-Missing', missing.join(','));
+        res.type('html').send(html);
+    } catch (err) { fail(res, err, 'make the labels'); }
 });
 
 /** POST /labels { ids } — fresh label links (Delhivery's links expire). */

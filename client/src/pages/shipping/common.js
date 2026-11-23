@@ -12,6 +12,7 @@ export const BUCKETS = [
   { key: 'rto_returned', label: 'Returned (RTO)' },
   { key: 'delivered', label: 'Delivered' },
   { key: 'cancelled_open', label: 'Auto-cancelled', tone: 'danger' },
+  { key: 'recreated', label: 'Re-created', sub: true },
   { key: 'cancelled', label: 'All cancelled', sub: true },
   { key: 'all', label: 'All shipments' },
   { key: 'manual', label: 'Manual shipments', sub: true },
@@ -28,6 +29,7 @@ export const BUCKET_LABEL = Object.fromEntries(BUCKETS.map(b => [b.key, b.label]
 BUCKET_LABEL.lost = 'Lost'
 BUCKET_LABEL.waiting_pickup = 'Awaiting pickup'
 BUCKET_LABEL.everything = 'Search results'
+BUCKET_LABEL.recreated_all = 'Re-created'
 Object.assign(BUCKET_LABEL, { return_pickup: 'Return: waiting for pickup', return_transit: 'Return: on the way back', return_done: 'Return received', return_closed: 'Return closed' })
 
 // Which status-badge colour each bucket wears.
@@ -66,3 +68,24 @@ export const statusText = (s) => {
 }
 
 export const plural = (n, word, many) => `${n} ${n === 1 ? word : (many || `${word}s`)}`
+
+/**
+ * Open labels the way the Delhivery portal prints them (4 × 6 in) in a new tab, which prints
+ * itself. `which` = { ids } (shipment ids) or { awbs }. The tab opens first so the browser
+ * doesn't block it as a pop-up.
+ */
+export async function openLabels(apiFetch, toast, which) {
+  const w = window.open('', '_blank')
+  if (w) w.document.write('<p style="font:15px Arial,sans-serif;padding:24px">Preparing labels…</p>')
+  const r = await apiFetch('/api/shipping/labels/print', { method: 'POST', body: JSON.stringify(which), responseType: 'blob' })
+  if (!r || r.error || !r.blob) {
+    if (w) w.close()
+    toast.error(r?.error || 'Could not make the labels')
+    return false
+  }
+  const url = URL.createObjectURL(new Blob([r.blob], { type: 'text/html' }))
+  if (w) w.location.href = url
+  else window.open(url, '_blank')
+  setTimeout(() => URL.revokeObjectURL(url), 120000)
+  return true
+}

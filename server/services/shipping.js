@@ -488,7 +488,7 @@ async function shopifyOrder(shopifyId) {
     } catch (err) {
         throw new Error(`Couldn't reach Shopify to read the address (${err.message})`);
     }
-    if (res.status === 404) throw new Error('Shopify no longer returns this order (older than 60 days?)');
+    if (res.status === 404) throw Object.assign(new Error('Shopify no longer returns this order (older than 60 days?)'), { tooOld: true });
     if (!res.ok) throw new Error(`Shopify order request failed (${res.status})`);
     return (await res.json()).order;
 }
@@ -591,6 +591,30 @@ function orderFacts(o) {
         quantity: qty || 1,
         lines: items.map(li => ({ product_id: li.product_id ? String(li.product_id) : null, title: li.title, qty: li.current_quantity ?? li.quantity, grams: Number(li.grams) || 0 })),
         tags: o.tags || '',
+    };
+}
+
+/**
+ * Facts for re-making a parcel when Shopify can't supply the order (older than the app's 60 days,
+ * or an exchange made in the portal): the cancelled shipment's own details, with the CRM's copy of
+ * the order for products and phone. A portal-made parcel has no street address in the CRM, so the
+ * team adds it with "Add details" (an override) first.
+ */
+function factsFromShipment(old, o) {
+    let items = [];
+    try { items = typeof o?.line_items_json === 'string' ? JSON.parse(o.line_items_json) : (o?.line_items_json || []); } catch { items = []; }
+    const qty = items.reduce((n, li) => n + (Number(li.quantity) || 0), 0);
+    const phone = digits(old.consignee_phone || (o?.phones || []).find(p => /^[6-9]\d{9}$/.test(digits(p).slice(-10))) || '').slice(-10);
+    const cod = old.payment_mode === 'COD';
+    return {
+        name: clean(old.consignee_name), add: clean(old.consignee_address), city: clean(old.consignee_city),
+        state: clean(old.consignee_state), pin: digits(old.consignee_pincode).slice(0, 6), phone,
+        payment_mode: cod ? 'COD' : 'Prepaid', cod_amount: cod ? Number(old.cod_amount) || 0 : 0,
+        total_amount: Number(old.total_amount) || Number(o?.total_price) || 0,
+        products_desc: clean(old.products_desc) || items.map(li => `${li.title}${li.variant ? ` - ${li.variant}` : ''} x${li.quantity}`).join(', ').slice(0, 480) || 'Apparel',
+        quantity: Number(old.pieces) || qty || 1,
+        lines: items.map(li => ({ product_id: li.shopify_product_id ? String(li.shopify_product_id) : null, title: li.title, qty: Number(li.quantity) || 1, grams: 0 })),
+        tags: '', from_shipment: true,
     };
 }
 
@@ -921,19 +945,26 @@ async function createMany(items, { actor, kind = 'create' } = {}) {
     for (const it of items) {
         const orderNumber = clean(it.order_number);
         try {
-            const o = (await db.query('SELECT shopify_id, cancelled_at, on_hold FROM orders WHERE order_number = $1', [orderNumber])).rows[0];
-            if (!o) throw new Error('order isn\'t in the CRM');
-            if (o.cancelled_at) throw new Error('order is cancelled in Shopify');
-            // On hold is usually a return waiting for a decision: it ships only once Shopify releases it.
-            if (o.on_hold) throw new Error('order is on hold in Shopify; it can ship once it is released');
+            const o = (await db.query('SELECT shopify_id, cancelled_at, on_hold, line_items_json, phones, total_price FROM orders WHERE order_number = $1', [orderNumber])).rows[0];
             const old = it.recreate_of ? (await db.query('SELECT * FROM shipments WHERE id = $1', [it.recreate_of])).rows[0] : null;
+            // A re-make can go without the CRM's order (an exchange made in the portal): the old parcel has the details.
+            if (!o && !old) throw new Error('order isn\'t in the CRM');
+            if (o?.cancelled_at) throw new Error('order is cancelled in Shopify');
+            // On hold is usually a return waiting for a decision: it ships only once Shopify releases it.
+            if (o?.on_hold) throw new Error('order is on hold in Shopify; it can ship once it is released');
             const active = await activeAwb(orderNumber, old?.id || null);
             if (active) throw new Error(alreadyHas(active));
-            const so = await shopifyOrder(o.shopify_id);
-            if (so.cancelled_at) throw new Error('order is cancelled in Shopify');
-            const facts = withOverride(orderFacts(so), await overrideFor(orderNumber));
+            let so = null;
+            if (o?.shopify_id) {
+                try { so = await shopifyOrder(o.shopify_id); } catch (err) { if (!(old && err.tooOld)) throw err; }
+            }
+            if (so?.cancelled_at) throw new Error('order is cancelled in Shopify');
+            const facts = withOverride(so ? orderFacts(so) : factsFromShipment(old, o), await overrideFor(orderNumber));
             const probs = problemsOf(facts);
-            if (probs.length) throw new Error(probs.join('; '));
+            if (probs.length) {
+                throw new Error(so ? probs.join('; ')
+                    : `${probs.join('; ')}. Shopify no longer shows this order, so add the delivery details with "Add details" and re-create again`);
+            }
             // Delhivery refuses an order id it has seen, so a re-create gets "-R1", "-R2"…
             const earlier = (await db.query(`SELECT COUNT(*)::int AS n FROM shipments WHERE order_number = $1 AND COALESCE(direction, 'forward') = 'forward'`, [orderNumber])).rows[0].n;
             // Delhivery refuses an order id it has seen, so a re-make is "12654A", "12654B"…, the
@@ -945,7 +976,7 @@ async function createMany(items, { actor, kind = 'create' } = {}) {
                 length_cm: old.length_cm, width_cm: old.width_cm, height_cm: old.height_cm,
             } : it;
             const p = payloadFor(facts, choice, s, delhiveryOrder, await packFor(facts, s));
-            ready.push({ orderNumber, delhiveryOrder, shopifyId: o.shopify_id, facts, old, ...p });
+            ready.push({ orderNumber, delhiveryOrder, shopifyId: o?.shopify_id || null, inShopify: !!so, facts, old, ...p });
         } catch (err) {
             errors.push({ order_number: orderNumber, error: err.message });
         }
@@ -1006,6 +1037,7 @@ async function createMany(items, { actor, kind = 'create' } = {}) {
     let shopifyNote = null;
     if (created.length && s.shopify_fulfil) {
         for (const c of created) {
+            if (!c.inShopify) continue;      // Shopify no longer shows the order (or never had it)
             try {
                 await shopifyFulfil(c.shopifyId, c.awb, { replacingAwb: c.old?.awb });
                 await db.query('UPDATE shipments SET shopify_fulfilled = true, shopify_error = NULL WHERE awb = $1', [c.awb]);

@@ -13,6 +13,7 @@ import ShippingSettings from './shipping/ShippingSettings'
 import ShipDrawer from './shipping/ShipDrawer'
 import ShipmentDrawer from './shipping/ShipmentDrawer'
 import ManualShipDrawer from './shipping/ManualShipDrawer'
+import Recreated from './shipping/Recreated'
 import TeamGuide from '../components/TeamGuide'
 import { ago } from './shipping/common'
 
@@ -20,6 +21,7 @@ const TABS = [
   { key: 'overview', label: 'Overview' },
   { key: 'shipments', label: 'Shipments' },
   { key: 'cancelled', label: 'Auto-cancelled', count: 'cancelled_open', hot: true },
+  { key: 'recreated', label: 'Re-created', count: 'recreated' },
   { key: 'pickups', label: 'Pickups' },
   { key: 'ndr', label: 'Failed deliveries', count: 'ndr_open' },
   { key: 'activity', label: 'Activity' },
@@ -191,6 +193,7 @@ export default function Shipping() {
       {tab === 'overview' && <Overview {...shared} settings={settings} />}
       {tab === 'shipments' && <Shipments key={`${bucket}|${searchSeed}`} {...shared} bucket={bucket} searchSeed={searchSeed} setBucket={(b) => { setSearchSeed(''); go('shipments', b) }} />}
       {tab === 'cancelled' && <AutoCancelled {...shared} />}
+      {tab === 'recreated' && <Recreated {...shared} />}
       {tab === 'pickups' && <Pickups {...shared} />}
       {tab === 'ndr' && <FailedDeliveries {...shared} />}
       {tab === 'activity' && <Activity {...shared} />}

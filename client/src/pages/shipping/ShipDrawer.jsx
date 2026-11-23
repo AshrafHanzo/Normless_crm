@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useApi } from '../../App'
 import { useToast } from '../../components/Toast'
 import Icon from '../../components/Icon'
-import { money, plural } from './common'
+import { money, plural, openLabels } from './common'
 import DetailsForm from './DetailsForm'
 
 /**
@@ -103,16 +103,10 @@ export default function ShipDrawer({ orders, settings, onClose, onDone, editFirs
                   {result.created.map(c => (
                     <div key={c.awb} className="ship-ok"><b>{c.order_number}</b><span className="ship-mono">{c.awb}</span></div>
                   ))}
-                  {result.labels.length > 0 ? (
-                    <div className="ship-label-list">
-                      <p className="ship-section-title">Labels (4×6)</p>
-                      {result.labels.map(l => (
-                        <a key={l.waybill} className="btn btn-secondary btn-sm" href={l.url} target="_blank" rel="noreferrer">
-                          <Icon name="printer" size={14} /> Open label {l.waybill.includes(',') ? `for ${l.waybill.split(',').length}` : l.waybill}
-                        </a>
-                      ))}
-                    </div>
-                  ) : <p className="packed-sub">Labels weren't ready. Use Reprint label on each shipment.</p>}
+                  <button type="button" className="btn btn-primary btn-sm" style={{ alignSelf: 'flex-start' }}
+                    onClick={() => openLabels(apiFetch, toast, { awbs: result.created.map(c => c.awb) })}>
+                    <Icon name="printer" size={14} /> Print {result.created.length === 1 ? 'label' : `${result.created.length} labels`} (4×6)
+                  </button>
                 </section>
               )}
               {result.failed.length > 0 && (

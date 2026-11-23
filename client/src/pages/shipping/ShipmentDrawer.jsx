@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useApi } from '../../App'
 import { useToast } from '../../components/Toast'
 import Icon from '../../components/Icon'
-import { BUCKET_BADGE, BUCKET_LABEL, dayTime, money, statusText, trackingUrl } from './common'
+import { BUCKET_BADGE, BUCKET_LABEL, dayTime, money, statusText, trackingUrl, openLabels } from './common'
 
 /** One shipment: where it is, every scan, and what can still be done to it. */
 export default function ShipmentDrawer({ id, canManage, settings, onClose, onChanged, onRecreate }) {
@@ -32,9 +32,7 @@ export default function ShipmentDrawer({ id, canManage, settings, onClose, onCha
   const act = async (key, fn) => { setBusy(key); try { await fn() } finally { setBusy('') } }
   const copy = () => navigator.clipboard.writeText(link).then(() => toast.success('Tracking link copied'), () => window.open(link, '_blank', 'noreferrer'))
   const label = () => act('label', async () => {
-    const r = await apiFetch('/api/shipping/labels', { method: 'POST', body: JSON.stringify({ ids: [s.id] }) })
-    const url = r?.labels?.find(l => l.url)?.url
-    if (url) window.open(url, '_blank', 'noreferrer'); else toast.error(r?.error || 'Delhivery returned no label')
+    await openLabels(apiFetch, toast, { ids: [s.id] })
   })
   const cancel = () => act('cancel', async () => {
     const before = s.bucket === 'waiting_pickup'

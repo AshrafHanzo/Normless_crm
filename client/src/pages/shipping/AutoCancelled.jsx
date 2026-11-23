@@ -2,7 +2,8 @@ import { useState, useEffect } from 'react'
 import { useApi } from '../../App'
 import { useToast } from '../../components/Toast'
 import Icon from '../../components/Icon'
-import { dayTime, money, plural } from './common'
+import DetailsForm from './DetailsForm'
+import { dayTime, money, plural, openLabels } from './common'
 
 /**
  * Shipments Delhivery cancelled because they weren't picked up in time. The parcel is still on
@@ -17,6 +18,8 @@ export default function AutoCancelled({ canManage, settings, changed, open, go, 
   const [box, setBox] = useState('')
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState(null)
+  const [editing, setEditing] = useState(null)   // the row whose delivery details are being added
+  const [saving, setSaving] = useState(false)
 
   useEffect(() => {
     apiFetch('/api/shipping/shipments?bucket=cancelled_open&limit=300').then(r => {
@@ -40,6 +43,18 @@ export default function AutoCancelled({ canManage, settings, changed, open, go, 
     setResult(r)
     changed()
   }
+  // Shopify only shows the app the last 60 days of orders, and a parcel made in the portal has no
+  // street address or phone in the CRM: those need the details typed in before they can be re-made.
+  const needsDetails = (s) => s.outside_shopify && !(s.details?.address || s.consignee_address)
+  const saveDetails = async (v) => {
+    setSaving(true)
+    const r = await apiFetch(`/api/shipping/orders/${encodeURIComponent(editing.order_number)}/details`, { method: 'PUT', body: JSON.stringify(v) })
+    setSaving(false)
+    if (!r || r.error) return toast.error(r?.error || 'Could not save the details')
+    toast.success(`Details saved for ${editing.order_number}`)
+    setEditing(null)
+    changed()
+  }
   const notShipping = async () => {
     if (!await toast.confirm({ title: `Mark ${plural(ids.length, 'shipment')} as not shipping?`, message: 'They stop showing as alerts. Use this when the customer cancelled or the order is shipping some other way.' })) return
     const r = await apiFetch('/api/shipping/not-shipping', { method: 'POST', body: JSON.stringify({ ids }) })
@@ -61,11 +76,14 @@ export default function AutoCancelled({ canManage, settings, changed, open, go, 
             <h3 style={{ color: 'var(--success)' }}>{plural(result.created.length, 'new AWB')}</h3>
             {result.created.map(c => <div key={c.awb} className="ship-ok"><b>{c.order_number}</b><span className="ship-mono">{c.awb}</span></div>)}
             {result.failed.map((f, i) => <div key={i} className="ship-err"><b>{f.order_number}</b><span>{f.error}</span></div>)}
-            {result.labels.map(l => (
-              <a key={l.waybill} className="btn btn-secondary btn-sm" style={{ alignSelf: 'flex-start' }} href={l.url} target="_blank" rel="noreferrer">
-                <Icon name="printer" size={14} /> Open new label {l.waybill.includes(',') ? `for ${l.waybill.split(',').length}` : l.waybill}
-              </a>
-            ))}
+            {result.created.length > 0 && (
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <button className="btn btn-primary btn-sm" onClick={() => openLabels(apiFetch, toast, { awbs: result.created.map(c => c.awb) })}>
+                  <Icon name="printer" size={14} /> Print {result.created.length === 1 ? 'the new label' : `${result.created.length} new labels`}
+                </button>
+                <button className="btn btn-secondary btn-sm" onClick={() => go('recreated')}>Re-created tab</button>
+              </div>
+            )}
             {result.warnings?.map((w, i) => <p key={i} className="packed-sub" style={{ color: 'var(--warning)', maxWidth: 'none' }}>{w}</p>)}
             <p className="packed-sub" style={{ maxWidth: 'none' }}>Swap each old label for the new one before the next pickup.</p>
           </section>
@@ -84,7 +102,7 @@ export default function AutoCancelled({ canManage, settings, changed, open, go, 
                   <thead><tr>
                     <th style={{ width: 36 }}><input type="checkbox" checked={all} aria-label="Select all"
                       onChange={() => setPicked(all ? {} : Object.fromEntries(rows.map(s => [s.id, true])))} /></th>
-                    <th>Order</th><th>Customer</th><th>Old AWB</th><th>Cancelled</th><th>Payment</th>
+                    <th>Order</th><th>Customer</th><th>Old AWB</th><th>Cancelled</th><th>Payment</th><th>Details</th>
                   </tr></thead>
                   <tbody>
                     {rows.map(s => (
@@ -96,12 +114,37 @@ export default function AutoCancelled({ canManage, settings, changed, open, go, 
                         <td data-label="Old AWB" className="ship-mono" style={{ textDecoration: 'line-through', color: 'var(--text-muted)' }}>{s.awb}</td>
                         <td data-label="Cancelled">{dayTime(s.cancelled_at || s.status_at)}<div className="packed-sub">{s.instructions || s.status}</div></td>
                         <td data-label="Payment">{s.payment_mode === 'COD' ? `COD ${money(s.cod_amount)}` : (s.payment_mode || '—')}</td>
+                        <td data-label="Details">
+                          {needsDetails(s)
+                            ? <span className="status-badge on-hold" title="Shopify no longer shows this order, so the CRM needs the address and phone">Needs address</span>
+                            : s.details ? <span className="packed-sub" style={{ margin: 0, color: 'var(--warning)' }}>Details added</span> : null}
+                          {canManage && (s.outside_shopify || s.details) && (
+                            <div><button className="mini-btn" onClick={() => setEditing(s)}>{s.details ? 'Edit details' : 'Add details'}</button></div>
+                          )}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
             </div>
+
+            {editing && (
+              <section className="ship-card" style={{ marginTop: 18 }}>
+                <h3>Delivery details for {editing.order_number}</h3>
+                <p className="packed-sub" style={{ maxWidth: 'none', marginTop: 0 }}>
+                  Shopify no longer shows this order to the CRM (it only sees the last 60 days), and the old parcel was made in the Delhivery portal,
+                  so its street address and phone aren't in the CRM. Copy them from the order in Shopify admin or from the old AWB in the portal.
+                </p>
+                <DetailsForm key={editing.id} busy={saving} submitLabel="Save details" onCancel={() => setEditing(null)} onSubmit={saveDetails}
+                  initial={{
+                    name: editing.details?.name || editing.consignee_name, phone: editing.details?.phone || editing.consignee_phone,
+                    address: editing.details?.address || editing.consignee_address, city: editing.details?.city || editing.consignee_city,
+                    state: editing.details?.state || editing.consignee_state, pincode: editing.details?.pincode || editing.consignee_pincode,
+                    products_desc: editing.details?.products_desc || editing.products_desc,
+                  }} />
+              </section>
+            )}
 
             {canManage && (
               <section className="ship-card" style={{ marginTop: 18, borderColor: 'color-mix(in srgb, var(--primary) 45%, transparent)' }}>
