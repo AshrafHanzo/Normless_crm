@@ -44,6 +44,7 @@ async function getSettings() {
     if (!Array.isArray(s.boxes) || !s.boxes.length || s.boxes.every(b => !b.kind)) s.boxes = DEFAULT_SETTINGS.boxes;
     if (!s.boxes.some(b => b.key === s.default_box)) s.default_box = s.boxes[0].key;
     if (!Array.isArray(s.pack_rules)) s.pack_rules = [];
+    if (!Array.isArray(s.combo_rules)) s.combo_rules = [];
     // The warehouse name as Delhivery has it: whatever recent shipments were picked up from.
     const seen = (await db.query(
         `SELECT pickup_location FROM shipments WHERE pickup_location IS NOT NULL AND created_at > NOW() - INTERVAL '60 days'
@@ -86,6 +87,19 @@ async function saveSettings(patch, by) {
                 item_g: Number(r.item_g) > 0 ? Math.round(Number(r.item_g)) : null,
             }))
             .filter(r => r.value && (r.box || r.item_g) && !seen.has(`${r.match}:${r.value}`) && seen.add(`${r.match}:${r.value}`));
+    }
+    if (Array.isArray(patch.combo_rules)) {
+        const keys = new Set(next.boxes.map(b => b.key));
+        const n = (v) => (Number(v) > 0 ? Math.round(Number(v)) : null);
+        next.combo_rules = patch.combo_rules.slice(0, 100).map(r => ({
+            label: str(r.label, 80),
+            when: (Array.isArray(r.when) ? r.when : []).slice(0, 10)
+                .map(w => ({ match: w.match === 'product' ? 'product' : 'type', value: clean(w.value).slice(0, 120), label: str(w.label, 160), min_qty: n(w.min_qty) || 1 }))
+                .filter(w => w.value),
+            items_min: n(r.items_min), items_max: n(r.items_max),
+            box: keys.has(clean(r.box)) ? clean(r.box) : '',
+            weight_g: n(r.weight_g),
+        })).filter(r => r.box && (r.when.length || r.items_min || r.items_max));
     }
     for (const k of ['shopify_fulfil', 'sync_enabled', 'auto_pickup', 'alert_whatsapp']) if (k in patch) next[k] = !!patch[k];
     if ('sync_days' in patch) next.sync_days = Math.min(365, Math.max(7, parseInt(patch.sync_days, 10) || 120));
@@ -222,6 +236,20 @@ async function linkRemake(row) {
                            cancel_handled = CASE WHEN bucket = 'cancelled' THEN COALESCE(cancel_handled, 'recreated') ELSE cancel_handled END,
                            updated_at = CURRENT_TIMESTAMP WHERE id = $1`, [old.id, row.awb]);
     await db.query(`UPDATE shipments SET recreated_from = COALESCE(recreated_from, $2) WHERE id = $1`, [row.id, old.awb]);
+    // Made in the portal in the last two days: Shopify still has the old number, and so does the
+    // customer. Older links are history (they were dealt with before the CRM was watching).
+    const fresh = row.manifested_at && Date.now() - new Date(row.manifested_at).getTime() < 2 * 86400000;
+    if (!fresh || row.created_via !== 'portal') return;
+    try {
+        const s = await getSettings();
+        const o = (await db.query('SELECT shopify_id FROM orders WHERE order_number = $1', [row.order_number])).rows[0];
+        if (!s.shopify_fulfil || !o?.shopify_id) return;
+        const done = await shopifyFulfil(o.shopify_id, row.awb, { replacingAwb: old.awb });
+        await db.query('UPDATE shipments SET shopify_fulfilled = true, shopify_error = NULL WHERE id = $1', [row.id]);
+        if (done === 'updated') await notifyNewTracking(o.shopify_id, row.awb);
+    } catch (err) {
+        await db.query('UPDATE shipments SET shopify_error = $2 WHERE id = $1', [row.id, err.message.slice(0, 300)]);
+    }
 }
 
 /**
@@ -364,6 +392,9 @@ async function sync({ actor } = {}) {
                 else if (r?.row) await linkRemake(r.row);
             }
 
+            // 2d. Support tickets and marketing orders carry the current AWB.
+            try { await linkTracking(); } catch (err) { errors.push({ error: `Linking tracking to support/marketing: ${err.message}` }); }
+
             // 2c. A cancelled shipment already replaced by a new AWB is dealt with (it may have been
             //     linked before it counted as cancelled).
             await db.query(
@@ -477,6 +508,8 @@ async function shopifyFulfil(shopifyId, awb, { replacingAwb } = {}) {
         fulfillmentOrders(first: 20) { nodes { id status } } } }`, { id: gid });
     const order = d?.order;
     if (!order) throw new Error('Order not found in Shopify');
+    // Already carrying this number (Delhivery's own Shopify app may have put it there).
+    if ((order.fulfillments || []).some(f => f.status !== 'CANCELLED' && (f.trackingInfo || []).some(t => t.number === String(awb)))) return 'already_has';
     const existing = (order.fulfillments || []).find(f => f.status !== 'CANCELLED'
         && (f.trackingInfo || []).some(t => replacingAwb && t.number === String(replacingAwb)));
     if (existing) {
@@ -498,6 +531,24 @@ async function shopifyFulfil(shopifyId, awb, { replacingAwb } = {}) {
     const ue = r?.fulfillmentCreate?.userErrors || [];
     if (ue.length) throw new Error(ue.map(e => e.message).join('; '));
     return 'created';
+}
+
+/**
+ * Send the customer the "Shipped with tracking" WhatsApp again, with the new AWB. Returns a note
+ * when it couldn't go (null when it went, or the message isn't set up).
+ */
+async function notifyNewTracking(shopifyId, awb) {
+    try {
+        const r = await require('./nl-automations').sendTrackingUpdate(shopifyId, awb);
+        if (r?.status === 'sent') {
+            await db.query('UPDATE shipments SET customer_notified_at = CURRENT_TIMESTAMP WHERE awb = $1', [String(awb)]);
+            return null;
+        }
+        if (r?.status === 'failed') return `New tracking WhatsApp not sent: ${r.error}`;
+        return r === null ? null : null;
+    } catch (err) {
+        return `New tracking WhatsApp not sent: ${err.message}`;
+    }
 }
 
 /* ───────────────────────────── building a shipment ───────────────────────────── */
@@ -591,6 +642,30 @@ async function packFor(facts, s) {
     const lines = facts.lines || [];
     const types = await productTypes(lines.map(l => l.product_id));
     const byKey = new Map(s.boxes.map(b => [b.key, b]));
+
+    // Whole-order rules first: "a hoodie and a mask", "any 3 pieces"…
+    const pieceCount = lines.reduce((t, l) => t + (Number(l.qty) || 1), 0);
+    const qtyOf = (w) => lines.reduce((t, l) => {
+        const hit = w.match === 'product' ? l.product_id === w.value : (types.get(l.product_id) || '').toLowerCase() === w.value.toLowerCase();
+        return t + (hit ? (Number(l.qty) || 1) : 0);
+    }, 0);
+    const weightOf = (l) => {
+        const type = (types.get(l.product_id) || '').toLowerCase();
+        const rule = s.pack_rules.find(r => r.match === 'product' && r.value === l.product_id)
+            || s.pack_rules.find(r => r.match === 'type' && type && r.value.toLowerCase() === type);
+        return (rule?.item_g || l.grams || s.default_item_g) * (Number(l.qty) || 1);
+    };
+    for (const r of s.combo_rules || []) {
+        const box = byKey.get(r.box);
+        if (!box || !lines.length) continue;
+        if (r.items_min && pieceCount < r.items_min) continue;
+        if (r.items_max && pieceCount > r.items_max) continue;
+        if (!(r.when || []).every(w => qtyOf(w) >= (w.min_qty || 1))) continue;
+        const itemsG = Math.round(lines.reduce((t, l) => t + weightOf(l), 0));
+        const weight = r.weight_g || Math.max(50, Math.round((Number(box.pack_g) || 0) + itemsG));
+        return { box: box.key, weight_g: weight, items_g: r.weight_g ? Math.max(0, r.weight_g - (Number(box.pack_g) || 0)) : itemsG,
+            pieces: pieceCount, why: `rule "${r.label || 'combination'}"` };
+    }
     const fallback = byKey.get(s.default_box) || s.boxes[0];
     let need = null, needFor = null, itemsG = 0, pieces = 0;
     for (const l of lines) {
@@ -648,7 +723,7 @@ function payloadFor(facts, choice, s, delhiveryOrder, pack) {
 /** Preview for the drawer: the order's facts, problems, serviceability and charge. */
 async function quote(orderNumber, choice = {}) {
     const s = await getSettings();
-    const o = (await db.query('SELECT shopify_id FROM orders WHERE order_number = $1', [orderNumber])).rows[0];
+    const o = (await db.query('SELECT shopify_id, on_hold FROM orders WHERE order_number = $1', [orderNumber])).rows[0];
     if (!o) throw Object.assign(new Error(`Order ${orderNumber} isn't in the CRM`), { status: 404 });
     const facts = orderFacts(await shopifyOrder(o.shopify_id));
     const pack = await packFor(facts, s);
@@ -666,6 +741,7 @@ async function quote(orderNumber, choice = {}) {
     }
     const active = await activeAwb(orderNumber);
     if (active) out.problems.push(alreadyHas(active));
+    if (o.on_hold) out.problems.push('on hold in Shopify (usually a return waiting for a decision); it can ship once released');
     return out;
 }
 
@@ -717,9 +793,11 @@ async function createMany(items, { actor, kind = 'create' } = {}) {
     for (const it of items) {
         const orderNumber = clean(it.order_number);
         try {
-            const o = (await db.query('SELECT shopify_id, cancelled_at FROM orders WHERE order_number = $1', [orderNumber])).rows[0];
+            const o = (await db.query('SELECT shopify_id, cancelled_at, on_hold FROM orders WHERE order_number = $1', [orderNumber])).rows[0];
             if (!o) throw new Error('order isn\'t in the CRM');
             if (o.cancelled_at) throw new Error('order is cancelled in Shopify');
+            // On hold is usually a return waiting for a decision: it ships only once Shopify releases it.
+            if (o.on_hold) throw new Error('order is on hold in Shopify; it can ship once it is released');
             const old = it.recreate_of ? (await db.query('SELECT * FROM shipments WHERE id = $1', [it.recreate_of])).rows[0] : null;
             const active = await activeAwb(orderNumber, old?.id || null);
             if (active) throw new Error(alreadyHas(active));
@@ -801,6 +879,11 @@ async function createMany(items, { actor, kind = 'create' } = {}) {
             try {
                 await shopifyFulfil(c.shopifyId, c.awb, { replacingAwb: c.old?.awb });
                 await db.query('UPDATE shipments SET shopify_fulfilled = true, shopify_error = NULL WHERE awb = $1', [c.awb]);
+                // A replacement AWB: the customer had the old number, so they are sent the new one.
+                if (c.old) {
+                    const note = await notifyNewTracking(c.shopifyId, c.awb);
+                    if (note) errors.push({ order_number: c.orderNumber, error: note, soft: true });
+                }
             } catch (err) {
                 await db.query('UPDATE shipments SET shopify_error = $2 WHERE awb = $1', [c.awb, err.message.slice(0, 300)]);
                 shopifyNote = err.message;
@@ -829,6 +912,172 @@ async function recreate(ids, opts = {}, { actor } = {}) {
     const rows = (await db.query(`SELECT * FROM shipments WHERE id = ANY($1) AND bucket = 'cancelled' AND cancel_handled IS NULL`, [ids])).rows;
     if (!rows.length) throw Object.assign(new Error('None of those are waiting to be re-created'), { status: 400 });
     return createMany(rows.map(r => ({ order_number: r.order_number, recreate_of: r.id, box: opts.box })), { actor, kind: 'recreate' });
+}
+
+/**
+ * A shipment typed in rather than taken from a Shopify order: a replacement, a marketing parcel, a
+ * support re-send. `input` = { name, phone, address, city, state, pincode, products, quantity,
+ * value, payment_mode, cod_amount, box, weight_g, l, b, h, shipping_mode, order_number,
+ * source_ref }. Its Delhivery order id is M1001, M1002…
+ */
+async function createManual(input = {}, { actor } = {}) {
+    const s = await getSettings();
+    const bad = (m) => Object.assign(new Error(m), { status: 400 });
+    const facts = {
+        name: clean(input.name).slice(0, 120), add: clean(input.address).slice(0, 400),
+        city: clean(input.city).slice(0, 80), state: clean(input.state).slice(0, 80),
+        pin: digits(input.pincode).slice(0, 6), phone: digits(input.phone).slice(-10),
+        products_desc: clean(input.products).slice(0, 480) || 'Apparel',
+        quantity: Math.max(1, parseInt(input.quantity, 10) || 1),
+        total_amount: Math.max(0, Number(input.value) || 0),
+        payment_mode: input.payment_mode === 'COD' ? 'COD' : 'Prepaid',
+        lines: [],
+    };
+    facts.cod_amount = facts.payment_mode === 'COD' ? Math.max(0, Number(input.cod_amount) || 0) : 0;
+    const probs = problemsOf(facts);
+    if (!facts.city) probs.push('city missing');
+    if (facts.payment_mode === 'COD' && !facts.cod_amount) probs.push('COD amount missing');
+    if (!facts.total_amount) probs.push('declared value missing');
+    if (probs.length) throw bad(probs.join('; '));
+    let pin;
+    try { pin = await dlv.pincode(facts.pin); } catch (err) { throw Object.assign(new Error(`Couldn't check the pincode with Delhivery (${err.message})`), { status: 502 }); }
+    if (pin && !pin.serviceable) throw bad(`Delhivery doesn't deliver to ${facts.pin}`);
+    if (pin && facts.payment_mode === 'COD' && !pin.cod) throw bad(`Delhivery has no COD at ${facts.pin}`);
+
+    const n = (await db.query(`SELECT nextval('shipments_manual_seq') AS n`)).rows[0].n;
+    const ref = `M${n}`;
+    const box = s.boxes.find(b => b.key === input.box) || s.boxes.find(b => b.key === s.default_box) || s.boxes[0];
+    const pack = { box: box.key, items_g: facts.quantity * (s.default_item_g || 300) };
+    const choice = { box: box.key, weight_g: input.weight_g, length_cm: input.l, width_cm: input.b, height_cm: input.h,
+        payment_mode: facts.payment_mode, cod_amount: facts.cod_amount, shipping_mode: input.shipping_mode };
+    const p = payloadFor(facts, choice, s, ref, pack);
+    const sourceRef = /^(support|marketing):\d+$/.test(String(input.source_ref || '')) ? String(input.source_ref) : null;
+    const jobId = await startJob('manual', `Manual shipment ${ref}${sourceRef ? ` · ${sourceRef}` : ''}`, actor, 1);
+
+    let res;
+    try {
+        res = await dlv.createShipments([p.payload], s.pickup_location);
+    } catch (err) {
+        await finishJob(jobId, { failed: 1, summary: err.message, errors: [{ error: err.message }] });
+        throw Object.assign(err, { status: 502 });
+    }
+    const pkg = (res?.packages || [])[0];
+    if (!pkg?.waybill || /fail/i.test(pkg.status || '')) {
+        const why = (pkg ? [].concat(pkg.remarks || []).join('; ') : res?.rmk) || 'Delhivery returned no waybill';
+        await finishJob(jobId, { failed: 1, summary: why, errors: [{ error: why }] });
+        throw Object.assign(new Error(why), { status: 502 });
+    }
+    const awb = String(pkg.waybill);
+    const orderNumber = clean(input.order_number) ? orderOf(input.order_number) : null;
+    const row = (await db.query(
+        `INSERT INTO shipments (awb, order_number, delhivery_order, created_via, source, source_ref, bucket, status_type, status,
+                payment_mode, cod_amount, total_amount, box, weight_g, length_cm, width_cm, height_cm, shipping_mode, products_desc,
+                consignee_name, consignee_phone, consignee_address, consignee_city, consignee_state, consignee_pincode,
+                pickup_location, manifested_at, created_by)
+         VALUES ($1,$2,$3,'crm','manual',$4,'waiting_pickup','UD','Manifested',$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,CURRENT_TIMESTAMP,$22)
+         RETURNING *`,
+        [awb, orderNumber, ref, sourceRef, p.mode, p.cod, facts.total_amount, p.box.key, p.grams,
+            p.payload.shipment_length, p.payload.shipment_width, p.payload.shipment_height, p.payload.shipping_mode, facts.products_desc,
+            facts.name, facts.phone, facts.add, facts.city, facts.state, facts.pin, s.pickup_location, actor || null])).rows[0];
+
+    let label = null;
+    const warnings = [];
+    try {
+        label = (await dlv.labels([awb], '4R')).find(l => l.url)?.url || null;
+        if (label) await db.query('UPDATE shipments SET label_url = $2 WHERE id = $1', [row.id, label]);
+    } catch (err) { warnings.push(`Label not fetched: ${err.message}. Use Reprint label.`); }
+    try { await linkSource(row); } catch (err) { warnings.push(`Not written back to ${sourceRef}: ${err.message}`); }
+    await finishJob(jobId, { ok: 1, summary: `AWB ${awb} created (${ref})${warnings.length ? ` · ${warnings.join(' · ')}` : ''}` });
+    return { id: row.id, awb, ref, label_url: label, tracking_url: trackingUrl(awb), warnings };
+}
+
+/** Write a manual shipment's AWB back onto the support ticket or marketing order it was made for. */
+async function linkSource(row) {
+    const [kind, id] = String(row.source_ref || '').split(':');
+    if (kind === 'support') {
+        await db.query(`UPDATE support_tickets SET forward_awb = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1`, [Number(id), row.awb]);
+    } else if (kind === 'marketing') {
+        await db.query(
+            `UPDATE marketing_orders SET shipping_partner = 'Delhivery', awb = $2, tracking_link = $3,
+                    status = CASE WHEN status IN ('Pending Approval', 'Dispatch Pending') THEN 'Dispatched' ELSE status END,
+                    fulfilled_date = COALESCE(fulfilled_date, CURRENT_DATE), updated_at = CURRENT_TIMESTAMP
+              WHERE id = $1`, [Number(id), row.awb, trackingUrl(row.awb)]);
+    }
+}
+
+/**
+ * Keep the AWB on support tickets and marketing orders current: an order's live shipment fills an
+ * empty AWB, a re-created one replaces the cancelled number, and a delivered marketing parcel is
+ * marked Delivered.
+ */
+async function linkTracking() {
+    const LIVE = `SELECT DISTINCT ON (order_number) order_number, awb FROM shipments
+                   WHERE order_number IS NOT NULL AND COALESCE(direction, 'forward') = 'forward' AND bucket <> 'cancelled'
+                     AND COALESCE(source, 'shopify') <> 'manual'
+                   ORDER BY order_number, COALESCE(manifested_at, created_at) DESC`;
+    const support = await db.query(
+        `UPDATE support_tickets t SET forward_awb = x.awb, updated_at = CURRENT_TIMESTAMP
+           FROM (${LIVE}) x
+          WHERE t.order_number = x.order_number AND x.awb IS DISTINCT FROM t.forward_awb
+            AND (NULLIF(TRIM(t.forward_awb), '') IS NULL
+                 OR t.forward_awb IN (SELECT awb FROM shipments WHERE recreated_as IS NOT NULL))`);
+    // Replaced numbers that came from a manual shipment.
+    await db.query(
+        `UPDATE support_tickets t SET forward_awb = s.recreated_as FROM shipments s
+          WHERE s.awb = t.forward_awb AND s.recreated_as IS NOT NULL`);
+    const marketing = await db.query(
+        `UPDATE marketing_orders m SET awb = x.awb, shipping_partner = 'Delhivery',
+                tracking_link = 'https://www.delhivery.com/track-v2/package/' || x.awb,
+                status = CASE WHEN m.status IN ('Pending Approval', 'Dispatch Pending') THEN 'Dispatched' ELSE m.status END,
+                updated_at = CURRENT_TIMESTAMP
+           FROM (${LIVE}) x
+          WHERE NULLIF(TRIM(m.shopify_order_number), '') IS NOT NULL
+            AND '#' || regexp_replace(TRIM(m.shopify_order_number), '^#', '') = x.order_number
+            AND x.awb IS DISTINCT FROM m.awb AND m.status <> 'Cancelled'
+            AND (NULLIF(TRIM(m.awb), '') IS NULL OR m.awb IN (SELECT awb FROM shipments WHERE recreated_as IS NOT NULL))`);
+    await db.query(
+        `UPDATE marketing_orders m SET awb = s.recreated_as, tracking_link = 'https://www.delhivery.com/track-v2/package/' || s.recreated_as,
+                updated_at = CURRENT_TIMESTAMP
+           FROM shipments s WHERE s.awb = m.awb AND s.recreated_as IS NOT NULL`);
+    const delivered = await db.query(
+        `UPDATE marketing_orders m SET status = 'Delivered', updated_at = CURRENT_TIMESTAMP
+           FROM shipments s WHERE s.awb = m.awb AND s.bucket = 'delivered' AND m.status = 'Dispatched'`);
+    return { support: support.rowCount, marketing: marketing.rowCount, delivered: delivered.rowCount };
+}
+
+const STATUS_TEXT = {
+    waiting_pickup: 'Waiting for pickup', in_transit: 'In transit', out_for_delivery: 'Out for delivery', ndr: 'Delivery failed',
+    rto_transit: 'Returning to us', rto_returned: 'Returned to us', delivered: 'Delivered', cancelled: 'Cancelled', lost: 'Lost',
+    return_pickup: 'Return: waiting for pickup', return_transit: 'Return: on the way back', return_done: 'Return received', return_closed: 'Return closed',
+};
+
+/**
+ * Where these AWBs (and the shipments of these orders) are, from what the CRM last tracked. For the
+ * scanner, support tickets and marketing orders, so it reads the table rather than Delhivery.
+ */
+async function statusOf({ awbs = [], orders = [] } = {}) {
+    const a = [...new Set(awbs.map(x => clean(x)).filter(Boolean))].slice(0, 500);
+    const o = [...new Set(orders.map(x => orderOf(x)).filter(Boolean))].slice(0, 500);
+    const rows = (await db.query(
+        `SELECT id, awb, order_number, bucket, status, status_code, instructions, status_at, recreated_as, direction, source,
+                expected_delivery, delivered_at, cancel_handled, COALESCE(manifested_at, created_at) AS made_at
+           FROM shipments WHERE awb = ANY($1) OR order_number = ANY($2)`, [a, o])).rows;
+    const view = (r) => r && ({
+        id: r.id, awb: r.awb, order_number: r.order_number, bucket: r.bucket,
+        label: STATUS_TEXT[r.bucket] || r.status || r.bucket, detail: r.instructions || r.status || '',
+        at: r.status_at, expected_delivery: r.expected_delivery, delivered_at: r.delivered_at,
+        replaced_by: r.recreated_as || null, tracking_url: trackingUrl(r.awb),
+        needs_new_label: r.bucket === 'cancelled' && !r.recreated_as && r.cancel_handled !== 'not_shipping',
+    });
+    const byAwb = Object.fromEntries(a.map(x => [x, view(rows.find(r => r.awb === x))]).filter(([, v]) => v));
+    const byOrder = {};
+    for (const num of o) {
+        // The order's latest parcel to the customer, a live one before a cancelled one.
+        const mine = rows.filter(r => r.order_number === num && r.direction !== 'return')
+            .sort((x, y) => (x.bucket === 'cancelled') - (y.bucket === 'cancelled') || new Date(y.made_at) - new Date(x.made_at));
+        if (mine[0]) byOrder[num] = { ...view(mine[0]), shipments: mine.length };
+    }
+    return { by_awb: byAwb, by_order: byOrder };
 }
 
 async function markNotShipping(ids, actor) {
@@ -875,14 +1124,41 @@ async function reattempt(ids, actor) {
     }
 }
 
+/**
+ * Change a shipment with Delhivery: contact details while it is on its way; payment, weight, size
+ * and the product text only before pickup (Delhivery refuses them after).
+ */
 async function editOne(id, fields, actor) {
     const row = (await db.query('SELECT * FROM shipments WHERE id = $1', [id])).rows[0];
     if (!row) throw Object.assign(new Error('Shipment not found'), { status: 404 });
+    const bad = (m) => Object.assign(new Error(m), { status: 400 });
+    if (!['waiting_pickup', 'in_transit', 'ndr', 'out_for_delivery'].includes(row.bucket)) throw bad(`Can't change a shipment that is ${row.status || row.bucket}`);
+    const beforePickup = row.bucket === 'waiting_pickup';
     const body = {};
-    if (fields.name) body.name = clean(fields.name).slice(0, 120);
-    if (fields.phone) { const p = digits(fields.phone).slice(-10); if (!/^[6-9]\d{9}$/.test(p)) throw Object.assign(new Error('That phone number isn\'t a valid mobile'), { status: 400 }); body.phone = p; }
-    if (fields.add) body.add = clean(fields.add).slice(0, 400);
-    if (!Object.keys(body).length) throw Object.assign(new Error('Nothing to change'), { status: 400 });
+    const local = {};
+    if (fields.name) { body.name = clean(fields.name).slice(0, 120); local.consignee_name = body.name; }
+    if (fields.phone) { const p = digits(fields.phone).slice(-10); if (!/^[6-9]\d{9}$/.test(p)) throw bad('That phone number isn\'t a valid mobile'); body.phone = p; local.consignee_phone = p; }
+    if (fields.add) { body.add = clean(fields.add).slice(0, 400); local.consignee_address = body.add; }
+    const later = ['payment_mode', 'cod_amount', 'weight_g', 'l', 'b', 'h', 'products_desc', 'box'].filter(k => fields[k] !== undefined && fields[k] !== '' && fields[k] !== null);
+    if (later.length && !beforePickup) throw bad('Payment, weight, size and products can only change before Delhivery picks the parcel up');
+    if (fields.payment_mode === 'COD' || fields.payment_mode === 'Prepaid') {
+        body.pt = fields.payment_mode === 'COD' ? 'COD' : 'Pre-paid'; local.payment_mode = fields.payment_mode;
+        if (fields.payment_mode === 'Prepaid') { body.cod = 0; local.cod_amount = 0; }
+    }
+    if (fields.cod_amount !== undefined && fields.cod_amount !== '' && (fields.payment_mode || row.payment_mode) === 'COD') {
+        const c = Number(fields.cod_amount); if (!(c > 0)) throw bad('COD amount must be more than 0'); body.cod = c; local.cod_amount = c;
+    }
+    if (fields.box) {
+        const s = await getSettings();
+        const b = s.boxes.find(x => x.key === fields.box);
+        if (b) { local.box = b.key; for (const [k, col, dk] of [['l', 'length_cm', 'shipment_length'], ['b', 'width_cm', 'shipment_width'], ['h', 'height_cm', 'shipment_height']]) if (!fields[k]) { body[dk] = b[k]; local[col] = b[k]; } }
+    }
+    for (const [k, col, dk] of [['l', 'length_cm', 'shipment_length'], ['b', 'width_cm', 'shipment_width'], ['h', 'height_cm', 'shipment_height']]) {
+        if (fields[k]) { const v = Number(fields[k]); if (!(v > 0)) throw bad('Sizes must be more than 0'); body[dk] = v; local[col] = v; }
+    }
+    if (fields.weight_g) { const g = Math.round(Number(fields.weight_g)); if (!(g >= 50)) throw bad('Weight must be at least 50 g'); body.gm = g; local.weight_g = g; }
+    if (fields.products_desc) { body.products_desc = clean(fields.products_desc).slice(0, 480); local.products_desc = body.products_desc; }
+    if (!Object.keys(body).length) throw bad('Nothing to change');
     const jobId = await startJob('edit', `Edit ${row.order_number || row.awb}`, actor, 1);
     try {
         await dlv.edit(row.awb, body);
@@ -890,9 +1166,11 @@ async function editOne(id, fields, actor) {
         await finishJob(jobId, { failed: 1, summary: err.message, errors: [{ order_number: row.order_number, awb: row.awb, error: err.message }] });
         throw Object.assign(err, { status: 502 });
     }
-    if (body.name) await db.query('UPDATE shipments SET consignee_name = $2 WHERE id = $1', [id, body.name]);
-    await db.query(`UPDATE shipments SET ndr_action = 'EDITED', ndr_action_at = CURRENT_TIMESTAMP, ndr_action_by = $2 WHERE id = $1`, [id, actor || null]);
-    await finishJob(jobId, { ok: 1, summary: `Updated ${Object.keys(body).join(', ')} on AWB ${row.awb}` });
+    const cols = Object.keys(local);
+    if (cols.length) await db.query(`UPDATE shipments SET ${cols.map((c, i) => `${c} = $${i + 2}`).join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = $1`, [id, ...cols.map(c => local[c])]);
+    if (row.bucket === 'ndr') await db.query(`UPDATE shipments SET ndr_action = 'EDITED', ndr_action_at = CURRENT_TIMESTAMP, ndr_action_by = $2 WHERE id = $1`, [id, actor || null]);
+    const said = { name: 'name', phone: 'phone', add: 'address', pt: 'payment', cod: 'COD amount', gm: 'weight', shipment_length: 'size', shipment_width: 'size', shipment_height: 'size', products_desc: 'products' };
+    await finishJob(jobId, { ok: 1, summary: `Changed ${[...new Set(Object.keys(body).map(k => said[k] || k))].join(', ')} on AWB ${row.awb}` });
     return { ok: true };
 }
 
@@ -949,6 +1227,6 @@ function start() {
 }
 
 module.exports = {
-    getSettings, saveSettings, sync, quote, createMany, catalog, packFor, RETURN_BUCKETS, recreate, markNotShipping, cancelOne, reattempt, editOne, bookPickup,
+    getSettings, saveSettings, sync, quote, createMany, createManual, statusOf, linkTracking, catalog, packFor, RETURN_BUCKETS, recreate, markNotShipping, cancelOne, reattempt, editOne, bookPickup,
     labelsFor: (awbs) => dlv.labels(awbs, '4R'), bucketOf, fromTracking, trackingUrl, start,
 };

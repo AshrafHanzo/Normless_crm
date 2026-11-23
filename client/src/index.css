@@ -4539,6 +4539,27 @@ p.wdb-sub { margin: 0; }
 .ship-status-nav button.sub { padding-left: 26px; font-size: 12.5px; }
 .ship-status-nav button.danger { color: var(--danger); }
 .ship-status-nav button.warning { color: var(--warning); }
+.ship-filters { margin-bottom: 14px; }
+.ship-filter-on { border-color: var(--primary); color: var(--text-primary); }
+.ship-filter-panel { display: flex; flex-wrap: wrap; gap: 12px 16px; align-items: flex-start; padding: 14px 16px; margin-bottom: 14px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); }
+.ship-filter-panel .input-group { margin: 0; flex: 1 1 180px; min-width: 0; }
+.ship-filter-panel .input-group:has(.ship-range) { flex: 2 1 300px; }
+.ship-range { display: flex; align-items: center; gap: 8px; }
+.ship-range input { flex: 1 1 0; min-width: 0; }
+.ship-range span { color: var(--text-muted); font-size: 12.5px; }
+.ship-combos { display: flex; flex-direction: column; gap: 12px; }
+.ship-combo { border: 1px solid var(--border); border-radius: var(--radius-md); padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+.ship-combo-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.ship-combo-head > input { flex: 1 1 220px; min-width: 0; }
+.ship-combo-no { width: 24px; height: 24px; border-radius: 999px; background: var(--border); display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; flex: none; }
+.ship-combo-tools { display: flex; align-items: center; gap: 4px; margin-left: auto; }
+.ship-combo-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 14px; align-items: start; }
+.ship-cond { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+.ship-cond select, .ship-cond > span { flex: 1 1 auto; min-width: 0; }
+.ship-cond input { width: 64px; flex: none; }
+@media (max-width: 760px) { .ship-combo-body { grid-template-columns: 1fr; } }
+.awb-status { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 6px; }
+.scan-ship-status { display: flex; gap: 12px; align-items: flex-start; padding: 12px 16px; margin-bottom: 14px; border-radius: var(--radius-md); border: 1px solid var(--border); background: var(--surface); }
 .ship-nav-heading { margin: 10px 12px 4px; padding-top: 10px; border-top: 1px solid var(--border); font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--text-muted); }
 .ship-count { margin-left: auto; font-size: 11.5px; font-weight: 600; color: var(--text-secondary); background: var(--border); border-radius: 999px; padding: 1px 8px; }
 .ship-count.hot { background: var(--danger); color: #fff; }

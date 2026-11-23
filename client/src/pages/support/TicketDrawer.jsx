@@ -7,6 +7,8 @@ import OrderComments from '../../components/OrderComments'
 import ImageUploadGrid from '../../components/ImageUploadGrid'
 import useDirtyGuard from '../../hooks/useDirtyGuard'
 import { refOf, blankTicket, asForm, trackingFor } from './ticket'
+import ManualShipDrawer from '../shipping/ManualShipDrawer'
+import { BUCKET_BADGE } from '../shipping/common'
 
 const today = () => new Date().toLocaleDateString('en-CA')
 const day = (v) => (v ? new Date(v).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit' }) : '—')
@@ -18,7 +20,7 @@ const day = (v) => (v ? new Date(v).toLocaleDateString('en-IN', { day: '2-digit'
  * looked up somewhere else and pasted back — and it can be copied in one go, because the next
  * thing that happens to it is being pasted into WhatsApp.
  */
-function AwbField({ label, hint, value, disabled, link, onChange }) {
+function AwbField({ label, hint, value, disabled, link, onChange, status, onUseNew }) {
   const toast = useToast()
   const copy = async () => {
     try {
@@ -40,6 +42,17 @@ function AwbField({ label, hint, value, disabled, link, onChange }) {
           <button type="button" className="mini-btn" onClick={copy}>Copy link</button>
         </div>
       )}
+      {status && (
+        <div className="awb-status">
+          <span className={`status-badge ${BUCKET_BADGE[status.bucket] || 'pending'}`}>{status.label}</span>
+          {status.detail && status.detail !== status.label && <span className="packed-sub" style={{ margin: 0 }}>{status.detail}</span>}
+          {status.replaced_by && (
+            <span className="packed-sub" style={{ margin: 0 }}>Replaced by <b className="ship-mono">{status.replaced_by}</b>
+              {onUseNew && !disabled && <button type="button" className="mini-btn" style={{ marginLeft: 6 }} onClick={() => onUseNew(status.replaced_by)}>Use it</button>}</span>
+          )}
+          {status.needs_new_label && <span style={{ color: 'var(--danger)', fontSize: 12.5 }}>Cancelled by Delhivery: needs a new label</span>}
+        </div>
+      )}
     </div>
   )
 }
@@ -56,7 +69,10 @@ function AwbField({ label, hint, value, disabled, link, onChange }) {
 export default function TicketDrawer({ ticket, options, onClose, onSaved, onDelete, canEdit, children }) {
   const apiFetch = useApi()
   const toast = useToast()
-  const { API_URL } = useAuth()
+  const { API_URL, user } = useAuth()
+  const canShip = ['owner', 'admin'].includes(user?.role) || !!user?.can_manage_shipping
+  const [shipping, setShipping] = useState(null)   // { forward, return } statuses from the CRM's tracking
+  const [shipOpen, setShipOpen] = useState(false)
   const isNew = !ticket?.id
 
   const [form, setForm] = useState(() => asForm(ticket?.id ? ticket : { ...blankTicket(), ...ticket }))
@@ -100,6 +116,18 @@ export default function TicketDrawer({ ticket, options, onClose, onSaved, onDele
       forward_awb: form.forward_awb || r.dispatch?.awb || '',
     })
   }
+
+  // Where the parcels on this ticket are, from the CRM's Delhivery tracking.
+  useEffect(() => {
+    const awbs = [form.forward_awb, form.return_awb].map(x => String(x || '').trim()).filter(x => /^\d{8,}$/.test(x))
+    if (!awbs.length) { setShipping(null); return }
+    const timer = setTimeout(async () => {
+      const r = await apiFetch(`/api/shipping/track-status?awbs=${encodeURIComponent(awbs.join(','))}`)
+      if (r && !r.error) setShipping({ forward: r.by_awb[String(form.forward_awb).trim()], return: r.by_awb[String(form.return_awb).trim()] })
+    }, 400)
+    return () => clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.forward_awb, form.return_awb])
 
   // An existing ticket shows its order without being asked — the parcel and its waybill are the
   // context for every decision on the page. So does one raised from a WhatsApp chat about an order.
@@ -337,12 +365,32 @@ export default function TicketDrawer({ ticket, options, onClose, onSaved, onDele
             </div>
             <div className="form-row">
               <AwbField label="Forward AWB" hint="parcel going out" value={form.forward_awb} disabled={ro}
-                link={trackingFor(form.forward_awb, lookup?.dispatch)}
+                link={trackingFor(form.forward_awb, lookup?.dispatch)} status={shipping?.forward}
+                onUseNew={(awb) => setF({ forward_awb: awb })}
                 onChange={e => setF({ forward_awb: e.target.value })} />
               <AwbField label="Return AWB" hint="parcel coming back" value={form.return_awb} disabled={ro}
-                link={trackingFor(form.return_awb, null)}
+                link={trackingFor(form.return_awb, null)} status={shipping?.return}
                 onChange={e => setF({ return_awb: e.target.value })} />
             </div>
+            {canShip && !isNew && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: -4 }}>
+                <button type="button" className="btn btn-secondary btn-sm" onClick={() => setShipOpen(true)}><Icon name="truck" size={14} /> Create Delhivery shipment</button>
+                <span className="packed-sub" style={{ margin: 0 }}>A replacement or re-send; its AWB lands in Forward AWB.</span>
+              </div>
+            )}
+            {shipOpen && (
+              <ManualShipDrawer
+                prefill={{
+                  name: form.customer_name, phone: form.customer_phone, order_number: form.order_number,
+                  city: lookup?.dispatch?.ship_city || '', state: lookup?.dispatch?.ship_state || '',
+                  products: (lookup?.order?.items || []).map(i => `${i.title}${i.variant ? ` - ${i.variant}` : ''}${i.quantity > 1 ? ` x${i.quantity}` : ''}`).join(', '),
+                  quantity: (lookup?.order?.items || []).reduce((n, i) => n + (Number(i.quantity) || 1), 0) || 1,
+                  value: lookup?.order?.total_price || '', source_ref: `support:${ticket.id}`,
+                  context: `For ticket ${refOf(ticket)}${form.order_number ? ` · ${form.order_number}` : ''}`,
+                }}
+                onClose={() => setShipOpen(false)}
+                onDone={(r) => setF({ forward_awb: r.awb })} />
+            )}
             <div className="input-group">
               <label>Operations note <span className="label-hint">optional</span></label>
               <AutoTextarea value={form.ops_note} disabled={ro} minRows={2}

@@ -859,7 +859,28 @@ function start() {
     timers.forEach(t => t.unref());
 }
 
+/**
+ * A shipment got a new AWB (Delhivery cancelled the first one and it was re-created): send the
+ * "Shipped with tracking" message again with the new number. Once per AWB. Returns the send row,
+ * or null when the message isn't set up.
+ */
+async function sendTrackingUpdate(shopifyOrderId, awb) {
+    const line = lines.get('normless');
+    if (!line?.id) return null;
+    const id = String(shopifyOrderId || '').match(/(\d+)\s*$/)?.[1];
+    if (!id) return null;
+    const res = await fetch(`https://${process.env.SHOPIFY_STORE_DOMAIN}/admin/api/2026-04/orders/${id}.json?fields=${ORDER_FIELDS}`,
+        { headers: { 'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN } });
+    if (!res.ok) throw new Error(`Shopify ${res.status}`);
+    const o = (await res.json()).order;
+    const facts = orderFacts(o);
+    const trackUrl = `https://www.delhivery.com/track-v2/package/${encodeURIComponent(awb)}`;
+    return fire(line.id, 'fulfilled', `awb:${awb}`, { ...facts, courier: 'Delhivery', tracking_number: String(awb), urls: { ...facts.urls, tracking: trackUrl } },
+        { label: o.name, force: true });
+}
+
 module.exports = {
+    sendTrackingUpdate,
     EVENTS, config, saveEvents, fire, onAbandoned, onText, onOptOut, cartTick, orderTick, shipmentTick, orderEvents, onReply, recent, cartStats,
     createSetTemplate, recoverCarts, start, CART_HOURS, saveVendorHold, sendDispatchDelay, delayedItems, ticketRaised,
 };

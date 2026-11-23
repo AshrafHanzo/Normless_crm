@@ -219,6 +219,30 @@ const ScanHub = () => {
           </div>
         )}
 
+        {/* The Delhivery label: a cancelled one must not go on the parcel, and a replaced one has
+            a newer label to print instead. */}
+        {order?.shipment && (() => {
+          const sh = order.shipment
+          const current = sh.current || null
+          const dead = sh.bucket === 'cancelled' || sh.replaced_by
+          return (
+            <div className={dead ? 'scan-hold-alert' : 'scan-ship-status'}>
+              <span className="scan-hold-icon">{dead ? '⚠' : '🚚'}</span>
+              <div>
+                <b>{dead
+                  ? (sh.replaced_by ? `This label (AWB ${sh.awb}) was cancelled — use the new one, AWB ${sh.replaced_by}.` : `AWB ${sh.awb} is CANCELLED by Delhivery — don't send this label.`)
+                  : `Delhivery: ${sh.label}`} </b>
+                <div className="rto-scan-hint">
+                  {dead
+                    ? (sh.replaced_by ? 'Print the new label from Shipping and swap it.' : 'Review it, then re-create it in Shipping → Auto-cancelled to get a new label.')
+                    : `AWB ${sh.awb}${sh.detail && sh.detail !== sh.label ? ` · ${sh.detail}` : ''}`}
+                  {current && current.awb !== sh.awb && <> · The order's current AWB is {current.awb} ({current.label}).</>}
+                </div>
+              </div>
+            </div>
+          )
+        })()}
+
         {/* Said before the garments, because this is the last moment before someone pulls a blank
             off the shelf and prints a second copy of something already in the building. */}
         {order && !!(order.rto_matches || []).length && (

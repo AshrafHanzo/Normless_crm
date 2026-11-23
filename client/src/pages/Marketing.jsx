@@ -14,6 +14,8 @@ import useServerTable from '../hooks/useServerTable'
 import SortTh from '../components/SortTh'
 import Pagination from '../components/Pagination'
 import { cleanMobile, mobileError, mobileInputProps } from '../utils/phone'
+import ManualShipDrawer from './shipping/ManualShipDrawer'
+import { BUCKET_BADGE } from './shipping/common'
 
 const pad = (n) => String(n).padStart(2, '0')
 const todayStr = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` }
@@ -296,7 +298,7 @@ function PostStatus({ order, apiFetch, toast, onChanged }) {
   )
 }
 
-function OrderDrawer({ target, meta, influencers, products, productsError, onClose, onSaved, apiFetch, toast, canDispatch }) {
+function OrderDrawer({ target, meta, influencers, products, productsError, onClose, onSaved, apiFetch, toast, canDispatch, canShip, shipStatus }) {
   // "Send products" on an influencer row opens this prefilled but unsaved, so a missing id — not
   // the literal 'new' — is what actually distinguishes a draft from a stored order.
   const isNew = target === 'new' || !target?.id
@@ -323,6 +325,15 @@ function OrderDrawer({ target, meta, influencers, products, productsError, onClo
   const [error, setError] = useState('')
   const setF = (patch) => setForm(f => ({ ...f, ...patch }))
   const setD = (patch) => setDispatch(d => ({ ...d, ...patch }))
+  const [shipOpen, setShipOpen] = useState(false)
+  const parcel = shipStatus?.[String(dispatch.awb || '').trim()]
+  // The shipment is created and saved on the order by the server; mirror it here so the drawer
+  // doesn't think it has unsaved changes.
+  const shipped = (r) => {
+    const next = { ...dispatch, shipping_partner: 'Delhivery', awb: r.awb, tracking_link: r.tracking_url,
+      status: ['Pending Approval', 'Dispatch Pending'].includes(dispatch.status) ? 'Dispatched' : dispatch.status }
+    setDispatch(next); setSavedDispatch(next)
+  }
 
   const guard = useDirtyGuard({
     // Both halves, so closing with an unsaved status change asks first rather than dropping it.
@@ -489,6 +500,30 @@ function OrderDrawer({ target, meta, influencers, products, productsError, onClo
                     <a className="track-link" href={dispatch.tracking_link} target="_blank" rel="noreferrer">🔗 Open tracking</a>
                   )}</div>
               </div>
+              {parcel && (
+                <div className="awb-status" style={{ marginTop: -4 }}>
+                  <span className={`status-badge ${BUCKET_BADGE[parcel.bucket] || 'pending'}`}>{parcel.label}</span>
+                  {parcel.detail && parcel.detail !== parcel.label && <span className="packed-sub" style={{ margin: 0 }}>{parcel.detail}</span>}
+                  {parcel.needs_new_label && <span style={{ color: 'var(--danger)', fontSize: 12.5 }}>Cancelled by Delhivery: needs a new label</span>}
+                </div>
+              )}
+              {canShip && !isNew && !dispatch.awb && dispatch.status !== 'Cancelled' && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => setShipOpen(true)}><Icon name="truck" size={14} /> Create Delhivery shipment</button>
+                  <span className="img-upload-hint" style={{ margin: 0 }}>Gets the AWB and label, and marks the order dispatched.</span>
+                </div>
+              )}
+              {shipOpen && (
+                <ManualShipDrawer
+                  prefill={{
+                    name: form.name, phone: form.contact_number, address: form.address,
+                    products: (form.items || []).filter(i => i.product).map(i => `${i.product}${i.variant ? ` - ${i.variant}` : ''}${Number(i.qty) > 1 ? ` x${i.qty}` : ''}`).join(', '),
+                    quantity: (form.items || []).filter(i => i.product).reduce((n, i) => n + (Number(i.qty) || 1), 0) || 1,
+                    order_number: dispatch.shopify_order_number || '', source_ref: `marketing:${target.id}`,
+                    context: `Marketing parcel for ${form.name || 'a creator'}`,
+                  }}
+                  onClose={() => setShipOpen(false)} onDone={shipped} />
+              )}
               {canDispatch && dispatchChanged && (
                 <p className="img-upload-hint" style={{ marginTop: 4 }}>Unsaved dispatch changes — Save order saves them.</p>
               )}
@@ -559,6 +594,9 @@ export default function Marketing() {
   const canDispatch = isAdmin || !!user?.can_dispatch_marketing
   const canApprove = isAdmin || !!user?.can_approve_marketing
   const canSeeReports = isAdmin || !!user?.can_view_marketing_reports
+  const canShip = isAdmin || !!user?.can_manage_shipping
+  // Where each listed parcel is, from the CRM's Delhivery tracking.
+  const [shipStatus, setShipStatus] = useState({})
   // Sorting and paging are done by the server, so a column header changes the query rather than
   // reordering the 25 rows already on screen.
   const infTable = useServerTable({ sort: 'name', dir: 'asc' })
@@ -570,7 +608,14 @@ export default function Marketing() {
   }
   const loadOrders = async (q = search, s = status) => {
     const r = await apiFetch('/api/marketing/orders?' + ordTable.query({ search: q, status: s }))
-    if (r && !r.error) { setOrders(r.orders || []); setRto(r.rto || {}); setSummary(r.summary || null); ordTable.setPagination(r.pagination) }
+    if (r && !r.error) {
+      setOrders(r.orders || []); setRto(r.rto || {}); setSummary(r.summary || null); ordTable.setPagination(r.pagination)
+      const awbs = (r.orders || []).map(o => String(o.awb || '').trim()).filter(a => /^\d{8,}$/.test(a))
+      if (awbs.length) {
+        const st = await apiFetch(`/api/shipping/track-status?awbs=${encodeURIComponent(awbs.join(','))}`)
+        if (st && !st.error) setShipStatus(st.by_awb || {})
+      }
+    }
     loadPending()
   }
   const loadPicker = async () => {
@@ -842,6 +887,10 @@ export default function Marketing() {
                         {o.awb && (o.tracking_link
                           ? <a className="track-link" href={o.tracking_link} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()}>{o.awb}</a>
                           : <div style={{ color: 'var(--text-muted)' }}>{o.awb}</div>)}
+                        {shipStatus[String(o.awb || '').trim()] && (() => {
+                          const p = shipStatus[String(o.awb).trim()]
+                          return <div style={{ marginTop: 3 }}><span className={`status-badge ${BUCKET_BADGE[p.bucket] || 'pending'}`} title={p.detail}>{p.needs_new_label ? 'Cancelled: new label' : p.label}</span></div>
+                        })()}
                         {o.shopify_order_number && <div style={{ color: 'var(--text-muted)' }}>{o.shopify_order_number}</div>}
                       </td>
                       <td data-label="Posted" style={{ fontSize: 12 }}>
@@ -928,7 +977,7 @@ export default function Marketing() {
         <OrderDrawer
           key={orderTarget === 'new' ? 'new' : (orderTarget.id ?? 'prefilled')}
           target={orderTarget} meta={meta} influencers={allInfluencers} products={products}
-          productsError={productsError} canDispatch={canDispatch} apiFetch={apiFetch} toast={toast}
+          productsError={productsError} canDispatch={canDispatch} canShip={canShip} shipStatus={shipStatus} apiFetch={apiFetch} toast={toast}
           onClose={() => setOrderTarget(null)} onSaved={onOrderSaved} />
       )}
     </div>

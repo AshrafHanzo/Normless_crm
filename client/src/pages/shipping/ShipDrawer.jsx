@@ -21,6 +21,7 @@ export default function ShipDrawer({ orders, settings, onClose, onDone }) {
   const boxes = settings?.boxes || []
   const [box, setBox] = useState('')                  // '' = what the packing rules say
   const [weight, setWeight] = useState('')            // '' = worked out from the packaging and items
+  const [dims, setDims] = useState({ l: '', b: '', h: '' })   // '' = the packaging's own size
   const [mode, setMode] = useState(settings?.default_mode || 'Surface')
   const [payment, setPayment] = useState('')          // '' = as Shopify says
   const [cod, setCod] = useState('')
@@ -29,7 +30,8 @@ export default function ShipDrawer({ orders, settings, onClose, onDone }) {
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState(null)
 
-  const pickBox = (key) => { setBox(key); setWeight('') }
+  const pickBox = (key) => { setBox(key); setWeight(''); setDims({ l: '', b: '', h: '' }) }
+  const dimsOut = { length_cm: dims.l || undefined, width_cm: dims.b || undefined, height_cm: dims.h || undefined }
   const suggested = quote?.suggested
   const boxLabel = (k) => boxes.find(b => b.key === k)?.name || k
 
@@ -38,7 +40,7 @@ export default function ShipDrawer({ orders, settings, onClose, onDone }) {
     let live = true
     setChecking(true)
     const t = setTimeout(async () => {
-      const r = await apiFetch('/api/shipping/quote', { method: 'POST', body: JSON.stringify({ order_number: single.order_number, box: box || undefined, weight_g: weight === '' ? undefined : Number(weight), shipping_mode: mode, payment_mode: payment || undefined, cod_amount: cod === '' ? undefined : Number(cod) }) })
+      const r = await apiFetch('/api/shipping/quote', { method: 'POST', body: JSON.stringify({ order_number: single.order_number, box: box || undefined, weight_g: weight === '' ? undefined : Number(weight), ...dimsOut, shipping_mode: mode, payment_mode: payment || undefined, cod_amount: cod === '' ? undefined : Number(cod) }) })
       if (!live) return
       setChecking(false)
       setQuote(r && !r.error ? r : { error: r?.error || 'Could not check this order' })
@@ -46,12 +48,12 @@ export default function ShipDrawer({ orders, settings, onClose, onDone }) {
     }, 300)
     return () => { live = false; clearTimeout(t) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [single?.order_number, box, weight, mode, payment])
+  }, [single?.order_number, box, weight, mode, payment, dims.l, dims.b, dims.h])
 
   const submit = async () => {
     setBusy(true)
     const items = orders.map(o => ({
-      order_number: o.order_number, box: box || undefined, weight_g: weight === '' ? undefined : Number(weight) || undefined, shipping_mode: mode,
+      order_number: o.order_number, box: box || undefined, weight_g: weight === '' ? undefined : Number(weight) || undefined, ...dimsOut, shipping_mode: mode,
       ...(single && payment ? { payment_mode: payment } : {}),
       ...(single && (payment || quote?.payment_mode) === 'COD' && cod !== '' ? { cod_amount: Number(cod) } : {}),
     }))
@@ -158,6 +160,12 @@ export default function ShipDrawer({ orders, settings, onClose, onDone }) {
                     {single && suggested && weight === '' && <span className="ship-pack-why">{plural(suggested.pieces, 'piece')} · {suggested.items_g} g of items plus the packaging</span>}</div>
                   <div className="input-group"><label htmlFor="ship-mode">Shipping mode</label>
                     <select id="ship-mode" value={mode} onChange={e => setMode(e.target.value)}><option>Surface</option><option>Express</option></select></div>
+                </div>
+                <div className="form-row">
+                  {[['l', 'Length'], ['b', 'Breadth'], ['h', 'Height']].map(([k, label]) => (
+                    <div className="input-group" key={k}><label htmlFor={`ship-${k}`}>{label} cm <span className="label-hint">{dims[k] ? 'typed' : 'packaging'}</span></label>
+                      <input id={`ship-${k}`} type="number" min="1" placeholder={String(boxes.find(b => b.key === (box || suggested?.box))?.[k] ?? '')} value={dims[k]} onChange={e => setDims(d => ({ ...d, [k]: e.target.value }))} /></div>
+                  ))}
                 </div>
               </section>
 

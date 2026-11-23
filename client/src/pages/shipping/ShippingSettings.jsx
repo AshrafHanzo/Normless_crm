@@ -31,6 +31,23 @@ export default function ShippingSettings({ settings, isAdmin, onSaved }) {
 
   const boxName = (k) => f.boxes.find(b => b.key === k)?.name
   const ruleLabel = (r) => r.label || (r.match === 'type' ? r.value : cat?.products.find(p => p.id === r.value)?.title) || r.value
+  // Whole-order rules: [{ label, when: [{ match, value, label, min_qty }], items_min, items_max, box, weight_g }]
+  const combos = f.combo_rules || []
+  const setCombos = (list) => set({ combo_rules: list })
+  const setCombo = (i, patch) => setCombos(combos.map((r, j) => (j === i ? { ...r, ...patch } : r)))
+  const setCond = (i, k, patch) => setCombo(i, { when: combos[i].when.map((w, j) => (j === k ? { ...w, ...patch } : w)) })
+  const moveCombo = (i, d) => { const l = [...combos]; const [x] = l.splice(i, 1); l.splice(i + d, 0, x); setCombos(l) }
+  const targetOf = (v) => {
+    const [match, ...rest] = v.split(':'); const value = rest.join(':')
+    return { match, value, label: match === 'type' ? value : (cat?.products.find(p => p.id === value)?.title || '') }
+  }
+  const TargetSelect = ({ value, onChange, label }) => (
+    <select aria-label={label} value={value} onChange={e => onChange(targetOf(e.target.value))}>
+      <option value="">Choose a product or type…</option>
+      <optgroup label="Product types">{(cat?.types || []).map(t => <option key={t} value={`type:${t}`}>{t} (any)</option>)}</optgroup>
+      <optgroup label="Products">{(cat?.products || []).map(p => <option key={p.id} value={`product:${p.id}`}>{p.title}{p.status !== 'ACTIVE' ? ` (${p.status.toLowerCase()})` : ''}</option>)}</optgroup>
+    </select>
+  )
   const pickTarget = (i, v) => {
     const [match, ...rest] = v.split(':'); const value = rest.join(':')
     const label = match === 'type' ? value : (cat?.products.find(p => p.id === value)?.title || '')
@@ -125,7 +142,55 @@ export default function ShippingSettings({ settings, isAdmin, onSaved }) {
 
         <section className="ship-card" style={{ margin: 0, gridColumn: '1 / -1' }}>
           <div className="ship-card-head">
-            <div><h3>Packing rules</h3>
+            <div><h3>Order combinations</h3>
+              <p className="packed-sub" style={{ maxWidth: 'none', margin: '2px 0 0' }}>
+                Packaging for a whole order, checked first and top to bottom; the first that fits decides. For example "Hoodie + Mask → Medium box", or "3 or more pieces → Large box".
+                Orders no combination fits use the per-product rules below.</p></div>
+            {!ro && <button className="btn btn-secondary btn-sm" onClick={() => setCombos([...combos, { label: '', when: [], items_min: '', items_max: '', box: f.default_box, weight_g: '' }])}><Icon name="plus" size={14} /> Add combination</button>}
+          </div>
+          {!combos.length ? <p className="packed-sub" style={{ maxWidth: 'none', margin: 0 }}>No combinations yet.</p> : (
+            <div className="ship-combos">
+              {combos.map((r, i) => (
+                <div className="ship-combo" key={i}>
+                  <div className="ship-combo-head">
+                    <span className="ship-combo-no">{i + 1}</span>
+                    <input aria-label="Rule name" placeholder="Name, e.g. Hoodie + mask" value={r.label} disabled={ro} onChange={e => setCombo(i, { label: e.target.value })} />
+                    {!ro && <div className="ship-combo-tools">
+                      <button type="button" className="btn-icon" aria-label="Move up" disabled={i === 0} onClick={() => moveCombo(i, -1)}>↑</button>
+                      <button type="button" className="btn-icon" aria-label="Move down" disabled={i === combos.length - 1} onClick={() => moveCombo(i, 1)}>↓</button>
+                      <button type="button" className="mini-btn mini-btn-danger" onClick={() => setCombos(combos.filter((_, j) => j !== i))}>Remove</button>
+                    </div>}
+                  </div>
+                  <div className="ship-combo-body">
+                    <div>
+                      <span className="ship-field-label">The order has</span>
+                      {(r.when || []).map((w, k) => (
+                        <div className="ship-cond" key={k}>
+                          {ro || !cat ? <span>{w.label || w.value}{w.match === 'type' ? ' (any)' : ''}</span>
+                            : TargetSelect({ label: 'Product or type', value: w.value ? `${w.match}:${w.value}` : '', onChange: (t) => setCond(i, k, t) })}
+                          <input aria-label="At least how many" type="number" min="1" title="at least" value={w.min_qty || 1} disabled={ro} onChange={e => setCond(i, k, { min_qty: e.target.value })} />
+                          {!ro && <button type="button" className="btn-icon" aria-label="Remove item" onClick={() => setCombo(i, { when: r.when.filter((_, j) => j !== k) })}><Icon name="close" size={14} /></button>}
+                        </div>
+                      ))}
+                      {!ro && <button type="button" className="mini-btn" disabled={!cat} onClick={() => setCombo(i, { when: [...(r.when || []), { match: 'type', value: '', label: '', min_qty: 1 }] })}>+ product or type</button>}
+                    </div>
+                    <div className="form-row">
+                      <div className="input-group" style={{ marginBottom: 0 }}><label htmlFor={`cb-min-${i}`}>Pieces from</label><input id={`cb-min-${i}`} type="number" min="1" placeholder="any" value={r.items_min ?? ''} disabled={ro} onChange={e => setCombo(i, { items_min: e.target.value })} /></div>
+                      <div className="input-group" style={{ marginBottom: 0 }}><label htmlFor={`cb-max-${i}`}>to</label><input id={`cb-max-${i}`} type="number" min="1" placeholder="any" value={r.items_max ?? ''} disabled={ro} onChange={e => setCombo(i, { items_max: e.target.value })} /></div>
+                      <div className="input-group" style={{ marginBottom: 0 }}><label htmlFor={`cb-box-${i}`}>Packaging</label>
+                        <select id={`cb-box-${i}`} value={r.box} disabled={ro} onChange={e => setCombo(i, { box: e.target.value })}>{f.boxes.map(b => <option key={b.key} value={b.key}>{b.name}</option>)}</select></div>
+                      <div className="input-group" style={{ marginBottom: 0 }}><label htmlFor={`cb-w-${i}`}>Weight g</label><input id={`cb-w-${i}`} type="number" min="50" placeholder="worked out" value={r.weight_g ?? ''} disabled={ro} onChange={e => setCombo(i, { weight_g: e.target.value })} /></div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+        <section className="ship-card" style={{ margin: 0, gridColumn: '1 / -1' }}>
+          <div className="ship-card-head">
+            <div><h3>Per-product rules</h3>
               <p className="packed-sub" style={{ maxWidth: 'none', margin: '2px 0 0' }}>
                 Which products need which packaging. Each order goes in the biggest packaging any of its items needs, so a hoodie with a mask goes in the mask's box.
                 If there are more pieces than it fits, the next size up. A rule for a product beats a rule for its type. You can still change it per order.</p></div>

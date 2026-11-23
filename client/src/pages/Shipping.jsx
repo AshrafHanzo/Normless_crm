@@ -12,6 +12,7 @@ import Activity from './shipping/Activity'
 import ShippingSettings from './shipping/ShippingSettings'
 import ShipDrawer from './shipping/ShipDrawer'
 import ShipmentDrawer from './shipping/ShipmentDrawer'
+import ManualShipDrawer from './shipping/ManualShipDrawer'
 import { ago } from './shipping/common'
 
 const TABS = [
@@ -43,6 +44,7 @@ export default function Shipping() {
   const [shipOrders, setShipOrders] = useState(null)    // orders in the create drawer
   const [openId, setOpenId] = useState(null)            // shipment in the detail drawer
   const [syncing, setSyncing] = useState(false)
+  const [manual, setManual] = useState(false)
   const [rev, setRev] = useState(0)                     // bumps when anything changed
 
   const loadShared = useCallback(async () => {
@@ -87,9 +89,14 @@ export default function Shipping() {
           </p>
         </div>
         {canManage && (
-          <button className="btn btn-secondary" onClick={syncNow} disabled={syncing || status?.configured === false}>
-            <Icon name="refresh" size={15} /> {syncing ? 'Updating…' : 'Update tracking'}
-          </button>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button className="btn btn-secondary" onClick={syncNow} disabled={syncing || status?.configured === false}>
+              <Icon name="refresh" size={15} /> {syncing ? 'Updating…' : 'Update tracking'}
+            </button>
+            <button className="btn btn-primary" onClick={() => setManual(true)} disabled={status?.configured === false}>
+              <Icon name="plus" size={15} /> New shipment
+            </button>
+          </div>
         )}
       </div>
 
@@ -125,8 +132,9 @@ export default function Shipping() {
         <ShipDrawer orders={shipOrders} settings={settings} onClose={() => setShipOrders(null)}
           onDone={() => { changed() }} />
       )}
+      {manual && <ManualShipDrawer onClose={() => setManual(false)} onDone={changed} />}
       {openId && (
-        <ShipmentDrawer id={openId} canManage={canManage} onClose={() => setOpenId(null)}
+        <ShipmentDrawer id={openId} canManage={canManage} settings={settings} onClose={() => setOpenId(null)}
           onChanged={changed} onRecreate={() => { setOpenId(null); go('cancelled') }} />
       )}
     </div>

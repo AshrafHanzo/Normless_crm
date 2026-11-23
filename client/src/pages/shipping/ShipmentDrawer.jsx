@@ -5,12 +5,13 @@ import Icon from '../../components/Icon'
 import { BUCKET_BADGE, BUCKET_LABEL, dayTime, money, statusText, trackingUrl } from './common'
 
 /** One shipment: where it is, every scan, and what can still be done to it. */
-export default function ShipmentDrawer({ id, canManage, onClose, onChanged, onRecreate }) {
+export default function ShipmentDrawer({ id, canManage, settings, onClose, onChanged, onRecreate }) {
   const apiFetch = useApi()
   const toast = useToast()
   const [data, setData] = useState(null)
   const [busy, setBusy] = useState('')
-  const [editing, setEditing] = useState(null)   // { phone, add, name }
+  const [editing, setEditing] = useState(null)   // the form; editBase is what it started from
+  const [editBase, setEditBase] = useState(null)
   const [allScans, setAllScans] = useState(false)
 
   const load = async () => {
@@ -48,8 +49,21 @@ export default function ShipmentDrawer({ id, canManage, onClose, onChanged, onRe
     if (!r || r.error) return toast.error(r?.error || 'Delhivery refused')
     toast.success('Re-attempt requested'); onChanged(); load()
   })
+  const startEdit = () => {
+    const base = {
+      name: s.consignee_name || '', phone: s.consignee_phone || '', add: '',
+      payment_mode: s.payment_mode === 'COD' ? 'COD' : 'Prepaid', cod_amount: s.payment_mode === 'COD' ? String(Number(s.cod_amount) || '') : '',
+      box: '', weight_g: s.weight_g ? String(s.weight_g) : '', l: s.length_cm ? String(Number(s.length_cm)) : '',
+      b: s.width_cm ? String(Number(s.width_cm)) : '', h: s.height_cm ? String(Number(s.height_cm)) : '', products_desc: s.products_desc || '',
+    }
+    setEditBase(base); setEditing(base)
+  }
   const saveEdit = () => act('edit', async () => {
-    const r = await apiFetch(`/api/shipping/shipments/${s.id}/edit`, { method: 'POST', body: JSON.stringify(editing) })
+    // Only what changed goes to Delhivery.
+    const changed = Object.fromEntries(Object.entries(editing).filter(([k, v]) => String(v ?? '') !== String(editBase[k] ?? '') && String(v ?? '').trim() !== ''))
+    if (editing.payment_mode !== editBase.payment_mode) changed.payment_mode = editing.payment_mode
+    if (!Object.keys(changed).length) { setEditing(null); return }
+    const r = await apiFetch(`/api/shipping/shipments/${s.id}/edit`, { method: 'POST', body: JSON.stringify(changed) })
     if (!r || r.error) return toast.error(r?.error || 'Delhivery refused')
     toast.success('Updated with Delhivery'); setEditing(null); onChanged(); load()
   })
@@ -82,8 +96,8 @@ export default function ShipmentDrawer({ id, canManage, onClose, onChanged, onRe
             <a className="btn btn-secondary btn-sm" href={link} target="_blank" rel="noreferrer"><Icon name="external" size={14} /> Delhivery tracking</a>
             {s.bucket !== 'cancelled' && s.direction !== 'return' && <button className="btn btn-secondary btn-sm" onClick={label} disabled={busy === 'label'}><Icon name="printer" size={14} /> {busy === 'label' ? 'Fetching…' : 'Reprint label'}</button>}
             {canManage && s.bucket === 'ndr' && <button className="btn btn-primary btn-sm" onClick={reattempt} disabled={!!busy}>Re-attempt delivery</button>}
-            {canManage && ['waiting_pickup', 'in_transit', 'ndr'].includes(s.bucket) && !editing && (
-              <button className="btn btn-secondary btn-sm" onClick={() => setEditing({ name: s.consignee_name || '', phone: '', add: '' })}>Change phone or address</button>
+            {canManage && ['waiting_pickup', 'in_transit', 'ndr', 'out_for_delivery'].includes(s.bucket) && !editing && (
+              <button className="btn btn-secondary btn-sm" onClick={startEdit}><Icon name="edit" size={14} /> Edit shipment</button>
             )}
             {canManage && cancellable && <button className="btn btn-danger btn-sm" onClick={cancel} disabled={!!busy}>{s.bucket === 'waiting_pickup' ? 'Cancel shipment' : 'Return to us'}</button>}
             {canManage && openCancel && <button className="btn btn-primary btn-sm" onClick={onRecreate}>Re-create</button>}
@@ -96,12 +110,35 @@ export default function ShipmentDrawer({ id, canManage, onClose, onChanged, onRe
 
           {editing && (
             <section className="ship-card" style={{ margin: 0 }}>
-              <h3>Change with Delhivery</h3>
+              <h3>Edit with Delhivery</h3>
               <div className="form-row">
                 <div className="input-group"><label htmlFor="ed-name">Name</label><input id="ed-name" value={editing.name} onChange={e => setEditing({ ...editing, name: e.target.value })} /></div>
-                <div className="input-group"><label htmlFor="ed-phone">Phone <span className="label-hint">leave blank to keep</span></label><input id="ed-phone" inputMode="tel" value={editing.phone} onChange={e => setEditing({ ...editing, phone: e.target.value })} /></div>
+                <div className="input-group"><label htmlFor="ed-phone">Phone {!editBase?.phone && <span className="label-hint">blank: keep</span>}</label><input id="ed-phone" inputMode="tel" value={editing.phone} onChange={e => setEditing({ ...editing, phone: e.target.value })} /></div>
               </div>
-              <div className="input-group"><label htmlFor="ed-add">Address <span className="label-hint">leave blank to keep</span></label><input id="ed-add" value={editing.add} onChange={e => setEditing({ ...editing, add: e.target.value })} /></div>
+              <div className="input-group"><label htmlFor="ed-add">Address <span className="label-hint">blank: keep</span></label><input id="ed-add" value={editing.add} onChange={e => setEditing({ ...editing, add: e.target.value })} /></div>
+              {s.bucket === 'waiting_pickup' ? (
+                <>
+                  <div className="form-row">
+                    <div className="input-group"><label htmlFor="ed-pay">Payment</label>
+                      <select id="ed-pay" value={editing.payment_mode} onChange={e => setEditing({ ...editing, payment_mode: e.target.value })}><option>COD</option><option>Prepaid</option></select></div>
+                    {editing.payment_mode === 'COD' && <div className="input-group"><label htmlFor="ed-cod">Collect (₹)</label><input id="ed-cod" type="number" min="1" value={editing.cod_amount} onChange={e => setEditing({ ...editing, cod_amount: e.target.value })} /></div>}
+                  </div>
+                  <div className="form-row">
+                    <div className="input-group"><label htmlFor="ed-box">Packaging</label>
+                      <select id="ed-box" value={editing.box} onChange={e => { const b = (settings?.boxes || []).find(x => x.key === e.target.value); setEditing({ ...editing, box: e.target.value, ...(b ? { l: String(b.l), b: String(b.b), h: String(b.h) } : {}) }) }}>
+                        <option value="">{s.box ? `Keep (${(settings?.boxes || []).find(x => x.key === s.box)?.name || s.box})` : 'Keep'}</option>
+                        {(settings?.boxes || []).map(b => <option key={b.key} value={b.key}>{b.name}</option>)}
+                      </select></div>
+                    <div className="input-group"><label htmlFor="ed-w">Weight (g)</label><input id="ed-w" type="number" min="50" value={editing.weight_g} onChange={e => setEditing({ ...editing, weight_g: e.target.value })} /></div>
+                  </div>
+                  <div className="form-row">
+                    {[['l', 'Length'], ['b', 'Breadth'], ['h', 'Height']].map(([k, label]) => (
+                      <div className="input-group" key={k}><label htmlFor={`ed-${k}`}>{label} cm</label><input id={`ed-${k}`} type="number" min="1" value={editing[k]} onChange={e => setEditing({ ...editing, [k]: e.target.value })} /></div>
+                    ))}
+                  </div>
+                  <div className="input-group"><label htmlFor="ed-prod">Products</label><input id="ed-prod" value={editing.products_desc} onChange={e => setEditing({ ...editing, products_desc: e.target.value })} /></div>
+                </>
+              ) : <p className="packed-sub" style={{ maxWidth: 'none', margin: 0 }}>Picked up already: only the name, phone and address can change now.</p>}
               <div style={{ display: 'flex', gap: 8 }}>
                 <button className="btn btn-primary btn-sm" onClick={saveEdit} disabled={busy === 'edit'}>{busy === 'edit' ? 'Saving…' : 'Send to Delhivery'}</button>
                 <button className="btn btn-secondary btn-sm" onClick={() => setEditing(null)}>Cancel</button>
@@ -136,7 +173,10 @@ export default function ShipmentDrawer({ id, canManage, onClose, onChanged, onRe
                 <dt>Payment</dt><dd>{s.payment_mode === 'COD' ? `COD ${money(s.cod_amount)}` : (s.payment_mode || '—')}</dd>
                 {s.box && <><dt>Box</dt><dd>{s.box}{s.weight_g ? ` · ${s.weight_g / 1000} kg` : ''}</dd></>}
                 {s.shipping_mode && <><dt>Mode</dt><dd>{s.shipping_mode}</dd></>}
-                <dt>Deliver to</dt><dd>{[s.consignee_name, s.consignee_city || s.destination, s.consignee_pincode].filter(Boolean).join(', ') || '—'}</dd>
+                <dt>Deliver to</dt><dd>{[s.consignee_name, s.consignee_phone, s.consignee_address, s.consignee_city || s.destination, s.consignee_pincode].filter(Boolean).join(', ') || '—'}</dd>
+                {s.source === 'manual' && <><dt>Manual</dt><dd>{s.delhivery_order}{s.source_ref ? ` · for ${s.source_ref.replace(':', ' #')}` : ''}</dd></>}
+                {s.products_desc && <><dt>Products</dt><dd>{s.products_desc}</dd></>}
+                {s.customer_notified_at && <><dt>Customer told</dt><dd>New AWB sent on WhatsApp · {dayTime(s.customer_notified_at)}</dd></>}
                 <dt>Created</dt><dd>{dayTime(s.manifested_at || s.created_at)} · {s.created_via === 'crm' ? `CRM${s.created_by ? ` (${s.created_by.split('@')[0]})` : ''}` : 'Delhivery portal'}</dd>
                 <dt>Picked up</dt><dd>{s.picked_up_at ? dayTime(s.picked_up_at) : 'Not yet'}</dd>
                 {s.delivered_at && <><dt>Delivered</dt><dd>{dayTime(s.delivered_at)}</dd></>}

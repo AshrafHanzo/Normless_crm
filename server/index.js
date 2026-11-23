@@ -84,6 +84,20 @@ app.get('/api/scanner/lookup/:id', authMiddleware, async (req, res) => {
             WHERE o.order_number = ?
         `).get(id);
 
+        // A Delhivery label carries the AWB, not the order number: find the order through it.
+        let scannedShipment = null;
+        if (!order && /^\d{10,16}$/.test(id)) {
+            scannedShipment = (await db.query('SELECT order_number FROM shipments WHERE awb = $1', [id])).rows[0] || null;
+            if (scannedShipment?.order_number) {
+                order = await db.prepare(`
+                    SELECT o.*, c.first_name, c.last_name, c.email as customer_email
+                    FROM orders o
+                    LEFT JOIN customers c ON o.customer_shopify_id = c.shopify_id
+                    WHERE o.order_number = ?
+                `).get(scannedShipment.order_number);
+            }
+        }
+
         if (!order) {
             const altId = id.startsWith('#') ? id.substring(1) : `#${id}`;
             order = await db.prepare(`
@@ -192,7 +206,18 @@ app.get('/api/scanner/lookup/:id', authMiddleware, async (req, res) => {
                 order.packed = null;
             }
 
-            console.log(`✅ [FOUND] Order ${order.order_number} with ${order.line_items.length} items`);
+            // Where its Delhivery parcel stands, so a cancelled label is caught at the packing table
+            // rather than at the pickup. The scanned AWB if a label was scanned, else the order's.
+            try {
+                const st = await require('./services/shipping').statusOf({ awbs: /^\d{10,16}$/.test(id) ? [id] : [], orders: [order.order_number] });
+                order.shipment = st.by_awb[id] || st.by_order[order.order_number] || null;
+                if (st.by_awb[id] && st.by_order[order.order_number] && st.by_order[order.order_number].awb !== id) order.shipment.current = st.by_order[order.order_number];
+            } catch (shipErr) {
+                console.error('shipment status failed:', shipErr.message);
+                order.shipment = null;
+            }
+
+            console.log(`✅ [FOUND] Order ${order.order_number} with ${(order.line_items || []).length} items`);
             return res.json(order);
         } else {
             console.log(`❌ [NOT FOUND] No order matches "${id}"`);

@@ -2,6 +2,7 @@
 
 export const BUCKETS = [
   { key: 'pending', label: 'Pending AWB' },
+  { key: 'on_hold', label: 'On hold', sub: true },
   { key: 'ready_to_ship', label: 'Ready to ship' },
   { key: 'ready_for_pickup', label: 'Ready for pickup' },
   { key: 'in_transit', label: 'In transit' },
@@ -13,6 +14,7 @@ export const BUCKETS = [
   { key: 'cancelled_open', label: 'Auto-cancelled', tone: 'danger' },
   { key: 'cancelled', label: 'All cancelled', sub: true },
   { key: 'all', label: 'All shipments' },
+  { key: 'manual', label: 'Manual shipments', sub: true },
   { key: 'returns', label: 'All returns', heading: 'Customer returns' },
   { key: 'return_pickup', label: 'Waiting for pickup', sub: true },
   { key: 'return_transit', label: 'On the way back', sub: true },

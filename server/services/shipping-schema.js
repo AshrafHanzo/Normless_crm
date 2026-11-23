@@ -31,6 +31,9 @@ const DEFAULT_SETTINGS = {
     ],
     default_box: 'poly_s',          // for products no rule mentions
     default_item_g: 300,            // per piece, when Shopify has no weight for the variant
+    // Rules for whole orders, checked first, top to bottom; the first that fits decides.
+    // [{ label, when: [{ match: 'type'|'product', value, label, min_qty }], items_min, items_max, box, weight_g }]
+    combo_rules: [],
     // [{ match: 'type' | 'product', value: 'Hoodie' | '<product id>', label, box, item_g }]
     // A product rule beats a type rule.
     pack_rules: [],
@@ -127,6 +130,18 @@ async function ensureShippingSchema() {
             ALTER TABLE shipments ADD COLUMN IF NOT EXISTS direction TEXT;
             -- When the bell was told about this auto-cancel (once per cancel).
             ALTER TABLE shipments ADD COLUMN IF NOT EXISTS cancel_alerted_at TIMESTAMP;
+            -- shopify: an order's shipment; manual: typed in (a replacement, a marketing parcel, a
+            -- support re-send). source_ref says where a manual one came from: support:<ticket id>,
+            -- marketing:<order id>.
+            ALTER TABLE shipments ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'shopify';
+            ALTER TABLE shipments ADD COLUMN IF NOT EXISTS source_ref TEXT;
+            ALTER TABLE shipments ADD COLUMN IF NOT EXISTS consignee_phone TEXT;
+            ALTER TABLE shipments ADD COLUMN IF NOT EXISTS consignee_address TEXT;
+            -- When the customer was sent the new tracking number after a re-create.
+            ALTER TABLE shipments ADD COLUMN IF NOT EXISTS customer_notified_at TIMESTAMP;
+            CREATE INDEX IF NOT EXISTS shipments_source_ref_idx ON shipments (source_ref);
+            -- Delhivery order ids for manual shipments: M1001, M1002…
+            CREATE SEQUENCE IF NOT EXISTS shipments_manual_seq START 1001;
             CREATE INDEX IF NOT EXISTS shipments_order_idx ON shipments (order_number);
             CREATE INDEX IF NOT EXISTS shipments_bucket_idx ON shipments (bucket);
             CREATE INDEX IF NOT EXISTS shipments_created_idx ON shipments (created_at DESC);
