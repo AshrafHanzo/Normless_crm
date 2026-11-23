@@ -364,7 +364,12 @@ async function sync({ actor } = {}) {
                 else if (r?.row) await linkRemake(r.row);
             }
 
-            // 2c. A cancelled shipment whose order was since cancelled in Shopify needs nothing.
+            // 2c. A cancelled shipment already replaced by a new AWB is dealt with (it may have been
+            //     linked before it counted as cancelled).
+            await db.query(
+                `UPDATE shipments SET cancel_handled = 'recreated', cancel_handled_at = CURRENT_TIMESTAMP
+                  WHERE bucket = 'cancelled' AND cancel_handled IS NULL AND recreated_as IS NOT NULL`);
+            //     And one whose order was since cancelled in Shopify needs nothing.
             await db.query(
                 `UPDATE shipments s SET cancel_handled = 'not_shipping', cancel_handled_by = 'Shopify: order cancelled',
                         cancel_handled_at = CURRENT_TIMESTAMP
