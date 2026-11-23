@@ -848,6 +848,12 @@ const ORDER_BILLING_NAME = `(SELECT NULLIF(TRIM(o.billing_name), '') FROM crewfi
                               ORDER BY o.sl_no DESC LIMIT 1)`;
 // A Normless chat with a support ticket still open on it.
 const HAS_OPEN_TICKET = `EXISTS (SELECT 1 FROM support_tickets t WHERE t.wa_conversation_id = c.id AND t.status <> 'Closed')`;
+// Normless with the AI agent: "Needs a person" leaves out what the agent is about to answer and
+// adds what it asked the team about; "AI agent" is what it has worked on (nl-agent.inboxSql).
+const NL_BASE_WAITING = `c.status = 'open' AND c.mode = 'human' AND ${LAST_DIRECTION} = 'in' AND ${NOT_SETTLED}`;
+const nlQueues = (req) => (req.waLine?.brand === 'normless'
+    ? require('../services/nl-agent').inboxSql(req.waLine.id, NL_BASE_WAITING)
+    : Promise.resolve(null));
 
 // Crewfit: does the bot answer this chat? A person's choice if they made one; otherwise only while
 // nobody has it.
@@ -897,9 +903,9 @@ router.get('/badge', async (req, res) => {
         const me = `$${params.length}`;
         const notMuted = `NOT EXISTS (SELECT 1 FROM wa_conversation_mutes mu WHERE mu.conversation_id = c.id AND mu.username = ${me})`;
         const normless = req.waLine?.brand === 'normless';
+        const nq = await nlQueues(req);
         const r = await db.query(normless
-            ? `SELECT COUNT(*)::int AS n ${LIST_FROM} WHERE ${vis} AND ${notMuted}
-                  AND c.status = 'open' AND c.mode = 'human' AND ${LAST_DIRECTION} = 'in'`
+            ? `SELECT COUNT(*)::int AS n ${LIST_FROM} WHERE ${vis} AND ${notMuted} AND ${nq.waiting}`
             : `SELECT COALESCE(SUM(c.unread_count), 0)::int AS n ${LIST_FROM} WHERE ${vis} AND ${notMuted}`, params);
         res.json({ count: r.rows[0].n, kind: normless ? 'waiting' : 'unread' });
     } catch (err) {
@@ -977,7 +983,12 @@ router.get('/conversations', async (req, res) => {
         const where = [visibility(req, params), lastMessageRange(req, params)];
 
         const filter = String(req.query.filter || 'all');
-        if (filter === 'mine') {
+        const nq = await nlQueues(req);
+        if (nq && filter === 'waiting') {
+            where.push(nq.waiting);
+        } else if (nq && filter === 'ai') {
+            where.push(nq.ai);
+        } else if (filter === 'mine') {
             params.push(String(req.user?.username || '').toLowerCase());
             where.push(`LOWER(COALESCE(c.assigned_to,'')) = $${params.length}`);
         } else if (filter === 'unassigned') {
@@ -997,6 +1008,8 @@ router.get('/conversations', async (req, res) => {
         }
         if (filter === 'closed') {
             where.push(`c.status = 'closed'`);
+        } else if (nq && filter === 'ai') {
+            // Open and closed alike: what the agent answered and what it closed.
         } else if (String(req.query.status || 'open') !== 'all') {
             params.push(String(req.query.status || 'open'));
             where.push(`c.status = $${params.length}`);
@@ -1070,7 +1083,8 @@ router.get('/conversations', async (req, res) => {
         const next = rows.rows.length === limit
             ? { before_at: lastRow.page_at || '', before_id: lastRow.id, ...(waitingFirst ? { before_flag: lastRow.unreplied > 0 ? 1 : 0 } : {}) } : null;
         const muted = await mutedFor(req, rows.rows.map(r => r.id));
-        const shaped = rows.rows.map(({ page_at, ...r }) => ({ ...shapeConversation(r), muted: muted.has(r.id) }));
+        const aiStates = nq ? await require('../services/nl-agent').inboxStates(rows.rows.map(r => r.id)) : new Map();
+        const shaped = rows.rows.map(({ page_at, ...r }) => ({ ...shapeConversation(r), muted: muted.has(r.id), ai: aiStates.get(r.id) || null }));
         // A further page is only more chats: the counts came with the first.
         if (paging) return res.json({ conversations: shaped, next });
 
@@ -1085,8 +1099,9 @@ router.get('/conversations', async (req, res) => {
                     -- A chat this person muted adds nothing to their badge.
                     COALESCE(SUM(c.unread_count) FILTER (WHERE NOT EXISTS (SELECT 1 FROM wa_conversation_mutes mu
                               WHERE mu.conversation_id = c.id AND mu.username = ${me})), 0) AS unread,
-                    COUNT(*) FILTER (WHERE c.status = 'open' AND c.mode = 'human' AND ${LAST_DIRECTION} = 'in' AND ${NOT_SETTLED}${req.waLine.brand === 'crewfit'
-                        ? ` AND (c.assigned_to IS NULL OR LOWER(c.assigned_to) = ${me}) AND (${LAST_MESSAGE('wamid')} NOT LIKE 'import:%' OR ${BACKUP_WAITING})` : ''})::int AS waiting,
+                    COUNT(*) FILTER (WHERE ${nq ? nq.waiting : `c.status = 'open' AND c.mode = 'human' AND ${LAST_DIRECTION} = 'in' AND ${NOT_SETTLED}${req.waLine.brand === 'crewfit'
+                        ? ` AND (c.assigned_to IS NULL OR LOWER(c.assigned_to) = ${me}) AND (${LAST_MESSAGE('wamid')} NOT LIKE 'import:%' OR ${BACKUP_WAITING})` : ''}`})::int AS waiting,
+                    ${nq ? `COUNT(*) FILTER (WHERE ${nq.ai})::int AS ai,` : ''}
                     -- Unread customer messages behind each of Crewfit's chips (muted chats left out).
                     COALESCE(SUM(c.unread_count) FILTER (WHERE c.assigned_to IS NULL AND NOT EXISTS (SELECT 1 FROM wa_conversation_mutes mu
                               WHERE mu.conversation_id = c.id AND mu.username = ${me})), 0)::int AS unread_unassigned,

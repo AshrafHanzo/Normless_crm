@@ -35,6 +35,7 @@ const SOURCES = {
     // Support tickets: the reference and what it is about ("address update on order #13533").
     ticket_ref: { label: 'Support ticket number', example: 'CS-0068' },
     ticket_subject: { label: 'What the ticket is about', example: 'size change on order #13091' },
+    ticket_news: { label: 'What changed on the ticket', example: 'your delivery address has been updated' },
     store_name: { label: 'Store name (Normless)', example: 'Normless' },
     currency: { label: 'Currency (INR)', example: 'INR' },
     // Vendors (Purchasing): filled by services/vendor-wa.
@@ -147,6 +148,11 @@ const SET = [
         event: 'ticket_raised', name: 'nlcrm_ticket_raised', category: 'UTILITY', image: false,
         body: 'Hi {{1}}, we have raised support ticket {{2}} for your request: {{3}}.\n\nOur team will get back to you here between 9 am and 6 pm. You can reply to this message anytime to ask about it.',
         vars: ['first_name', 'ticket_ref', 'ticket_subject'],
+    },
+    {
+        event: 'ticket_update', name: 'nlcrm_ticket_update', category: 'UTILITY', image: false,
+        body: 'Hi {{1}}, an update on your support ticket {{2}} for {{3}}: {{4}}.\n\nYou can reply to this message anytime if you have any questions.',
+        vars: ['first_name', 'ticket_ref', 'ticket_subject', 'ticket_news'],
     },
 ];
 

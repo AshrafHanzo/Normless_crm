@@ -39,6 +39,7 @@ const EVENTS = [
     { key: 'order_cod', group: 'order', label: 'New COD order', hint: 'Nothing paid yet. Use this or COD confirmation, not usually both.', links: ['order', 'store'] },
     { key: 'dispatch_delay', group: 'order', label: 'Dispatch delay notice', hint: 'A new order with a product and size that is out of stock: when it will be dispatched. Runs between the dates set here.', links: ['order', 'store'] },
     { key: 'order_cancelled', group: 'order', label: 'Order cancelled', hint: 'When an order is cancelled in Shopify.', links: ['store', 'order'] },
+    { key: 'ticket_update', group: 'order', label: 'Support ticket updated', hint: 'When the team updates a ticket the customer should hear about (address or size changed, replacement started, resolved). Inside the 24-hour window the AI agent writes it; outside it, this template goes. On unless switched off.', links: ['store'] },
     { key: 'ticket_raised', group: 'order', label: 'Support ticket raised', hint: 'When a support ticket is raised: the ticket number and what it is about. Inside the 24-hour window it goes as a plain message; outside it, as this template. On unless switched off.', links: ['store'] },
     { key: 'cod_confirm', group: 'cod', label: 'COD confirmation', hint: 'Asks a COD customer to confirm or cancel before it ships.', links: ['order', 'store'] },
     { key: 'fulfilled', group: 'fulfillment', label: 'Shipped with tracking', hint: 'When an order is fulfilled with a tracking number.', links: ['tracking', 'order', 'store'] },
@@ -70,7 +71,7 @@ const blankEvent = (e) => {
     return { enabled: false, template: null, vars: t ? [...t.vars] : [], link: t?.link?.source || e.links[0], delay: e.delay ?? 0, coupon: '',
         ...(e.key === 'dispatch_delay' ? DELAY_BLANK : {}),
         // Telling a customer their ticket number is part of raising it, so it starts switched on.
-        ...(e.key === 'ticket_raised' ? { enabled: true, template: `${t.name}|en` } : {}) };
+        ...(['ticket_raised', 'ticket_update'].includes(e.key) ? { enabled: true, template: `${t.name}|en` } : {}) };
 };
 // The dispatch delay notice's own settings: which products and sizes, the date they go out, and
 // the orders it covers — placed from `from` (when it was switched on) to the end of `until`.
@@ -417,6 +418,25 @@ async function ticketRaised(ticket) {
         await db.query(`UPDATE nl_auto_sends SET status = 'failed', error = $2 WHERE id = $1`, [claim.id, String(err.message).slice(0, 500)]);
         return { id: claim.id, status: 'failed', error: err.message };
     }
+}
+
+/**
+ * A ticket update the customer should hear about, outside the 24-hour window (inside it, the AI
+ * agent writes it): the ticket_update template. One per change: `news` is part of the key.
+ */
+async function ticketUpdated(ticket, news) {
+    const line = lines.get('normless');
+    if (!line?.id || !ticket?.id || !news) return null;
+    const phone = ticketPhone(ticket.customer_phone) || (ticket.wa_conversation_id ? (await db.query(
+        `SELECT k.phone FROM wa_conversations c JOIN wa_contacts k ON k.id = c.contact_id WHERE c.id = $1`, [ticket.wa_conversation_id])).rows[0]?.phone : null);
+    if (!phone || phone === DEMO_PHONE) return { status: 'skipped', error: 'No WhatsApp number on the ticket' };
+    const ref = `CS-${String(ticket.ref_no ?? 0).padStart(4, '0')}`;
+    const word = String(ticket.customer_name || '').trim().split(/\s+/)[0].replace(/[^\p{L}'-]/gu, '');
+    const first = word ? word.charAt(0).toUpperCase() + word.slice(1).toLowerCase() : 'there';
+    const reason = String(ticket.reason || '').trim();
+    const what = reason && reason !== 'Other' ? reason.toLowerCase() : 'your request';
+    const subject = ticket.order_number ? `${what} on order ${ticket.order_number}` : what;
+    return fire(line.id, 'ticket_update', `${ticket.id}:${news}`, { phone, name: ticket.customer_name || null, first_name: first, ticket_ref: ref, ticket_subject: subject, ticket_news: news }, { label: ref });
 }
 
 /* ── Abandoned carts (Razorpay) ───────────────────────────────────────────────────────────── */
@@ -880,6 +900,7 @@ async function sendTrackingUpdate(shopifyOrderId, awb) {
 }
 
 module.exports = {
+    ticketUpdated,
     sendTrackingUpdate,
     EVENTS, config, saveEvents, fire, onAbandoned, onText, onOptOut, cartTick, orderTick, shipmentTick, orderEvents, onReply, recent, cartStats,
     createSetTemplate, recoverCarts, start, CART_HOURS, saveVendorHold, sendDispatchDelay, delayedItems, ticketRaised,

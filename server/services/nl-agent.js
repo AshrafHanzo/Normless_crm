@@ -35,13 +35,16 @@ const MAX_ROUNDS = 8;          // tool rounds before it gives up and asks the te
 const HISTORY = 30;            // messages of context
 const SETTLE_MS = 20_000;      // let a burst of messages finish (and the bot hand over) first
 const SWEEP_MS = 5 * 60_000;   // look for waiting chats this often
-const SWEEP_MAX = 8;           // chats per sweep, oldest first
+const SWEEP_MAX = 15;          // chats per sweep, oldest first
+// A chat the agent hasn't answered this long after the customer wrote shows in "Needs a person".
+const GRACE_MINUTES = 60;
 const MODELS = ['claude-opus-5-5', 'claude-sonnet-5-5'];
 const REFUND_POLICY = 'https://normless.store/policies/refund-policy';
 // Support reasons the agent may raise a ticket for, and the nature each one is filed under.
 const TICKET_REASONS = {
     'Address update': 'Order Edits (Pre-fulfilment)',
     'Size Change': 'Order Edits (Pre-fulfilment)',
+    'Initiate Replacement': 'Return & Replacement',     // a size exchange after delivery
     'Damaged product': 'Return & Replacement',
     'Wrong product': 'Return & Replacement',
     'Failed Shipment': 'Reship',
@@ -101,6 +104,50 @@ async function waiting(conversationId, lineId, { quietMinutes = 30, force = fals
     return { conversation: c };
 }
 
+/**
+ * The inbox's two Normless queues, as SQL over wa_conversations c / wa_contacts k. `base` is the
+ * inbox's own "customer spoke last, a person has it" condition. With the agent on, a chat it is
+ * about to answer is the agent's, not the team's; it comes back to "Needs a person" when the agent
+ * asks the team, is paused on it, a person is in it, or it hasn't answered within the grace time.
+ */
+const ASKED = `EXISTS (SELECT 1 FROM nl_ai_questions aq WHERE aq.conversation_id = c.id AND aq.status = 'open')`;
+const TOUCHED = `(EXISTS (SELECT 1 FROM wa_messages am WHERE am.conversation_id = c.id AND am.sender_user = 'ai-agent' AND am.created_at > NOW() - INTERVAL '7 days')
+                 OR EXISTS (SELECT 1 FROM wa_activity aa WHERE aa.conversation_id = c.id AND aa.actor = 'ai-agent' AND aa.created_at > NOW() - INTERVAL '7 days'))`;
+async function inboxSql(lineId, base) {
+    const st = await status(lineId);
+    const { agent } = await settingsFor(lineId);
+    const quiet = Math.max(0, Math.round(Number(agent.quiet_minutes) || 0));
+    const personIn = `EXISTS (SELECT 1 FROM wa_messages pm WHERE pm.conversation_id = c.id AND pm.direction = 'out'
+                        AND pm.sender_type IN ('user','phone') AND pm.created_at > NOW() - INTERVAL '${quiet} minutes')`;
+    const vendor = `EXISTS (SELECT 1 FROM vendors vv WHERE vv.phone IS NOT NULL AND vv.phone = RIGHT(k.phone, 10))`;
+    const aiHas = st.on
+        ? `(${base} AND NOT c.ai_paused AND c.last_inbound_at > NOW() - INTERVAL '${GRACE_MINUTES} minutes' AND NOT ${personIn} AND NOT ${ASKED} AND NOT ${vendor})`
+        : 'FALSE';
+    return {
+        on: st.on,
+        waiting: `(((${base}) OR (c.status = 'open' AND ${ASKED})) AND NOT ${aiHas})`,
+        ai: `(${TOUCHED} OR ${ASKED} OR ${aiHas})`,
+        aiHas,
+    };
+}
+
+/** Per chat, for the inbox list: what the agent is doing on it. */
+async function inboxStates(ids) {
+    if (!ids.length) return new Map();
+    const r = await db.query(
+        `SELECT c.id,
+                (SELECT q.question FROM nl_ai_questions q WHERE q.conversation_id = c.id AND q.status = 'open' ORDER BY q.id DESC LIMIT 1) AS question,
+                (SELECT MAX(m.created_at) FROM wa_messages m WHERE m.conversation_id = c.id AND m.sender_user = 'ai-agent') AS replied_at,
+                (SELECT a.created_at FROM wa_activity a WHERE a.conversation_id = c.id AND a.actor = 'ai-agent' AND a.body LIKE 'AI agent closed%'
+                  ORDER BY a.id DESC LIMIT 1) AS closed_at,
+                c.ai_paused, c.status
+           FROM wa_conversations c WHERE c.id = ANY($1)`, [ids]);
+    return new Map(r.rows.map(x => [x.id, {
+        state: x.question ? 'asked' : x.ai_paused ? 'paused' : x.status === 'closed' && x.closed_at ? 'closed' : x.replied_at ? 'replied' : null,
+        question: x.question, replied_at: x.replied_at, closed_at: x.closed_at,
+    }]));
+}
+
 /* ── What it is told ──────────────────────────────────────────────────────────────────────── */
 
 const STABLE = `You are the Normless team's AI agent on WhatsApp. Normless (normless.store) is an Indian
@@ -119,23 +166,29 @@ How you work:
   not to promise something, don't.
 - You cannot refund, cancel, discount, change an order, or promise a delivery or dispatch date unless
   a lesson or the team's answer says you can. Never say you have done any of these.
-- Address change (with the full new address and pincode) or size change (with the new size), a damaged
-  or wrong item (after photos or the unboxing video arrived), a failed delivery: raise_ticket. The
-  customer is sent the ticket number automatically, so your reply only needs to say the team will
-  update them here.
+- Raise a support ticket with raise_ticket for: an address change before dispatch (get the full new
+  address with pincode), a size change before dispatch (reason "Size Change", with the new size), a
+  size exchange after delivery (reason "Initiate Replacement": item unworn, unwashed, tags on; get the
+  size they want), a damaged or wrong item (after photos or the unboxing video arrived), a failed
+  delivery. The customer is sent the ticket number automatically, so your reply only needs to say the
+  team is on it and will update them here.
+- Their tickets are in "This chat" below with status, progress and what the team did. When a customer
+  asks about one, tell them where it stands in plain words (never quote internal notes).
 - When you don't know the answer, the customer asks for something only the team can decide (a refund,
   a call back, an exception), they are angry after two replies, or anything is unclear: call ask_team
   with a precise question and what you already checked, and write nothing else. Never guess.
 - If the customer's last message needs no reply ("ok", "thanks", a thumbs up) and nothing is pending,
   call close_chat.
 
-How you write: WhatsApp messages from the Normless team, short and warm, 1 to 4 short sentences,
-plain text, *single asterisks* for bold if needed, no headings, paste links as plain URLs. Apologise
-once, sincerely, when we are late or wrong; don't grovel. Use the customer's first name when known.
-Write as "we" (the Normless team). Don't sign with a person's name and don't start with a label in
-brackets. If someone asks whether they are talking to a bot or AI, say honestly that you are the
-team's AI assistant and that a person can step in. Reply in the customer's language if they don't
-write in English.
+How you write: like a real person on the Normless customer care team typing on WhatsApp. Short and
+warm, 1 to 4 short sentences, natural and specific to this customer, never templated or robotic.
+Plain text, *single asterisks* for bold if needed, no headings, no bullet lists, paste links as plain
+URLs. Apologise once, sincerely, when we are late or wrong; don't grovel. Use the customer's first
+name when known. Write as "we" / "I" from the Normless team. Don't sign with a name and don't start
+with a label in brackets. Never mention AI, bots, assistants, automation, tools, "the system" or
+"checking my data". If a customer sincerely asks whether they are talking to a bot or a real person,
+don't answer that yourself and never claim to be human: call ask_team so a person on the team takes
+the chat. Reply in the customer's language if they don't write in English.
 
 The refund policy is at ${REFUND_POLICY}.`;
 
@@ -213,7 +266,8 @@ async function contextFor(c, settings) {
         awb: o.dispatch?.awb || null, tracking: o.dispatch?.tracking_url || null,
     }));
     const tickets = (data.tickets || []).slice(0, 6).map(t => ({
-        ref: `CS-${String(t.ref_no).padStart(4, '0')}`, order: t.order_number, reason: t.reason, status: t.status, progress: t.progress, action: t.action,
+        ref: `CS-${String(t.ref_no).padStart(4, '0')}`, order: t.order_number, reason: t.reason, raised: t.raised_on,
+        status: t.status, progress: t.progress, done_by_team: t.action || null,
     }));
     return [
         `Now: ${istNow()} (India). Team hours ${clock(settings.hours.start)} to ${clock(settings.hours.end)}; the team is ${isOpen(settings.hours) ? 'online' : 'offline'} now.`,
@@ -488,6 +542,11 @@ async function run(conversationId, { task = null, force = false } = {}) {
                 await log(c.id, 'ai', `AI agent replied${task ? ' (as the team asked)' : ''}`);
                 return { replied: out.text, did: out.did };
             }
+            // A customer waiting and nothing to say: that is a chat for a person.
+            if (!task && c.last_direction === 'in') {
+                await askTeam(c, { question: 'I couldn’t work out a reply to the customer’s last message. Please answer them.' }, line.id);
+                return { asked: 'No reply worked out', did: out.did };
+            }
             return { nothing: true, did: out.did };
         });
     } finally {
@@ -513,6 +572,7 @@ async function sweep() {
             `SELECT c.id FROM wa_conversations c
               WHERE c.line_id = $1 AND c.status = 'open' AND c.mode = 'human' AND NOT c.ai_paused
                 AND c.last_inbound_at > now() - INTERVAL '23 hours'
+                AND NOT EXISTS (SELECT 1 FROM vendors vv JOIN wa_contacts kk ON vv.phone = RIGHT(kk.phone, 10) WHERE kk.id = c.contact_id)
                 AND ${LAST('direction')} = 'in'
                 AND (c.settled_msg_id IS NULL OR ${LAST('id')} <> c.settled_msg_id)
                 AND NOT EXISTS (SELECT 1 FROM nl_ai_questions q WHERE q.conversation_id = c.id AND q.status = 'open')
@@ -593,6 +653,55 @@ async function answer(questionId, { answer: text, remember = false, lesson = nul
     return { lesson_id: lessonId, ...result };
 }
 
+/* ── Telling customers about their tickets ───────────────────────────────────────────────── */
+
+// What the team's "action" means to a customer.
+const ACTION_WORDS = {
+    'Size Updated': 'your size has been updated', 'Address Changed': 'your delivery address has been updated',
+    'Return Initiated': 'your return has been started', 'Replacement Initiated': 'your replacement has been started',
+    'Reshipped': 'your order has been shipped again', 'Shipped': 'your order has been shipped', 'Refunded': 'your refund has been processed',
+    'Cancelled': 'your order has been cancelled',
+};
+
+/** In plain words, what changed on a ticket that the customer would want to hear. Null if nothing. */
+function ticketNews(before, after) {
+    if (after.action && after.action !== before.action && ACTION_WORDS[after.action]) return ACTION_WORDS[after.action];
+    if (after.status === 'Closed' && before.status !== 'Closed') return 'it has been resolved';
+    if (after.progress === 'In Progress' && before.progress !== 'In Progress') return 'our team has started working on it';
+    return null;
+}
+
+/**
+ * Somebody changed a support ticket. If the change is news to the customer (an action taken, work
+ * started, resolved), they hear it on WhatsApp: written by the agent inside the 24-hour window,
+ * else the approved "ticket update" template. Never throws.
+ */
+async function ticketUpdated(before, after) {
+    try {
+        const news = ticketNews(before || {}, after || {});
+        if (!news) return null;
+        const line = lines.get('normless');
+        if (!line?.id) return null;
+        const ref = `CS-${String(after.ref_no ?? 0).padStart(4, '0')}`;
+        const conv = after.wa_conversation_id ? (await db.query(
+            `SELECT c.id, c.last_inbound_at, c.ai_paused, c.status FROM wa_conversations c WHERE c.id = $1 AND c.line_id = $2`,
+            [after.wa_conversation_id, line.id])).rows[0] : null;
+        const subject = `${String(after.reason || 'your request').toLowerCase()}${after.order_number ? ` on order ${after.order_number}` : ''}`;
+        if (conv && wa.windowOpen(conv.last_inbound_at) && (await status(line.id)).on && !conv.ai_paused) {
+            if (conv.status !== 'open') await db.query(`UPDATE wa_conversations SET status = 'open' WHERE id = $1`, [conv.id]);
+            await log(conv.id, 'ticket', `${ref} updated (${news}); the AI agent is telling the customer`);
+            return await run(conv.id, {
+                force: true,
+                task: `Support ticket ${ref} (${subject}) was just updated by the team: ${news}.${after.request ? ` The request was: ${String(after.request).slice(0, 300)}.` : ''} Tell the customer this update in one or two friendly sentences, with the ticket number. Don't promise anything beyond it.`,
+            });
+        }
+        return await require('./nl-automations').ticketUpdated?.(after, news) || null;
+    } catch (err) {
+        console.error('normless ticket update message:', err.message);
+        return { status: 'failed', error: err.message };
+    }
+}
+
 /** Settings › Try it: a pretend chat, answered with the real lessons, nothing sent. */
 async function tryIt(turns) {
     if (!process.env.ANTHROPIC_API_KEY) return { error: 'No Anthropic API key is set on the server yet.' };
@@ -607,4 +716,4 @@ async function tryIt(turns) {
     });
 }
 
-module.exports = { run, schedule, sweep, start, answer, tryIt, status, trackShipment, MODELS, TICKET_REASONS };
+module.exports = { run, schedule, sweep, start, answer, tryIt, status, trackShipment, inboxSql, inboxStates, ticketUpdated, ticketNews, MODELS, TICKET_REASONS };

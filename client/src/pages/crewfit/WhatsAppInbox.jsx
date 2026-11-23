@@ -32,6 +32,7 @@ const FILTERS = [
 // Normless's queues, as the design lays them out: who needs a person first.
 const NL_FILTERS = [
   { key: 'waiting', label: 'Needs a person', hot: true },
+  { key: 'ai', label: 'AI agent' },
   { key: 'bot', label: 'Bot handling' },
   { key: 'mine', label: 'Mine' },
   { key: 'ticket', label: 'Ticket open' },
@@ -176,6 +177,13 @@ const soName = (username) => { const n = String(username || '').split('@')[0].re
 
 
 /** A status's colour as a pill: tinted ground, full-strength text. */
+// What the Normless AI agent did on a chat, as the list shows it.
+const AI_LOOK = {
+  asked: { label: 'AI asked the team', color: '#f87171' },
+  replied: { label: 'AI answered', color: '#a78bfa' },
+  closed: { label: 'Closed by AI', color: '#a8b0be' },
+  paused: { label: 'AI paused', color: '#fbbf24' },
+}
 const pillStyle = (color) => ({ background: `color-mix(in srgb, ${color} 16%, transparent)`, color })
 
 /** What a template's {{n}} is filled with, from the conversation in front of the rep. */
@@ -1635,9 +1643,12 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                             ? <span className="wa-pill" style={pillStyle('#a8b0be')}>Closed</span>
                             : c.mode === 'flow' || c.mode === 'ai'
                               ? <span className="wa-pill" style={pillStyle('#b3a9ff')}>Bot</span>
-                              : c.last_direction === 'in'
+                              : c.last_direction === 'in' || c.ai?.state === 'asked'
                                 ? <span className="wa-pill" style={pillStyle('#f87171')}>Needs a person</span>
                                 : <span className="wa-pill" style={pillStyle('#34d399')}>Answered</span>)}
+                          {!cf && c.ai?.state && AI_LOOK[c.ai.state] && (
+                            <span className="wa-pill" style={pillStyle(AI_LOOK[c.ai.state].color)} title={c.ai.question || ''}>{AI_LOOK[c.ai.state].label}</span>
+                          )}
                           {!cf && c.open_ticket_ref && <span className="wa-pill" style={pillStyle('#60a5fa')}>{refOf({ ref_no: c.open_ticket_ref })}</span>}
                           {c.vendor && <span className="wa-pill" style={pillStyle('#fbbf24')} title="A vendor — the bot never answers them">Vendor</span>}
                           <span className="wa-thread-owner">{c.assigned_to ? short(c.assigned_to) : 'Unassigned'}</span>

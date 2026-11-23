@@ -344,7 +344,7 @@ router.post('/tickets', canEdit, async (req, res) => {
 router.patch('/tickets/:id', canEdit, async (req, res) => {
     try {
         const id = parseInt(req.params.id, 10) || 0;
-        const before = (await db.query('SELECT id, status, progress, resolved_on FROM support_tickets WHERE id = $1', [id])).rows[0];
+        const before = (await db.query('SELECT id, status, progress, action, resolved_on FROM support_tickets WHERE id = $1', [id])).rows[0];
         if (!before) return res.status(404).json({ error: 'That ticket is gone' });
 
         const patch = {};
@@ -370,7 +370,11 @@ router.patch('/tickets/:id', canEdit, async (req, res) => {
               WHERE id = $1`,
             [id, ...cols.map(c => patch[c])]);
         const row = (await db.query(`SELECT ${FIELDS} FROM support_tickets WHERE id = $1`, [id])).rows[0];
+        // News the customer should hear (address changed, replacement started, resolved) goes to
+        // them on WhatsApp — after the response, so saving never waits on it.
         res.json({ ticket: hydrate(row) });
+        require('../services/nl-agent').ticketUpdated(before, row).catch(() => {});
+        return;
     } catch (err) {
         console.error('support update error:', err);
         res.status(500).json({ error: 'Could not save that change' });
