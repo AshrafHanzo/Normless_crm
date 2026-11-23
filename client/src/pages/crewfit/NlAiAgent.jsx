@@ -120,6 +120,23 @@ function OverviewTab() {
         </label>
       </section>
 
+      <section className={`was-card nla-status ${o.settings.enabled && draft.email_enabled ? 'nla-on' : 'nla-off'}`}>
+        <div className="nla-status-main">
+          <span className="nla-dot" aria-hidden="true" />
+          <div>
+            <h3>Emails to contact@normless.store: {draft.email_enabled ? (o.settings.enabled ? 'answering' : 'on, but the agent is off') : 'not answering'}</h3>
+            <p className="was-hint" style={{ margin: 0 }}>
+              Order questions only: where it is, tracking, delays, cancellations, address and size changes, exchanges, damaged or wrong items.
+              Anything else waits for you on <Link to="/support/email">Support › Email</Link>.
+            </p>
+          </div>
+        </div>
+        <label className="nl-switch-row">
+          <Toggle on={!!draft.email_enabled} label="Answer emails" disabled={!o.key_set} onChange={v => { const next = { ...draft, email_enabled: v }; setDraft(next); save(next) }} />
+          <span>{draft.email_enabled ? 'On' : 'Off'}</span>
+        </label>
+      </section>
+
       {!o.key_set && <KeyHelp missing />}
 
       <div className="voa-kpis">
@@ -160,10 +177,6 @@ function OverviewTab() {
               <label className="nla-check">
                 <input type="checkbox" checked={draft.close_when_done} onChange={e => set({ close_when_done: e.target.checked })} />
                 Close chats that need no reply (“ok”, “thanks”)
-              </label>
-              <label className="nla-check">
-                <input type="checkbox" checked={!!draft.email_enabled} onChange={e => set({ email_enabled: e.target.checked })} />
-                Answer emails to contact@normless.store too (see <Link to="/support/email">Support › Email</Link>)
               </label>
             </div>
           </section>
