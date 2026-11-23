@@ -85,7 +85,8 @@ How you write: a short, warm email from a real person on the Normless customer c
 "Hi <first name>," (or "Hi there," if unknown), then 1 to 3 short paragraphs, specific to this customer,
 never templated. Plain text, no markdown, no bullet lists unless giving steps, paste links as plain URLs.
 Apologise once, sincerely, when we are late or wrong. Write as "we" / "I" from the Normless team. End with
-"Warm regards,\\nTeam Normless". Never mention AI, bots, automation, tools or "the system". If a customer
+"Warm regards,\\nTeam Normless". Everything you write as text is sent exactly as it is: write only the email, never a note
+to yourself or a word about lessons or instructions. Never mention AI, bots, automation, tools or "the system". If a customer
 sincerely asks whether a person is answering, call ask_team; never claim to be human. Reply in the
 customer's language if they don't write in English.
 
@@ -158,6 +159,12 @@ async function contextFor(thread, settings) {
           WHERE email_thread_id = $1 OR LOWER(customer_email) = $2 OR order_number = ANY($3)
           ORDER BY id DESC LIMIT 6`, [thread.id, thread.customer_email, orders.map(o => o.order)])).rows
         .map(t => ({ ref: `CS-${String(t.ref_no).padStart(4, '0')}`, order: t.order_number, reason: t.reason, raised: t.raised, status: t.status, progress: t.progress, done_by_team: t.action || null }));
+    // The same customer often writes several separate emails: what was said in the others counts.
+    const others = (await db.query(
+        `SELECT t.subject, m.direction, m.sender_type, LEFT(m.body, 600) AS body
+           FROM email_threads t JOIN email_messages m ON m.thread_id = t.id AND m.status <> 'failed'
+          WHERE LOWER(t.customer_email) = $1 AND t.id <> $2 AND m.created_at > now() - INTERVAL '14 days'
+          ORDER BY m.created_at DESC LIMIT 8`, [thread.customer_email, thread.id])).rows.reverse();
     const ist = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
     return [
         `Now: ${ist} (India). Team hours ${clock(settings.hours.start)} to ${clock(settings.hours.end)}; the team is ${isOpen(settings.hours) ? 'online' : 'offline'} now.`,
@@ -165,6 +172,7 @@ async function contextFor(thread, settings) {
         `Orders placed with this email: ${orders.length ? JSON.stringify(orders) : 'none found. Ask for the order number, or the phone number they ordered with.'}`,
         live.length ? `Live Delhivery tracking, checked just now: ${JSON.stringify(live)}` : null,
         `Their support tickets: ${tickets.length ? JSON.stringify(tickets) : 'none.'}`,
+        others.length ? `Their other recent emails to us (separate threads; stay consistent with what we told them there):\n${others.map(o => `- [${o.subject}] ${o.direction === 'in' ? 'Customer' : o.sender_type === 'ai' ? 'We replied' : 'Team replied'}: ${String(o.body || '').replace(/\s+/g, ' ')}`).join('\n')}` : null,
     ].filter(Boolean).join('\n\n');
 }
 
@@ -263,8 +271,14 @@ async function think({ thread, lineId, settings, task }) {
         const skip = calls.find(x => x.name === 'no_reply');
         if (skip) return { close: skip.input?.reason || 'Needs no answer', did };
         if (!calls.length || response.stop_reason === 'end_turn') {
-            const text = response.content.filter(b => b.type === 'text').map(b => b.text).join('\n').trim();
+            let text = response.content.filter(b => b.type === 'text').map(b => b.text).join('\n').trim();
+            // A note to itself before the greeting never reaches the customer.
+            const greet = text.search(/^(Hi|Hello|Dear)\b/m);
+            if (greet > 0) text = text.slice(greet).trim();
             if (!text) return { nothing: true, did };
+            if (/\b(lessons?|playbook|instructions?|system prompt)\b/i.test(text)) {
+                return { ask: { question: `My draft mentions our internal notes, so I didn't send it: "${text.slice(0, 600)}" Please reply to the customer.` }, did };
+            }
             const bad = bot.inventedFigure(text, seen);
             if (bad != null) return { ask: { question: `I wanted to reply with an amount (₹${bad}) I couldn't verify. My draft: "${text.slice(0, 600)}" What should I say?` }, did };
             return { text, did };

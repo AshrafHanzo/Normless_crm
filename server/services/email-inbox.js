@@ -97,6 +97,13 @@ async function storeInbound(msg, parsed) {
                 `SELECT t.* FROM email_threads t JOIN email_messages m ON m.thread_id = t.id WHERE m.message_id = ANY($1) LIMIT 1`, [refs])).rows[0];
         }
     }
+    // A new email from someone with an open thread this week goes into that thread, so they get one
+    // consistent conversation (the reply still answers their latest email, with its subject).
+    if (!thread) {
+        thread = (await db.query(
+            `SELECT * FROM email_threads WHERE LOWER(customer_email) = $1 AND status = 'open'
+               AND last_message_at > now() - INTERVAL '7 days' ORDER BY last_message_at DESC LIMIT 1`, [email])).rows[0];
+    }
     if (!thread) {
         thread = (await db.query(
             `INSERT INTO email_threads (gm_thread, subject, customer_email, customer_name, last_inbound_at, last_message_at)
