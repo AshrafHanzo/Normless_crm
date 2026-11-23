@@ -10,20 +10,20 @@ const countOf = (counts, key) => (key === 'pending' ? counts.pending_awb : count
 const ORDER_LISTS = ['pending', 'on_hold']
 // Lists whose parcels still have a label worth printing.
 const LABEL_LISTS = ['ready_to_ship', 'ready_for_pickup', 'waiting_pickup', 'manual', 'all', 'in_transit', 'not_ready']
-const NO_FILTERS = { manifested_from: '', manifested_to: '', ordered_from: '', ordered_to: '', product: '', color: '', size: '' }
+const NO_FILTERS = { manifested_from: '', manifested_to: '', ordered_from: '', ordered_to: '', product: '', color: '', variant_size: '' }
 
 /**
  * Every shipment by status, the way the Delhivery portal lists them, plus the orders that still
  * need a shipment (Pending AWB, and the ones on hold that can't ship yet). Filters, paging and the
  * CSV download all go through the server, so the download is exactly the filtered list.
  */
-export default function Shipments({ counts, bucket, setBucket, canManage, ship, open, go, rev }) {
+export default function Shipments({ counts, bucket, setBucket, canManage, ship, open, go, rev, searchSeed }) {
   const apiFetch = useApi()
   const toast = useToast()
   const t = useServerTable({ limit: 50 })
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
-  const [search, setSearch] = useState('')
+  const [search, setSearch] = useState(searchSeed || '')
   const [term, setTerm] = useState('')
   const [payment, setPayment] = useState('')
   const [packed, setPacked] = useState('')
@@ -177,7 +177,7 @@ export default function Shipments({ counts, bucket, setBucket, canManage, ship, 
                 <option value="">Any colour</option>{facets.colors.map(c => <option key={c}>{c}</option>)}
               </select></div>
             <div className="input-group"><label htmlFor="sf-size">Size</label>
-              <select id="sf-size" value={filters.size} onChange={e => setF({ size: e.target.value })}>
+              <select id="sf-size" value={filters.variant_size} onChange={e => setF({ variant_size: e.target.value })}>
                 <option value="">Any size</option>{facets.sizes.map(z => <option key={z}>{z}</option>)}
               </select></div>
             {activeFilters > 0 && <button type="button" className="btn btn-secondary btn-sm" style={{ alignSelf: 'flex-end' }} onClick={() => setFilters(NO_FILTERS)}>Clear filters</button>}
@@ -232,12 +232,18 @@ export default function Shipments({ counts, bucket, setBucket, canManage, ship, 
                       <td><input type="checkbox" checked={!!picked[o.order_number]} onChange={() => toggle(o)} aria-label={`Select ${o.order_number}`} /></td>
                       <td data-label="Order" className="cell-primary">{o.order_number}<div className="packed-sub">{dayTime(o.created_at)}</div>
                         {o.cancelled_awb && <div className="packed-sub" style={{ color: 'var(--danger)' }}>Auto-cancelled before</div>}
-                        {o.on_hold && <span className="status-badge on-hold" style={{ marginTop: 4 }}>On hold</span>}</td>
+                        {o.on_hold && <span className="status-badge on-hold" style={{ marginTop: 4 }}>On hold</span>}
+                        {o.edited_at && <div className="packed-sub" style={{ color: 'var(--warning)' }}>Details edited</div>}</td>
                       <td data-label="Customer">{o.customer_name || '—'}<div className="packed-sub">{[o.city, o.pincode].filter(Boolean).join(' · ')}</div></td>
                       <td data-label="Items" style={{ maxWidth: 280 }}>{o.items.slice(0, 2).join(', ')}{o.items.length > 2 ? ` +${o.items.length - 2}` : ''}</td>
                       <td data-label="Payment">{money(o.total_price)} <span className={`status-badge ${o.cod ? 'pending' : 'paid'}`}>{o.cod ? 'COD' : 'Prepaid'}</span></td>
                       <td data-label="Packed">{o.packed_at ? <span style={{ color: 'var(--success)' }}>{dayTime(o.packed_at)}</span> : <span style={{ color: 'var(--text-muted)' }}>Not yet</span>}</td>
-                      <td>{canManage && !o.on_hold && <button className="btn btn-secondary btn-sm" onClick={() => ship([o])}>Get AWB</button>}</td>
+                      <td>{canManage && (
+                        <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                          <button className="btn btn-secondary btn-sm" onClick={() => ship([o], { editFirst: true })}><Icon name="edit" size={14} /> Edit</button>
+                          {!o.on_hold && <button className="btn btn-primary btn-sm" onClick={() => ship([o])}>Get AWB</button>}
+                        </div>
+                      )}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -248,7 +254,7 @@ export default function Shipments({ counts, bucket, setBucket, canManage, ship, 
               <table className="data-table">
                 <thead><tr>
                   <th style={{ width: 36 }}><input type="checkbox" checked={allPicked} onChange={toggleAll} aria-label="Select all on this page" /></th>
-                  <th>Order · AWB</th><th>Customer</th><th>Items</th><th>Payment</th><th>Status</th><th>Since</th><th>Made in</th>{canLabel && <th aria-label="Label" />}
+                  <th>Order · AWB</th><th>Customer</th><th>Items</th><th>Payment</th><th>Freight</th><th>Status</th><th>Since</th><th>Made in</th>{canLabel && <th aria-label="Label" />}
                 </tr></thead>
                 <tbody>
                   {rows.map(s => {
@@ -261,6 +267,9 @@ export default function Shipments({ counts, bucket, setBucket, canManage, ship, 
                         <td data-label="Customer">{s.consignee_name || '—'}<div className="packed-sub">{[s.consignee_city || s.destination, s.consignee_pincode].filter(Boolean).join(' · ')}</div></td>
                         <td data-label="Items" style={{ maxWidth: 240 }}>{(s.items || []).slice(0, 2).join(', ') || '—'}{(s.items || []).length > 2 ? ` +${s.items.length - 2}` : ''}</td>
                         <td data-label="Payment">{s.payment_mode === 'COD' ? `COD ${money(s.cod_amount)}` : (s.payment_mode || '—')}</td>
+                        <td data-label="Freight">{s.charge_estimate != null ? (
+                          <>{money(s.charge_estimate)}<div className="packed-sub">{(s.pieces || 1) > 1 ? `${money(Number(s.charge_estimate) / s.pieces)} per item · ` : ''}{s.charge_zone ? `zone ${s.charge_zone}` : ''}</div></>
+                        ) : <span style={{ color: 'var(--text-muted)' }}>—</span>}</td>
                         <td data-label="Status">
                           <span className={`status-badge ${BUCKET_BADGE[s.bucket] || 'pending'}`}>{BUCKET_LABEL[s.bucket] || s.bucket}</span>
                           <div className="packed-sub" style={['FMEOD-152', 'X-PNP'].includes(s.status_code) ? { color: 'var(--warning)' } : undefined}>{statusText(s)}</div>

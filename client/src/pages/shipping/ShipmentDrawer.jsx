@@ -179,6 +179,8 @@ export default function ShipmentDrawer({ id, canManage, settings, onClose, onCha
                 {s.customer_notified_at && <><dt>Customer told</dt><dd>New AWB sent on WhatsApp · {dayTime(s.customer_notified_at)}</dd></>}
                 <dt>Created</dt><dd>{dayTime(s.manifested_at || s.created_at)} · {s.created_via === 'crm' ? `CRM${s.created_by ? ` (${s.created_by.split('@')[0]})` : ''}` : 'Delhivery portal'}</dd>
                 <dt>Picked up</dt><dd>{s.picked_up_at ? dayTime(s.picked_up_at) : 'Not yet'}</dd>
+                {s.charge_estimate != null && <><dt>Freight</dt><dd>{money(s.charge_estimate)} estimate{(s.pieces || 1) > 1 ? ` · ${money(Number(s.charge_estimate) / s.pieces)} per item` : ''}{s.charge_cod > 0 ? ` · incl. COD fee ${money(s.charge_cod)}` : ''}{s.charge_zone ? ` · zone ${s.charge_zone}` : ''}</dd></>}
+                {s.charged_weight_g && <><dt>Weighed at</dt><dd>{s.charged_weight_g} g by Delhivery{s.weight_g && s.charged_weight_g > s.weight_g + 50 ? <span style={{ color: 'var(--warning)' }}> · more than the {s.weight_g} g declared, so the wallet is charged the difference</span> : ''}</dd></>}
                 {s.delivered_at && <><dt>Delivered</dt><dd>{dayTime(s.delivered_at)}</dd></>}
                 {s.ndr_attempts > 0 && <><dt>Delivery attempts</dt><dd>{s.ndr_attempts}</dd></>}
                 {s.ndr_action && <><dt>Our action</dt><dd>{s.ndr_action} · {dayTime(s.ndr_action_at)}</dd></>}

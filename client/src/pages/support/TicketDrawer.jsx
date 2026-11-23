@@ -8,6 +8,7 @@ import ImageUploadGrid from '../../components/ImageUploadGrid'
 import useDirtyGuard from '../../hooks/useDirtyGuard'
 import { refOf, blankTicket, asForm, trackingFor } from './ticket'
 import ManualShipDrawer from '../shipping/ManualShipDrawer'
+import DetailsForm from '../shipping/DetailsForm'
 import { BUCKET_BADGE } from '../shipping/common'
 
 const today = () => new Date().toLocaleDateString('en-CA')
@@ -73,6 +74,9 @@ export default function TicketDrawer({ ticket, options, onClose, onSaved, onDele
   const canShip = ['owner', 'admin'].includes(user?.role) || !!user?.can_manage_shipping
   const [shipping, setShipping] = useState(null)   // { forward, return } statuses from the CRM's tracking
   const [shipOpen, setShipOpen] = useState(false)
+  const [changing, setChanging] = useState(false)     // the customer's change-of-details form
+  const [changeBusy, setChangeBusy] = useState(false)
+  const [orderShip, setOrderShip] = useState(undefined) // the order's own parcel: undefined = not looked up
   const isNew = !ticket?.id
 
   const [form, setForm] = useState(() => asForm(ticket?.id ? ticket : { ...blankTicket(), ...ticket }))
@@ -128,6 +132,28 @@ export default function TicketDrawer({ ticket, options, onClose, onSaved, onDele
     return () => clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.forward_awb, form.return_awb])
+
+  // The order's parcel decides what a customer can still change: everything before an AWB,
+  // contact details before pickup, nothing once Delhivery has it.
+  useEffect(() => {
+    const num = String(form.order_number || '').trim()
+    if (!num) { setOrderShip(undefined); return }
+    const timer = setTimeout(async () => {
+      const r = await apiFetch(`/api/shipping/track-status?orders=${encodeURIComponent(num.startsWith('#') ? num : `#${num}`)}`)
+      if (r && !r.error) setOrderShip(Object.values(r.by_order || {})[0] || null)
+    }, 400)
+    return () => clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.order_number])
+  const pickedUp = orderShip && !['waiting_pickup', 'cancelled'].includes(orderShip.bucket)
+  const submitChange = async (v) => {
+    setChangeBusy(true)
+    const r = await apiFetch('/api/shipping/customer-change', { method: 'POST', body: JSON.stringify({ order_number: form.order_number, ...v }) })
+    setChangeBusy(false)
+    if (!r || r.error) return toast.error(r?.error || 'Could not change the details')
+    toast.success(r.message || 'Changed'); setChanging(false)
+    setF({ ops_note: [form.ops_note, `Delivery details changed${r.awb ? ` with Delhivery (AWB ${r.awb})` : ' before the AWB'} on ${today()}.`].filter(Boolean).join('\n') })
+  }
 
   // An existing ticket shows its order without being asked — the parcel and its waybill are the
   // context for every decision on the page. So does one raised from a WhatsApp chat about an order.
@@ -372,6 +398,28 @@ export default function TicketDrawer({ ticket, options, onClose, onSaved, onDele
                 link={trackingFor(form.return_awb, null)} status={shipping?.return}
                 onChange={e => setF({ return_awb: e.target.value })} />
             </div>
+            {(canShip || canEdit) && !isNew && form.order_number && (
+              <section className="ship-card" style={{ margin: 0 }}>
+                <div className="ship-card-head">
+                  <div><h3 style={{ fontSize: 14 }}>Customer wants to change the delivery</h3>
+                    <p className="packed-sub" style={{ maxWidth: 'none', margin: '2px 0 0' }}>
+                      {orderShip === undefined ? 'Checking the parcel…'
+                        : !orderShip ? 'No AWB yet: any detail can change, and the new details are used when it ships.'
+                          : orderShip.bucket === 'waiting_pickup' ? `AWB ${orderShip.awb} is waiting for pickup: name, phone, address and products can still change with Delhivery. A new pincode needs a new AWB.`
+                            : orderShip.bucket === 'cancelled' ? `AWB ${orderShip.awb} was cancelled: the new details are used when it is re-created.`
+                              : `Already picked up by Delhivery (AWB ${orderShip.awb}, ${orderShip.label}). It can't be changed from here now.`}
+                    </p></div>
+                  {!changing && <button type="button" className="btn btn-secondary btn-sm" disabled={ro || orderShip === undefined || pickedUp} onClick={() => setChanging(true)}><Icon name="edit" size={14} /> Change details</button>}
+                </div>
+                {changing && (
+                  <DetailsForm initial={{ name: form.customer_name, phone: form.customer_phone }} busy={changeBusy}
+                    lock={orderShip?.bucket === 'waiting_pickup' ? ['pincode', 'city', 'state'] : []}
+                    submitLabel={orderShip?.bucket === 'waiting_pickup' ? 'Send to Delhivery' : 'Save for the shipment'}
+                    note="Leave a field blank to keep what the order has. Sizes: write the new product and size, e.g. Dr Doom Hoodie - Green / L."
+                    onSubmit={submitChange} onCancel={() => setChanging(false)} />
+                )}
+              </section>
+            )}
             {canShip && !isNew && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: -4 }}>
                 <button type="button" className="btn btn-secondary btn-sm" onClick={() => setShipOpen(true)}><Icon name="truck" size={14} /> Create Delhivery shipment</button>

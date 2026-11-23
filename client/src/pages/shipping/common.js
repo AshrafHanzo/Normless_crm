@@ -27,6 +27,7 @@ export const RETURN_BUCKETS = ['return_pickup', 'return_transit', 'return_done',
 export const BUCKET_LABEL = Object.fromEntries(BUCKETS.map(b => [b.key, b.label]))
 BUCKET_LABEL.lost = 'Lost'
 BUCKET_LABEL.waiting_pickup = 'Awaiting pickup'
+BUCKET_LABEL.everything = 'Search results'
 Object.assign(BUCKET_LABEL, { return_pickup: 'Return: waiting for pickup', return_transit: 'Return: on the way back', return_done: 'Return received', return_closed: 'Return closed' })
 
 // Which status-badge colour each bucket wears.

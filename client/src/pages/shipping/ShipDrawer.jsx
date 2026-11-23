@@ -3,6 +3,7 @@ import { useApi } from '../../App'
 import { useToast } from '../../components/Toast'
 import Icon from '../../components/Icon'
 import { money, plural } from './common'
+import DetailsForm from './DetailsForm'
 
 /**
  * Create Delhivery shipments for one order or many.
@@ -14,7 +15,7 @@ import { money, plural } from './common'
  * Packaging and weight come from the packing rules in settings, per order, unless someone picks a
  * packaging (or types a weight) here.
  */
-export default function ShipDrawer({ orders, settings, onClose, onDone }) {
+export default function ShipDrawer({ orders, settings, onClose, onDone, editFirst = false }) {
   const apiFetch = useApi()
   const toast = useToast()
   const single = orders.length === 1 ? orders[0] : null
@@ -29,6 +30,9 @@ export default function ShipDrawer({ orders, settings, onClose, onDone }) {
   const [checking, setChecking] = useState(false)
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState(null)
+  const [editing, setEditing] = useState(editFirst)
+  const [savingDetails, setSavingDetails] = useState(false)
+  const [rev, setRev] = useState(0)
 
   const pickBox = (key) => { setBox(key); setWeight(''); setDims({ l: '', b: '', h: '' }) }
   const dimsOut = { length_cm: dims.l || undefined, width_cm: dims.b || undefined, height_cm: dims.h || undefined }
@@ -48,7 +52,16 @@ export default function ShipDrawer({ orders, settings, onClose, onDone }) {
     }, 300)
     return () => { live = false; clearTimeout(t) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [single?.order_number, box, weight, mode, payment, dims.l, dims.b, dims.h])
+  }, [single?.order_number, box, weight, mode, payment, dims.l, dims.b, dims.h, rev])
+
+  /** Change the delivery details for this order (kept in the CRM, used for the AWB). */
+  const saveDetails = async (v) => {
+    setSavingDetails(true)
+    const r = await apiFetch(`/api/shipping/orders/${encodeURIComponent(single.order_number)}/details`, { method: 'PUT', body: JSON.stringify(v) })
+    setSavingDetails(false)
+    if (!r || r.error) return toast.error(r?.error || 'Could not save the details')
+    toast.success('Details saved for this shipment'); setEditing(false); setRev(x => x + 1); onDone?.()
+  }
 
   const submit = async () => {
     setBusy(true)
@@ -120,8 +133,14 @@ export default function ShipDrawer({ orders, settings, onClose, onDone }) {
                   <p className="ship-section-title">Deliver to</p>
                   {checking && !quote ? <div className="packed-sub">Checking with Shopify and Delhivery…</div> : quote?.error ? (
                     <div className="ship-err"><span>{quote.error}</span></div>
+                  ) : quote && editing ? (
+                    <DetailsForm initial={{ name: quote.facts.name, phone: quote.facts.phone, address: quote.facts.add, city: quote.facts.city,
+                      state: quote.facts.state, pincode: quote.facts.pin, products_desc: quote.facts.products_desc }}
+                      busy={savingDetails} submitLabel="Save details" onSubmit={saveDetails} onCancel={() => setEditing(false)}
+                      note="Saved in the CRM and used for this order's AWB. Shopify keeps its own copy." />
                   ) : quote && (
                     <>
+                      {quote.facts.edited && <span className="ship-chip warn" style={{ alignSelf: 'flex-start' }}>Details edited in the CRM{quote.facts.edited.by ? ` by ${quote.facts.edited.by.split('@')[0]}` : ''}</span>}
                       <div style={{ fontSize: 14, lineHeight: 1.55 }}>
                         {quote.facts.name || '—'} · {quote.facts.phone || 'no phone'}<br />
                         {quote.facts.add}<br />{[quote.facts.city, quote.facts.state, quote.facts.pin].filter(Boolean).join(', ')}
@@ -133,7 +152,10 @@ export default function ShipDrawer({ orders, settings, onClose, onDone }) {
                       </div>
                       {quote.problems?.map((p, i) => <div key={i} className="ship-err"><span>{p}</span></div>)}
                       {quote.check_error && <div className="ship-alert warning" style={{ margin: 0 }}><span>{quote.check_error}. Creating will check again and stop if it still can't.</span></div>}
-                      {quote.problems?.length > 0 && <p className="packed-sub" style={{ maxWidth: 'none' }}>Fix the address or phone in Shopify, then open this again.</p>}
+                      {quote.facts.products_desc && <div className="packed-sub" style={{ margin: 0, maxWidth: 'none' }}>{quote.facts.products_desc}</div>}
+                      <button type="button" className="btn btn-secondary btn-sm" style={{ alignSelf: 'flex-start' }} onClick={() => setEditing(true)}>
+                        <Icon name="edit" size={14} /> Edit details
+                      </button>
                     </>
                   )}
                 </section>

@@ -1,6 +1,10 @@
 import { useState, useEffect } from 'react'
 import { useApi } from '../../App'
-import { daysSince, plural } from './common'
+import { daysSince, plural, money } from './common'
+import Icon from '../../components/Icon'
+
+// The wallet lives in the Delhivery portal: their API doesn't share the balance or take payments.
+const WALLET_URL = 'https://one.delhivery.com/v2/finances/unified'
 
 const Tile = ({ label, n, foot, onClick, tone }) => (
   <button type="button" className="ship-tile" onClick={onClick}>
@@ -11,7 +15,7 @@ const Tile = ({ label, n, foot, onClick, tone }) => (
 )
 
 /** The Delhivery home screen, in the CRM: what needs doing first, then where everything is. */
-export default function Overview({ go, rev }) {
+export default function Overview({ go, rev, settings }) {
   const apiFetch = useApi()
   const [data, setData] = useState(null)
   const [days, setDays] = useState(7)
@@ -65,6 +69,21 @@ export default function Overview({ go, rev }) {
           <Tile label="Auto-cancelled, not dealt with" n={c.cancelled_open} tone={c.cancelled_open ? 'danger' : null} onClick={() => go('cancelled')} />
         </section>
       </div>
+
+      <section className="ship-card ship-wallet">
+        <div className="ship-card-head">
+          <div><h3>Delhivery wallet</h3>
+            <p className="packed-sub" style={{ maxWidth: 'none', margin: '2px 0 0' }}>The balance and recharges are in the Delhivery portal: their API doesn't share the wallet. Below is what the CRM estimates you have spent on freight.</p></div>
+          <a className="btn btn-primary btn-sm" href={WALLET_URL} target="_blank" rel="noreferrer"><Icon name="wallet" size={14} /> Balance and recharge</a>
+        </div>
+        <div className="ship-wallet-figs">
+          <div><span className="ship-tile-l">Last 7 days</span><span className="ship-tile-n">{money(data.spend?.week)}</span></div>
+          <div><span className="ship-tile-l">Last 30 days</span><span className="ship-tile-n">{money(data.spend?.month)}</span></div>
+        </div>
+        {!settings?.origin_pincode
+          ? <p className="packed-sub" style={{ maxWidth: 'none', margin: 0, color: 'var(--warning)' }}>Add the warehouse pincode in Settings (your portal shows 600125) so the CRM can work out each shipment's freight.</p>
+          : data.spend?.unpriced > 0 && <p className="packed-sub" style={{ maxWidth: 'none', margin: 0 }}>{plural(data.spend.unpriced, 'shipment')} from the last 30 days still to be priced: it fills in over the next syncs.</p>}
+      </section>
 
       <section className="ship-card">
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>

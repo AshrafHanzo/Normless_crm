@@ -40,6 +40,20 @@ router.get('/track-status', async (req, res) => {
     } catch (err) { fail(res, err, 'look up shipment status'); }
 });
 
+/**
+ * POST /customer-change { order_number, name, phone, address, city, state, pincode, products_desc }
+ * A customer's change of delivery details, from a support ticket. Open to Shipping managers and to
+ * support editors; before pickup only (the service refuses after).
+ */
+router.post('/customer-change', async (req, res) => {
+    try {
+        const ok = isAdmin(req) || await hasPermission(req, 'can_manage_shipping') || await hasPermission(req, 'can_edit_support');
+        if (!ok) return res.status(403).json({ error: 'You can\'t change delivery details' });
+        const { order_number: num, ...fields } = req.body || {};
+        res.json(await shipping.changeForCustomer(num, fields, me(req)));
+    } catch (err) { fail(res, err, 'change the delivery details'); }
+});
+
 router.use(view);
 
 // The orders that still need an AWB: unfulfilled and not cancelled in Shopify, however old, with
@@ -78,7 +92,8 @@ function itemFilter(q, vals, fallbackDesc = null) {
     const conds = [];
     if (q.product) { vals.push(String(q.product)); conds.push(`li->>'title' = $${vals.length}`); }
     if (q.color) { vals.push(String(q.color).toLowerCase()); conds.push(`LOWER(${COLOR_OF}) = $${vals.length}`); }
-    if (q.size) { vals.push(String(q.size).toLowerCase()); conds.push(`LOWER(${SIZE_OF}) = $${vals.length}`); }
+    // "variant_size", not "size": size is also the old page-size parameter.
+    if (q.variant_size) { vals.push(String(q.variant_size).toLowerCase()); conds.push(`LOWER(${SIZE_OF}) = $${vals.length}`); }
     if (!conds.length) return null;
     const inOrder = `EXISTS (SELECT 1 FROM ${LINES} li WHERE ${conds.join(' AND ')})`;
     // A manual shipment has no order behind it; its product text is all there is to match.
@@ -101,6 +116,7 @@ function shipmentFilter(q) {
     else if (bucket === 'not_ready') where.push(`s.bucket = 'waiting_pickup' AND s.status_code IN ('FMEOD-152','X-PNP')`);
     else if (bucket === 'returns') where.push(`s.bucket = ANY('{${RETURNS.join(',')}}')`);
     else if (bucket === 'manual') where.push(`s.source = 'manual'`);
+    else if (bucket === 'everything') { /* the top search: every shipment, returns too */ }
     else if (BUCKETS.includes(bucket) || RETURNS.includes(bucket)) { vals.push(bucket); where.push(`s.bucket = $${vals.length}`); }
     else where.push(FORWARD);
     if (q.payment === 'COD' || q.payment === 'Prepaid') { vals.push(q.payment); where.push(`s.payment_mode = $${vals.length}`); }
@@ -147,6 +163,7 @@ function pendingFilter(q) {
 const PENDING_FROM = (where) => `FROM orders o
     LEFT JOIN customers c ON c.shopify_id = o.customer_shopify_id
     LEFT JOIN packed_orders p ON p.order_number = o.order_number
+    LEFT JOIN shipping_overrides ov ON ov.order_number = o.order_number
     WHERE ${where}`;
 const SHIPMENTS_FROM = (where) => `FROM shipments s LEFT JOIN orders o ON o.order_number = s.order_number ${where}`;
 
@@ -221,8 +238,14 @@ router.get('/overview', async (req, res) => {
              WHERE ${FORWARD} AND picked_up_at > NOW() - ($1 || ' days')::interval - INTERVAL '3 days'
                AND picked_up_at < NOW() - INTERVAL '3 days'`, [String(days)])).rows[0];
         const pct = (a, b) => (b ? Math.round((a / b) * 1000) / 10 : null);
+        const spend = (await db.query(`
+            SELECT COALESCE(SUM(charge_estimate) FILTER (WHERE COALESCE(manifested_at, created_at) > NOW() - INTERVAL '7 days'), 0) AS week,
+                   COALESCE(SUM(charge_estimate) FILTER (WHERE COALESCE(manifested_at, created_at) > NOW() - INTERVAL '30 days'), 0) AS month,
+                   COUNT(*) FILTER (WHERE COALESCE(manifested_at, created_at) > NOW() - INTERVAL '30 days' AND charge_estimate IS NULL)::int AS unpriced
+              FROM shipments WHERE COALESCE(direction, 'forward') = 'forward' AND bucket <> 'cancelled'`)).rows[0];
         res.json({
             counts: c,
+            spend: { week: Number(spend.week), month: Number(spend.month), unpriced: spend.unpriced },
             oldest_waiting: oldest,
             performance: {
                 days,
@@ -264,7 +287,8 @@ router.get('/pending', async (req, res) => {
         const rows = (await db.query(
             `SELECT o.order_number, o.shopify_id, o.total_price, o.financial_status, o.created_at, o.line_items_json, COALESCE(o.on_hold, false) AS on_hold,
                     COALESCE(NULLIF(p.customer_name, ''), TRIM(CONCAT(c.first_name, ' ', c.last_name))) AS customer_name,
-                    p.ship_city, p.ship_pincode, p.packed_at, p.packed_by,
+                    COALESCE(ov.city, p.ship_city) AS ship_city, COALESCE(ov.pincode, p.ship_pincode) AS ship_pincode, p.packed_at, p.packed_by,
+                    ov.updated_at AS edited_at, ov.updated_by AS edited_by,
                     (SELECT s.awb FROM shipments s WHERE s.order_number = o.order_number AND s.bucket = 'cancelled' AND s.cancel_kind = 'auto' ORDER BY s.id DESC LIMIT 1) AS cancelled_awb
              ${PENDING_FROM(where)} ${t.orderBy} LIMIT $${vals.length - 1} OFFSET $${vals.length}`, vals)).rows;
         res.json({
@@ -277,6 +301,7 @@ router.get('/pending', async (req, res) => {
                     cod: String(r.financial_status || '').toLowerCase() === 'pending',
                     customer_name: r.customer_name || '', city: r.ship_city || '', pincode: r.ship_pincode || '',
                     packed_at: r.packed_at, packed_by: r.packed_by, cancelled_awb: r.cancelled_awb,
+                    edited_at: r.edited_at, edited_by: r.edited_by,
                     items: items.map(lineText).filter(Boolean),
                     qty: items.reduce((n, li) => n + (Number(li.quantity) || 1), 0),
                 };
@@ -321,8 +346,8 @@ router.get('/shipments', async (req, res) => {
     try {
         const q = { ...req.query };
         if (!q.dir && !q.sort) q.dir = ACT_ON.includes(String(q.bucket || '')) ? 'asc' : 'desc';
-        // The old page-size parameter, still used by the Auto-cancelled tab.
-        if (!q.limit && q.size) q.limit = q.size;
+        // The old page-size parameter.
+        if (!q.limit && /^\d+$/.test(String(q.size || ''))) q.limit = q.size;
         const t = tableParams(q, { ...SHIP_SORT, maxLimit: 300 });
         const { vals, where } = shipmentFilter(q);
         const total = (await db.query(`SELECT COUNT(*)::int AS n ${SHIPMENTS_FROM(where)}`, vals)).rows[0].n;
@@ -333,7 +358,8 @@ router.get('/shipments', async (req, res) => {
                     s.shipping_mode, s.consignee_name, s.consignee_city, s.consignee_pincode, s.destination, s.manifested_at, s.picked_up_at,
                     s.expected_delivery, s.delivered_at, s.ndr_attempts, s.ndr_reason, s.ndr_action, s.ndr_action_at,
                     s.cancelled_at, s.cancel_kind, s.cancel_handled, s.recreated_from, s.recreated_as, s.shopify_fulfilled, s.shopify_error,
-                    s.label_url, s.created_by, s.created_at, s.products_desc, o.created_at AS ordered_at, o.line_items_json
+                    s.label_url, s.created_by, s.created_at, s.products_desc, o.created_at AS ordered_at, o.line_items_json,
+                    s.charge_estimate, s.charge_zone, s.charge_cod, s.pieces, s.charged_weight_g
              ${SHIPMENTS_FROM(where)} ${t.orderBy} LIMIT $${vals.length - 1} OFFSET $${vals.length}`, vals)).rows;
         res.json({
             total, pagination: pagination(total, t),
@@ -357,6 +383,8 @@ router.get('/shipments.csv', async (req, res) => {
             box: r.box || '', weight: r.weight_g || '', ordered: ist(r.ordered_at), manifested: ist(r.manifested_at || r.created_at),
             picked: ist(r.picked_up_at), delivered: ist(r.delivered_at), source: r.source === 'manual' ? `Manual${r.source_ref ? ` (${r.source_ref})` : ''}` : (r.created_via === 'crm' ? 'CRM' : 'Delhivery portal'),
             replaces: r.recreated_from || '', replaced_by: r.recreated_as || '',
+            charge: r.charge_estimate ?? '', per_item: r.charge_estimate != null ? Math.round((Number(r.charge_estimate) / (r.pieces || 1)) * 100) / 100 : '',
+            zone: r.charge_zone || '', charged_weight: r.charged_weight_g || '',
         })), [{ key: 'order', label: 'Order' }, { key: 'ref', label: 'Delhivery order id' }, { key: 'awb', label: 'AWB' },
             { key: 'status', label: 'Status' }, { key: 'bucket', label: 'CRM status' }, { key: 'detail', label: 'Delhivery says' },
             { key: 'payment', label: 'Payment' }, { key: 'cod', label: 'COD amount' }, { key: 'customer', label: 'Customer' },
@@ -364,7 +392,9 @@ router.get('/shipments.csv', async (req, res) => {
             { key: 'items', label: 'Items' }, { key: 'box', label: 'Packaging' }, { key: 'weight', label: 'Weight g' },
             { key: 'ordered', label: 'Ordered' }, { key: 'manifested', label: 'Manifested' }, { key: 'picked', label: 'Picked up' },
             { key: 'delivered', label: 'Delivered' }, { key: 'source', label: 'Made in' },
-            { key: 'replaces', label: 'Replaces AWB' }, { key: 'replaced_by', label: 'Replaced by AWB' }]);
+            { key: 'replaces', label: 'Replaces AWB' }, { key: 'replaced_by', label: 'Replaced by AWB' },
+            { key: 'charge', label: 'Freight estimate (₹)' }, { key: 'per_item', label: 'Per item (₹)' }, { key: 'zone', label: 'Zone' },
+            { key: 'charged_weight', label: 'Weight Delhivery charged (g)' }]);
     } catch (err) { fail(res, err, 'export shipments'); }
 });
 
@@ -392,6 +422,31 @@ router.post('/create', manage, async (req, res) => {
         if (!items.length) return res.status(400).json({ error: 'Choose at least one order' });
         res.json(await shipping.createMany(items, { actor: me(req) }));
     } catch (err) { fail(res, err, 'create shipments'); }
+});
+
+/** GET/PUT /orders/:num/details — delivery details for an order with no AWB yet. */
+router.get('/orders/:num/details', async (req, res) => {
+    try { res.json({ override: await shipping.overrideFor(req.params.num) }); }
+    catch (err) { fail(res, err, 'load the details'); }
+});
+router.put('/orders/:num/details', manage, async (req, res) => {
+    try { res.json({ override: await shipping.saveOverride(req.params.num, req.body || {}, me(req)) }); }
+    catch (err) { fail(res, err, 'save the details'); }
+});
+
+/** GET /errors — what Delhivery refused in the last two days and nobody has dismissed. */
+router.get('/errors', async (req, res) => {
+    try {
+        const rows = (await db.query(
+            `SELECT id, kind, title, actor, summary, errors, failed, started_at FROM shipping_jobs
+              WHERE failed > 0 AND kind <> 'sync' AND dismissed_at IS NULL AND started_at > NOW() - INTERVAL '2 days'
+              ORDER BY id DESC LIMIT 10`)).rows;
+        res.json({ errors: rows });
+    } catch (err) { fail(res, err, 'load errors'); }
+});
+router.post('/errors/:id/dismiss', async (req, res) => {
+    try { await db.query('UPDATE shipping_jobs SET dismissed_at = CURRENT_TIMESTAMP WHERE id = $1', [req.params.id]); res.json({ ok: true }); }
+    catch (err) { fail(res, err, 'dismiss'); }
 });
 
 /** POST /manual — a shipment typed in: a replacement, a marketing parcel, a support re-send. */

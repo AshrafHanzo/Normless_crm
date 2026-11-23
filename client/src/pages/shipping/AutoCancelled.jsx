@@ -19,7 +19,7 @@ export default function AutoCancelled({ canManage, settings, changed, open, go, 
   const [result, setResult] = useState(null)
 
   useEffect(() => {
-    apiFetch('/api/shipping/shipments?bucket=cancelled_open&size=300').then(r => {
+    apiFetch('/api/shipping/shipments?bucket=cancelled_open&limit=300').then(r => {
       const list = r && !r.error ? r.shipments : []
       setRows(list)
       setPicked(Object.fromEntries(list.map(s => [s.id, true])))

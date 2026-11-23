@@ -42,6 +42,11 @@ export default function Shipping() {
   const [counts, setCounts] = useState({})
   const [settings, setSettings] = useState(null)
   const [shipOrders, setShipOrders] = useState(null)    // orders in the create drawer
+  const [shipOpts, setShipOpts] = useState({})
+  const [find, setFind] = useState('')
+  const [findBy, setFindBy] = useState('any')
+  const [finding, setFinding] = useState(false)
+  const [errs, setErrs] = useState([])
   const [openId, setOpenId] = useState(null)            // shipment in the detail drawer
   const [syncing, setSyncing] = useState(false)
   const [manual, setManual] = useState(false)
@@ -52,6 +57,7 @@ export default function Shipping() {
       apiFetch('/api/shipping/status'), apiFetch('/api/shipping/counts'), apiFetch('/api/shipping/settings'),
     ])
     if (st && !st.error) setStatus(st)
+    apiFetch('/api/shipping/errors').then(e => { if (e && !e.error) setErrs(e.errors || []) })
     if (c && !c.error) setCounts(c)
     if (s && !s.error) setSettings(s.settings)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -76,7 +82,39 @@ export default function Shipping() {
     changed()
   }
 
-  const shared = { counts, settings, canManage, isAdmin: !!status?.is_admin, rev, changed, go, ship: setShipOrders, open: setOpenId }
+  const ship = (orders, opts = {}) => { setShipOpts(opts); setShipOrders(orders) }
+  const shared = { counts, settings, canManage, isAdmin: !!status?.is_admin, rev, changed, go, ship, open: setOpenId }
+
+  /**
+   * The search at the top, like the Delhivery portal's: AWBs or order numbers, one or many. One
+   * shipment found opens it; several go to the list; an order with no AWB goes to Pending AWB.
+   */
+  const runFind = async (e) => {
+    e?.preventDefault()
+    const term = find.trim()
+    if (!term) return
+    setFinding(true)
+    const list = term.split(/[\s,]+/).filter(Boolean)
+    const asOrders = findBy === 'order' || (findBy === 'any' && list.every(x => /^#?\d{3,7}[A-Z]?$/i.test(x)))
+    const q = new URLSearchParams({ q: list.join(','), limit: '5' })
+    const r = await apiFetch(`/api/shipping/shipments?bucket=everything&${q}`)
+    setFinding(false)
+    const n = r?.pagination?.total || 0
+    if (n === 1) return setOpenId(r.shipments[0].id)
+    if (n > 1) { setSearchSeed(term); return go('shipments', 'everything') }
+    if (asOrders) {
+      const p = await apiFetch(`/api/shipping/pending?${new URLSearchParams({ q: list.join(','), limit: '5' })}`)
+      if (p?.pagination?.total) { setSearchSeed(term); return go('shipments', 'pending') }
+      const h = await apiFetch(`/api/shipping/pending?${new URLSearchParams({ q: list.join(','), hold: 'only', limit: '5' })}`)
+      if (h?.pagination?.total) { setSearchSeed(term); return go('shipments', 'on_hold') }
+    }
+    toast.warning(`Nothing found for ${term}`)
+  }
+  const [searchSeed, setSearchSeed] = useState('')
+  const dismissErr = async (id) => {
+    setErrs(list => list.filter(x => x.id !== id))
+    await apiFetch(`/api/shipping/errors/${id}/dismiss`, { method: 'POST' })
+  }
 
   return (
     <div className="page-enter">
@@ -100,6 +138,31 @@ export default function Shipping() {
         )}
       </div>
 
+      <form className="ship-find" onSubmit={runFind} role="search">
+        <select aria-label="Search by" value={findBy} onChange={e => setFindBy(e.target.value)}>
+          <option value="any">AWB or order</option><option value="awb">AWB</option><option value="order">Order ID</option>
+        </select>
+        <div className="search-bar" style={{ flex: 1 }}><span className="search-icon" />
+          <input value={find} onChange={e => setFind(e.target.value)}
+            placeholder={findBy === 'order' ? 'Order IDs, e.g. #13584 (paste many)' : findBy === 'awb' ? 'AWB numbers (paste many)' : 'Search AWBs or order IDs (paste many)'} /></div>
+        <button type="submit" className="btn btn-primary" disabled={finding || !find.trim()}>{finding ? 'Searching…' : 'Find'}</button>
+      </form>
+
+      {errs.length > 0 && (
+        <div className="ship-errors" role="alert">
+          {errs.map(e => (
+            <div key={e.id} className="ship-alert danger" style={{ marginBottom: 8 }}>
+              <strong>Delhivery: {e.title || e.kind}</strong>
+              <span>{(e.errors || []).filter(x => x.error && !x.soft).slice(0, 2).map(x => `${x.order_number ? `${x.order_number}: ` : ''}${x.error}`).join(' · ') || e.summary}</span>
+              <span className="ship-alert-action" style={{ display: 'flex', gap: 6 }}>
+                <button className="btn btn-secondary btn-sm" onClick={() => go('activity')}>Details</button>
+                <button className="btn btn-secondary btn-sm" onClick={() => dismissErr(e.id)}>Dismiss</button>
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
       {status && !status.configured && (
         <div className="ship-alert danger">
           <strong>Delhivery isn't connected.</strong>
@@ -118,8 +181,8 @@ export default function Shipping() {
         ))}
       </div>
 
-      {tab === 'overview' && <Overview {...shared} />}
-      {tab === 'shipments' && <Shipments {...shared} bucket={bucket} setBucket={(b) => go('shipments', b)} />}
+      {tab === 'overview' && <Overview {...shared} settings={settings} />}
+      {tab === 'shipments' && <Shipments key={`${bucket}|${searchSeed}`} {...shared} bucket={bucket} searchSeed={searchSeed} setBucket={(b) => { setSearchSeed(''); go('shipments', b) }} />}
       {tab === 'cancelled' && <AutoCancelled {...shared} />}
       {tab === 'pickups' && <Pickups {...shared} />}
       {tab === 'ndr' && <FailedDeliveries {...shared} />}
@@ -129,7 +192,7 @@ export default function Shipping() {
         : <div className="loader"><div className="spinner" /></div>)}
 
       {shipOrders && (
-        <ShipDrawer orders={shipOrders} settings={settings} onClose={() => setShipOrders(null)}
+        <ShipDrawer orders={shipOrders} settings={settings} editFirst={!!shipOpts.editFirst} onClose={() => setShipOrders(null)}
           onDone={() => { changed() }} />
       )}
       {manual && <ManualShipDrawer onClose={() => setManual(false)} onDone={changed} />}

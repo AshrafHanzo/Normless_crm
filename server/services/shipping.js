@@ -119,8 +119,20 @@ async function startJob(kind, title, actor, total = 0) {
 
 async function finishJob(id, { ok = 0, failed = 0, summary = '', errors = [] }) {
     const status = failed && !ok ? 'failed' : failed ? 'done_with_errors' : 'done';
-    await db.query(`UPDATE shipping_jobs SET status = $2, ok = $3, failed = $4, summary = $5, errors = $6, finished_at = CURRENT_TIMESTAMP WHERE id = $1`,
-        [id, status, ok, failed, summary, JSON.stringify(errors)]);
+    const job = (await db.query(`UPDATE shipping_jobs SET status = $2, ok = $3, failed = $4, summary = $5, errors = $6, finished_at = CURRENT_TIMESTAMP
+                                  WHERE id = $1 RETURNING kind, title, actor`,
+        [id, status, ok, failed, summary, JSON.stringify(errors)])).rows[0];
+    // What Delhivery refused reaches the bell of everyone on Shipping, with its own words. The
+    // tracking sync is left out: it retries by itself every half hour.
+    const hard = (errors || []).filter(e => !e.soft && e.error);
+    if (job && failed && hard.length && job.kind !== 'sync') {
+        try {
+            const first = hard[0];
+            await notify({ usernames: await shippingUsers(), kind: 'shipping', actor: 'Delhivery', link: '/shipping?tab=activity',
+                title: `Delhivery: ${job.title || job.kind} — ${failed} failed`,
+                body: `${first.order_number ? `${first.order_number}: ` : ''}${first.error}${hard.length > 1 ? ` (and ${hard.length - 1} more)` : ''}` });
+        } catch { /* the job row still has it */ }
+    }
 }
 
 /* ───────────────────────────── tracking → our buckets ───────────────────────────── */
@@ -203,6 +215,7 @@ function fromTracking(S) {
         rto_started_at: toDate(S.RTOStartedDate),
         first_attempt_at: toDate(S.FirstAttemptDate),
         ndr_attempts: direction === 'return' ? 0 : attempts,
+        charged_weight_g: Number(S.ChargedWeight) > 0 ? Math.round(Number(S.ChargedWeight)) : null,
         ndr_reason: bucket === 'ndr' ? (st.Instructions || null) : null,
     };
 }
@@ -274,7 +287,8 @@ async function applyTracking(S, { createdVia = 'portal' } = {}) {
 
     const cols = ['direction', 'bucket', 'status_type', 'status', 'status_code', 'instructions', 'status_location', 'status_at', 'scans',
         'consignee_name', 'consignee_city', 'consignee_state', 'consignee_pincode', 'destination', 'pickup_location',
-        'manifested_at', 'picked_up_at', 'expected_delivery', 'delivered_at', 'rto_started_at', 'first_attempt_at', 'ndr_attempts', 'ndr_reason'];
+        'manifested_at', 'picked_up_at', 'expected_delivery', 'delivered_at', 'rto_started_at', 'first_attempt_at', 'ndr_attempts', 'ndr_reason',
+        'charged_weight_g'];
     if (prev) {
         const sets = cols.map((c, i) => `${c} = COALESCE($${i + 2}, ${c})`);
         // The bucket, status and NDR reason are always today's answer, never yesterday's.
@@ -391,6 +405,9 @@ async function sync({ actor } = {}) {
                 if (r?.row && !r.was) found++;
                 else if (r?.row) await linkRemake(r.row);
             }
+
+            // 2e. Freight estimates for shipments that don't have one yet.
+            try { await fillCharges(s); } catch (err) { errors.push({ error: `Charges: ${err.message}`, soft: true }); }
 
             // 2d. Support tickets and marketing orders carry the current AWB.
             try { await linkTracking(); } catch (err) { errors.push({ error: `Linking tracking to support/marketing: ${err.message}` }); }
@@ -577,6 +594,117 @@ function orderFacts(o) {
     };
 }
 
+/** Details changed in the CRM for an order before its AWB (see shipping_overrides). */
+async function overrideFor(orderNumber) {
+    return (await db.query('SELECT * FROM shipping_overrides WHERE order_number = $1', [orderOf(orderNumber)])).rows[0] || null;
+}
+function withOverride(facts, ov) {
+    if (!ov) return facts;
+    return {
+        ...facts,
+        name: ov.name || facts.name, phone: ov.phone || facts.phone, add: ov.address || facts.add,
+        city: ov.city || facts.city, state: ov.state || facts.state, pin: ov.pincode || facts.pin,
+        products_desc: ov.products_desc || facts.products_desc,
+        edited: { by: ov.updated_by, at: ov.updated_at, note: ov.note || null },
+    };
+}
+
+/**
+ * Save delivery details for an order that has no AWB yet. Blank fields keep Shopify's. All blank
+ * removes the change.
+ */
+async function saveOverride(orderNumber, fields = {}, actor) {
+    const num = orderOf(orderNumber);
+    if (!num) throw Object.assign(new Error('Which order?'), { status: 400 });
+    const v = {
+        name: clean(fields.name).slice(0, 120) || null,
+        phone: fields.phone ? digits(fields.phone).slice(-10) : null,
+        address: clean(fields.address ?? fields.add).slice(0, 400) || null,
+        city: clean(fields.city).slice(0, 80) || null, state: clean(fields.state).slice(0, 80) || null,
+        pincode: fields.pincode ? digits(fields.pincode).slice(0, 6) : null,
+        products_desc: clean(fields.products_desc).slice(0, 480) || null,
+        note: clean(fields.note).slice(0, 300) || null,
+    };
+    if (v.phone && !/^[6-9]\d{9}$/.test(v.phone)) throw Object.assign(new Error('That phone number isn\'t a valid mobile'), { status: 400 });
+    if (v.pincode && !/^[1-9]\d{5}$/.test(v.pincode)) throw Object.assign(new Error('That pincode isn\'t valid'), { status: 400 });
+    if (v.address && v.address.length < 8) throw Object.assign(new Error('That address is too short'), { status: 400 });
+    if (!Object.entries(v).some(([k, x]) => k !== 'note' && x)) {
+        await db.query('DELETE FROM shipping_overrides WHERE order_number = $1', [num]);
+        return null;
+    }
+    return (await db.query(
+        `INSERT INTO shipping_overrides (order_number, name, phone, address, city, state, pincode, products_desc, note, updated_by, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,CURRENT_TIMESTAMP)
+         ON CONFLICT (order_number) DO UPDATE SET name = $2, phone = $3, address = $4, city = $5, state = $6, pincode = $7,
+                products_desc = $8, note = $9, updated_by = $10, updated_at = CURRENT_TIMESTAMP
+         RETURNING *`, [num, v.name, v.phone, v.address, v.city, v.state, v.pincode, v.products_desc, v.note, actor || null])).rows[0];
+}
+
+/**
+ * A customer asked to change their delivery details (address, phone, size…). Before an AWB the
+ * change is kept in the CRM and used when the AWB is made; with an AWB still waiting for pickup it
+ * goes to Delhivery; once Delhivery has picked the parcel up it is too late, and this says so.
+ */
+async function changeForCustomer(orderNumber, fields = {}, actor) {
+    const num = orderOf(orderNumber);
+    if (!num) throw Object.assign(new Error('The ticket needs an order number first'), { status: 400 });
+    const live = (await db.query(
+        `SELECT * FROM shipments WHERE order_number = $1 AND COALESCE(direction, 'forward') = 'forward' AND bucket <> 'cancelled'
+          ORDER BY COALESCE(manifested_at, created_at) DESC LIMIT 1`, [num])).rows[0];
+    if (!live) {
+        const saved = await saveOverride(num, fields, actor);
+        return { applied: 'crm', message: saved ? `Saved. ${num} has no AWB yet, so these details are used when it is shipped.` : 'Changes removed.' };
+    }
+    if (live.bucket !== 'waiting_pickup') {
+        throw Object.assign(new Error(`Delhivery has already picked up ${num} (AWB ${live.awb}, ${live.status || live.bucket}). It can't be changed from here now: ask Delhivery support, or arrange a return.`), { status: 409 });
+    }
+    if (fields.pincode && digits(fields.pincode) !== String(live.consignee_pincode || '')) {
+        throw Object.assign(new Error(`A new pincode needs a new AWB: cancel AWB ${live.awb} in Shipping and re-create it with the new address.`), { status: 409 });
+    }
+    const body = {};
+    if (fields.name) body.name = fields.name;
+    if (fields.phone) body.phone = fields.phone;
+    const add = [clean(fields.address ?? fields.add), clean(fields.city), clean(fields.state)].filter(Boolean).join(', ');
+    if (clean(fields.address ?? fields.add)) body.add = add;
+    if (fields.products_desc) body.products_desc = fields.products_desc;
+    await editOne(live.id, body, actor);
+    return { applied: 'delhivery', awb: live.awb, message: `Changed with Delhivery on AWB ${live.awb}.` };
+}
+
+/**
+ * Freight for each shipment, from Delhivery's rate calculator: the weight Delhivery charged (or
+ * ours), the zone, the COD fee. A few dozen per sync, newest first; needs the warehouse pincode.
+ */
+async function fillCharges(s, limit = 60) {
+    if (!/^\d{6}$/.test(String(s.origin_pincode || ''))) return 0;
+    const rows = (await db.query(
+        `SELECT s.id, s.consignee_pincode, s.weight_g, s.charged_weight_g, s.payment_mode, s.cod_amount, s.shipping_mode, s.products_desc,
+                o.line_items_json
+           FROM shipments s LEFT JOIN orders o ON o.order_number = s.order_number
+          WHERE s.consignee_pincode ~ '^[1-9][0-9]{5}$' AND COALESCE(s.direction, 'forward') = 'forward'
+            AND (s.charge_checked_at IS NULL
+                 OR (s.charged_weight_g IS NOT NULL AND s.charge_checked_at < s.updated_at AND s.bucket NOT IN ('delivered','cancelled','rto_returned')))
+          ORDER BY s.id DESC LIMIT $1`, [limit])).rows;
+    let n = 0;
+    for (const r of rows) {
+        let lines = [];
+        try { lines = JSON.parse(r.line_items_json || '[]'); } catch { lines = []; }
+        const pieces = lines.reduce((t, l) => t + (Number(l.quantity) || 1), 0) || 1;
+        const grams = r.charged_weight_g || r.weight_g || (s.default_item_g || 300) * pieces;
+        try {
+            const c = await dlv.charges({ originPin: s.origin_pincode, destPin: r.consignee_pincode, grams,
+                mode: r.shipping_mode === 'Express' ? 'E' : 'S', paymentType: r.payment_mode === 'COD' ? 'COD' : 'Pre-paid',
+                cod: r.payment_mode === 'COD' ? Number(r.cod_amount) || 0 : 0 });
+            await db.query(`UPDATE shipments SET charge_estimate = $2, charge_zone = $3, charge_cod = $4, pieces = $5, charge_checked_at = CURRENT_TIMESTAMP WHERE id = $1`,
+                [r.id, c?.total ?? null, c?.zone || null, c?.cod ?? null, pieces]);
+            n++;
+        } catch {
+            await db.query('UPDATE shipments SET charge_checked_at = CURRENT_TIMESTAMP WHERE id = $1', [r.id]);
+        }
+    }
+    return n;
+}
+
 function problemsOf(f) {
     const p = [];
     if (!f.name) p.push('name missing');
@@ -725,7 +853,7 @@ async function quote(orderNumber, choice = {}) {
     const s = await getSettings();
     const o = (await db.query('SELECT shopify_id, on_hold FROM orders WHERE order_number = $1', [orderNumber])).rows[0];
     if (!o) throw Object.assign(new Error(`Order ${orderNumber} isn't in the CRM`), { status: 404 });
-    const facts = orderFacts(await shopifyOrder(o.shopify_id));
+    const facts = withOverride(orderFacts(await shopifyOrder(o.shopify_id)), await overrideFor(orderNumber));
     const pack = await packFor(facts, s);
     const { grams, mode, cod, box } = payloadFor(facts, choice, s, orderNumber, pack);
     const out = { order_number: orderNumber, facts, problems: problemsOf(facts), suggested: pack, box: box.key, weight_g: grams, payment_mode: mode, cod_amount: cod };
@@ -803,7 +931,7 @@ async function createMany(items, { actor, kind = 'create' } = {}) {
             if (active) throw new Error(alreadyHas(active));
             const so = await shopifyOrder(o.shopify_id);
             if (so.cancelled_at) throw new Error('order is cancelled in Shopify');
-            const facts = orderFacts(so);
+            const facts = withOverride(orderFacts(so), await overrideFor(orderNumber));
             const probs = problemsOf(facts);
             if (probs.length) throw new Error(probs.join('; '));
             // Delhivery refuses an order id it has seen, so a re-create gets "-R1", "-R2"…
@@ -845,12 +973,14 @@ async function createMany(items, { actor, kind = 'create' } = {}) {
             const row = (await db.query(
                 `INSERT INTO shipments (awb, order_number, delhivery_order, shopify_order_id, created_via, bucket, status_type, status,
                         payment_mode, cod_amount, total_amount, box, weight_g, length_cm, width_cm, height_cm, shipping_mode, products_desc,
-                        consignee_name, consignee_city, consignee_state, consignee_pincode, pickup_location, manifested_at, recreated_from, created_by)
-                 VALUES ($1,$2,$3,$4,'crm','waiting_pickup','UD','Manifested',$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,CURRENT_TIMESTAMP,$20,$21)
+                        consignee_name, consignee_city, consignee_state, consignee_pincode, pickup_location, manifested_at, recreated_from, created_by,
+                        consignee_phone, consignee_address, pieces)
+                 VALUES ($1,$2,$3,$4,'crm','waiting_pickup','UD','Manifested',$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,CURRENT_TIMESTAMP,$20,$21,$22,$23,$24)
                  ON CONFLICT (awb) DO NOTHING RETURNING *`,
                 [awb, g.orderNumber, g.delhiveryOrder, g.shopifyId, g.mode, g.cod, g.facts.total_amount, g.box.key, g.grams,
                     g.payload.shipment_length, g.payload.shipment_width, g.payload.shipment_height, g.payload.shipping_mode, g.facts.products_desc,
-                    g.facts.name, g.facts.city, g.facts.state, g.facts.pin, s.pickup_location, g.old?.awb || null, actor || null])).rows[0];
+                    g.facts.name, g.facts.city, g.facts.state, g.facts.pin, s.pickup_location, g.old?.awb || null, actor || null,
+                    g.facts.phone, g.facts.add, g.facts.quantity || 1])).rows[0];
             if (g.old) {
                 await db.query(`UPDATE shipments SET cancel_handled = 'recreated', cancel_handled_by = $2, cancel_handled_at = CURRENT_TIMESTAMP,
                                        recreated_as = $3, updated_at = CURRENT_TIMESTAMP WHERE id = $1`, [g.old.id, actor || null, awb]);
@@ -1227,6 +1357,6 @@ function start() {
 }
 
 module.exports = {
-    getSettings, saveSettings, sync, quote, createMany, createManual, statusOf, linkTracking, catalog, packFor, RETURN_BUCKETS, recreate, markNotShipping, cancelOne, reattempt, editOne, bookPickup,
+    getSettings, saveSettings, sync, quote, createMany, createManual, statusOf, linkTracking, saveOverride, overrideFor, changeForCustomer, fillCharges, catalog, packFor, RETURN_BUCKETS, recreate, markNotShipping, cancelOne, reattempt, editOne, bookPickup,
     labelsFor: (awbs) => dlv.labels(awbs, '4R'), bucketOf, fromTracking, trackingUrl, start,
 };

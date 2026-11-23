@@ -140,6 +140,23 @@ async function ensureShippingSchema() {
             -- When the customer was sent the new tracking number after a re-create.
             ALTER TABLE shipments ADD COLUMN IF NOT EXISTS customer_notified_at TIMESTAMP;
             CREATE INDEX IF NOT EXISTS shipments_source_ref_idx ON shipments (source_ref);
+            -- What Delhivery weighed it at, and the CRM's estimate of the freight (from Delhivery's
+            -- rate calculator: the wallet itself isn't open to the API).
+            ALTER TABLE shipments ADD COLUMN IF NOT EXISTS charged_weight_g INTEGER;
+            ALTER TABLE shipments ADD COLUMN IF NOT EXISTS charge_zone TEXT;
+            ALTER TABLE shipments ADD COLUMN IF NOT EXISTS charge_cod NUMERIC(10,2);
+            ALTER TABLE shipments ADD COLUMN IF NOT EXISTS charge_checked_at TIMESTAMP;
+            ALTER TABLE shipments ADD COLUMN IF NOT EXISTS pieces INTEGER;
+            -- Delivery details changed in the CRM for an order that has no AWB yet (a wrong phone,
+            -- a new address, a different size). Used instead of Shopify's when the AWB is made.
+            CREATE TABLE IF NOT EXISTS shipping_overrides (
+                order_number TEXT PRIMARY KEY,
+                name TEXT, phone TEXT, address TEXT, city TEXT, state TEXT, pincode TEXT,
+                products_desc TEXT, note TEXT,
+                updated_by TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
             -- Delhivery order ids for manual shipments: M1001, M1002…
             CREATE SEQUENCE IF NOT EXISTS shipments_manual_seq START 1001;
             CREATE INDEX IF NOT EXISTS shipments_order_idx ON shipments (order_number);
@@ -178,6 +195,8 @@ async function ensureShippingSchema() {
                 finished_at TIMESTAMP
             );
             CREATE INDEX IF NOT EXISTS shipping_jobs_started_idx ON shipping_jobs (started_at DESC);
+            -- A failed job someone has seen and dismissed from the Shipping page.
+            ALTER TABLE shipping_jobs ADD COLUMN IF NOT EXISTS dismissed_at TIMESTAMP;
 
             CREATE TABLE IF NOT EXISTS shipping_settings (
                 id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
