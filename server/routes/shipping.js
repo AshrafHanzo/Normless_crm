@@ -43,12 +43,7 @@ const RETURNS = shipping.RETURN_BUCKETS;
 // As the portal splits them: an AWB with no pickup scheduled yet is "ready to ship"; once a pickup
 // is scheduled (or attempted) it is "ready for pickup".
 const READY_TO_SHIP = `bucket = 'waiting_pickup' AND COALESCE(status_code, 'X-UCI') = 'X-UCI'`;
-// "Not Picked" (X-PNP): Delhivery came and didn't get the parcel. The portal keeps these out of
-// Ready for pickup (they show under All shipments), and they are not cancelled either.
-const NOT_PICKED = `bucket = 'waiting_pickup' AND status_code = 'X-PNP' AND recreated_as IS NULL`;
-const READY_FOR_PICKUP = `bucket = 'waiting_pickup' AND NOT (${READY_TO_SHIP}) AND COALESCE(status_code, '') <> 'X-PNP'`;
-// Not picked and since re-made under a new AWB: done with, counted nowhere.
-const NOT_PICKED_REMADE = `bucket = 'waiting_pickup' AND status_code = 'X-PNP' AND recreated_as IS NOT NULL`;
+const READY_FOR_PICKUP = `bucket = 'waiting_pickup' AND NOT (${READY_TO_SHIP})`;
 // Shipments to customers only; return pickups are listed on their own.
 const FORWARD = `bucket <> ALL('{${RETURNS.join(',')}}')`;
 
@@ -64,9 +59,8 @@ async function counts() {
     out.ndr_open = (await db.query(`SELECT COUNT(*)::int AS n FROM shipments WHERE bucket = 'ndr' AND (ndr_action_at IS NULL OR ndr_action_at < status_at)`)).rows[0].n;
     out.not_ready = (await db.query(`SELECT COUNT(*)::int AS n FROM shipments WHERE bucket = 'waiting_pickup' AND status_code IN ('FMEOD-152','X-PNP')`)).rows[0].n;
     out.ready_to_ship = (await db.query(`SELECT COUNT(*)::int AS n FROM shipments WHERE ${READY_TO_SHIP}`)).rows[0].n;
-    out.not_picked = (await db.query(`SELECT COUNT(*)::int AS n FROM shipments WHERE ${NOT_PICKED}`)).rows[0].n;
     out.ready_for_pickup = (await db.query(`SELECT COUNT(*)::int AS n FROM shipments WHERE ${READY_FOR_PICKUP}`)).rows[0].n;
-    out.not_picked_remade = (await db.query(`SELECT COUNT(*)::int AS n FROM shipments WHERE ${NOT_PICKED_REMADE}`)).rows[0].n;
+
     return out;
 }
 
@@ -175,14 +169,13 @@ router.get('/pending', async (req, res) => {
 router.get('/shipments', async (req, res) => {
     try {
         const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-        const size = Math.min(100, Math.max(10, parseInt(req.query.size, 10) || 50));
+        const size = Math.min(300, Math.max(10, parseInt(req.query.size, 10) || 50));
         const vals = [];
         const where = [];
         const bucket = String(req.query.bucket || '');
         if (bucket === 'cancelled_open') where.push(`bucket = 'cancelled' AND cancel_kind = 'auto' AND cancel_handled IS NULL`);
         else if (bucket === 'ready_to_ship') where.push(READY_TO_SHIP);
         else if (bucket === 'ready_for_pickup') where.push(READY_FOR_PICKUP);
-        else if (bucket === 'not_picked') where.push(NOT_PICKED);
         else if (bucket === 'not_ready') where.push(`bucket = 'waiting_pickup' AND status_code IN ('FMEOD-152','X-PNP')`);
         else if (bucket === 'returns') where.push(`bucket = ANY('{${RETURNS.join(',')}}')`);
         else if (BUCKETS.includes(bucket) || RETURNS.includes(bucket)) { vals.push(bucket); where.push(`bucket = $${vals.length}`); }
@@ -203,7 +196,7 @@ router.get('/shipments', async (req, res) => {
         const w = where.length ? `WHERE ${where.join(' AND ')}` : '';
         const total = (await db.query(`SELECT COUNT(*)::int AS n FROM shipments ${w}`, vals)).rows[0].n;
         // Oldest first where somebody has to act (waiting, failed, cancelled); newest first elsewhere.
-        const order = ['waiting_pickup', 'ready_to_ship', 'ready_for_pickup', 'not_picked', 'ndr', 'cancelled', 'cancelled_open', 'not_ready', 'return_pickup'].includes(bucket)
+        const order = ['waiting_pickup', 'ready_to_ship', 'ready_for_pickup', 'ndr', 'cancelled', 'cancelled_open', 'not_ready', 'return_pickup'].includes(bucket)
             ? 'COALESCE(status_at, created_at) ASC' : 'COALESCE(status_at, created_at) DESC';
         vals.push(size, (page - 1) * size);
         const rows = (await db.query(

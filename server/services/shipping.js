@@ -115,11 +115,12 @@ async function finishJob(id, { ok = 0, failed = 0, summary = '', errors = [] }) 
  * Where a parcel is, in the CRM's words. Delhivery's status type (UD/DL/RT/CN/PP/PU) and status
  * come first; the NSL code tells a failed delivery (EOD-…) from a parcel merely sitting at a hub.
  *
- * Only Delhivery's own "Cancelled" status is an auto-cancel (status type CN, or a status that
- * says cancel). "Not Picked" (X-PNP, "Shipment not received from client") is not: the parcel is
- * still waiting and can be picked up on a later visit. EOD-6O is the customer cancelling at the
- * door, a failed delivery rather than a cancelled shipment. If a cancelled parcel is picked up
- * after all, tracking moves it on and the cancel mark comes off.
+ * Cancelled is what the Delhivery portal shows as CANCELLED. The API reports those as "Not
+ * Picked" (X-PNP, "Shipment not received from client"); checked on 2026-11-23, all 196 Not
+ * Picked shipments in the portal carry the CANCELLED badge. A status type CN, or a status that
+ * says cancel, counts too. EOD-6O is the customer cancelling at the door: a failed delivery, not
+ * a cancelled shipment. If a cancelled parcel is picked up after all, tracking moves it on and
+ * the cancel mark comes off.
  */
 function bucketOf(st = {}, direction = 'forward') {
     const type = String(st.StatusType || '').toUpperCase();
@@ -138,6 +139,7 @@ function bucketOf(st = {}, direction = 'forward') {
     if (type === 'CN' || /cancel/.test(s)) return 'cancelled';
     if (type === 'RT') return 'rto_transit';
     if (s === 'lost') return 'lost';
+    if (s === 'not picked' || code === 'X-PNP') return 'cancelled';
     if (s === 'manifested' || s === 'not picked' || s === 'open' || s === 'scheduled') {
         if (/cancel/i.test(ins) && code !== 'EOD-6O') return 'cancelled';
         return 'waiting_pickup';
@@ -335,7 +337,6 @@ async function sync({ actor } = {}) {
             const recent = (await db.query(
                 `SELECT o.order_number, o.created_at > NOW() - INTERVAL '14 days' AS fresh FROM orders o
                   WHERE o.created_at > NOW() - ($1 || ' days')::interval
-                    AND o.cancelled_at IS NULL
                     AND NOT EXISTS (SELECT 1 FROM shipments s WHERE s.order_number = o.order_number)
                   ORDER BY o.created_at DESC LIMIT 5000`, [String(s.sync_days)])).rows;
             // Orders from the last two weeks are asked about on every sync, so one manifested in the
@@ -354,14 +355,22 @@ async function sync({ actor } = {}) {
                 `SELECT DISTINCT order_number, (SELECT COUNT(*) FROM shipments t WHERE t.order_number = s.order_number
                                                   AND COALESCE(t.direction, 'forward') = 'forward')::int AS n
                    FROM shipments s
-                  WHERE recreated_as IS NULL AND order_number IS NOT NULL AND COALESCE(direction, 'forward') = 'forward'
-                    AND (status_code = 'X-PNP' OR (bucket = 'cancelled' AND cancel_handled IS NULL))`)).rows;
+                  WHERE recreated_as IS NULL AND cancel_handled IS NULL AND order_number IS NOT NULL
+                    AND COALESCE(direction, 'forward') = 'forward' AND bucket = 'cancelled'`)).rows;
             const refs = stuck.flatMap(x => [remakeRef(x.order_number, x.n), remakeRef(x.order_number, x.n + 1)]);
             for (const S of await dlv.trackByOrder(refs)) {
                 const r = await applyTracking(S, { createdVia: 'portal' });
                 if (r?.row && !r.was) found++;
                 else if (r?.row) await linkRemake(r.row);
             }
+
+            // 2c. A cancelled shipment whose order was since cancelled in Shopify needs nothing.
+            await db.query(
+                `UPDATE shipments s SET cancel_handled = 'not_shipping', cancel_handled_by = 'Shopify: order cancelled',
+                        cancel_handled_at = CURRENT_TIMESTAMP
+                   FROM orders o
+                  WHERE o.order_number = s.order_number AND o.cancelled_at IS NOT NULL
+                    AND s.bucket = 'cancelled' AND s.cancel_kind = 'auto' AND s.cancel_handled IS NULL`);
 
             // 3. Alerts. An auto-cancel is news once it has stood for three hours (some are picked
             //    up later the same day) and if it is from the last three days; older ones are
@@ -672,7 +681,12 @@ const alreadyHas = (a) => `already has AWB ${a.awb}${a.created_via === 'portal' 
 async function refreshFromDelhivery(orderNumbers) {
     const list = [...new Set(orderNumbers.map(clean).filter(Boolean))];
     if (!list.length) return;
-    for (const S of await dlv.trackByOrder(list)) await applyTracking(S, { createdVia: 'portal' });
+    // Also any copy cloned in the portal ("13143A", "13143B"…), which links itself to the original.
+    const refs = [...list, ...list.flatMap(n => [1, 2, 3].map(i => remakeRef(n, i)))];
+    for (const S of await dlv.trackByOrder(refs)) {
+        const r = await applyTracking(S, { createdVia: 'portal' });
+        if (r?.row && r.was) await linkRemake(r.row);
+    }
     for (const n of list) lookedUp.set(n, Date.now());
 }
 

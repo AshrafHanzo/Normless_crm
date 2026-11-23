@@ -4,7 +4,6 @@ export const BUCKETS = [
   { key: 'pending', label: 'Pending AWB' },
   { key: 'ready_to_ship', label: 'Ready to ship' },
   { key: 'ready_for_pickup', label: 'Ready for pickup' },
-  { key: 'not_picked', label: 'Not picked', tone: 'warning' },
   { key: 'in_transit', label: 'In transit' },
   { key: 'out_for_delivery', label: 'Out for delivery' },
   { key: 'ndr', label: 'Delivery failed', tone: 'warning' },
@@ -59,7 +58,7 @@ export const statusText = (s) => {
   if (s.status_code === 'FMEOD-152') return 'Not ready when Delhivery came'
   if (s.status_code === 'FMEOD-106') return 'Pickup not attempted yet'
   if (s.status_code === 'X-UCI') return 'AWB ready, no pickup scheduled'
-  if (s.status_code === 'X-PNP') return 'Not picked: Delhivery didn\'t receive it'
+  if (s.status_code === 'X-PNP') return 'Cancelled: Delhivery didn\'t receive it'
   return s.instructions || s.status || '—'
 }
 

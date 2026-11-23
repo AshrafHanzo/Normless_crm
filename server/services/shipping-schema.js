@@ -175,6 +175,11 @@ async function ensureShippingSchema() {
             [JSON.stringify(DEFAULT_SETTINGS)]);
         // 45 days left most of the portal's history out of the counts; look back four months.
         await db.query(`UPDATE shipping_settings SET data = jsonb_set(data, '{sync_days}', '120') WHERE id = 1 AND data->>'sync_days' = '45'`);
+        // Not Picked became Cancelled on 2026-11-23. The ones already known were reported then, so
+        // they don't ping the bell again as the first sync re-files them (done once).
+        const flag = await db.query(`UPDATE shipping_settings SET data = data || '{"xpnp_backlog_quiet": true}'
+                                      WHERE id = 1 AND NOT (data ? 'xpnp_backlog_quiet') RETURNING id`);
+        if (flag.rows[0]) await db.query(`UPDATE shipments SET cancel_alerted_at = CURRENT_TIMESTAMP WHERE status_code = 'X-PNP' AND cancel_alerted_at IS NULL`);
 
         if (!hadPerm) {
             await db.query(`UPDATE admin_users SET can_view_shipping = true, can_manage_shipping = true
