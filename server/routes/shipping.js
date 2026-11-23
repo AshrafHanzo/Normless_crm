@@ -3,7 +3,7 @@
  *
  * `can_view_shipping` opens the pages; `can_manage_shipping` creates, re-creates, cancels, books
  * pickups and answers failed deliveries (each of these spends from the Delhivery wallet or changes
- * a live shipment). Settings are for owners and admins.
+ * a live shipment). Settings are for owners, admins and anyone who can manage Shipping.
  */
 
 const express = require('express');
@@ -20,7 +20,7 @@ const isAdmin = (req) => ['owner', 'admin'].includes(req.user?.role);
 
 const view = async (req, res, next) => ((await hasPermission(req, 'can_view_shipping')) ? next() : res.status(403).json({ error: 'Access denied' }));
 const manage = async (req, res, next) => ((await hasPermission(req, 'can_manage_shipping')) ? next() : res.status(403).json({ error: 'You can see shipments but not act on them' }));
-const admin = (req, res, next) => (isAdmin(req) ? next() : res.status(403).json({ error: 'Only an owner or admin can change shipping settings' }));
+const admin = async (req, res, next) => ((isAdmin(req) || await hasPermission(req, 'can_manage_shipping')) ? next() : res.status(403).json({ error: 'You need Shipping manage access to change shipping settings' }));
 
 const fail = (res, err, what) => {
     console.error(`shipping ${what}:`, err.message);

@@ -195,7 +195,7 @@ export default function Shipping() {
       {tab === 'ndr' && <FailedDeliveries {...shared} />}
       {tab === 'activity' && <Activity {...shared} />}
       {tab === 'settings' && (settings
-        ? <ShippingSettings {...shared} onSaved={(s) => { setSettings(s); changed() }} />
+        ? <ShippingSettings {...shared} isAdmin={!!status?.is_admin || canManage} onSaved={(s) => { setSettings(s); changed() }} />
         : <div className="loader"><div className="spinner" /></div>)}
 
       {shipOrders && (

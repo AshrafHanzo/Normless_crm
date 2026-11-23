@@ -26,7 +26,7 @@ const SECTIONS = [
   { key: 'alerts', label: 'Alerts', icon: 'bell', blurb: 'Who hears about auto-cancels and parcels left waiting.' },
 ]
 
-/** Delhivery settings: the warehouse, packaging and packing rules, automation and alerts. Owners and admins. */
+/** Delhivery settings: the warehouse, packaging and packing rules, automation and alerts. Owners, admins and Shipping managers. */
 export default function ShippingSettings({ settings, isAdmin, onSaved }) {
   const apiFetch = useApi()
   const toast = useToast()
@@ -104,7 +104,7 @@ export default function ShippingSettings({ settings, isAdmin, onSaved }) {
         <header className="stg-head">
           <h2>{current.label}</h2>
           <p>{current.blurb}</p>
-          {ro && <p className="stg-ro"><Icon name="lock" size={13} /> Only an owner or admin can change these.</p>}
+          {ro && <p className="stg-ro"><Icon name="lock" size={13} /> You need Shipping manage access to change these.</p>}
         </header>
 
         {section === 'warehouse' && (

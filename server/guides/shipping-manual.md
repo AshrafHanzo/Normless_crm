@@ -15,8 +15,8 @@ Access is set per person under **Admin → Users**. Ask an owner or admin if a b
 | Access | What it lets you do |
 | --- | --- |
 | **Shipping: view** | Open the Shipping page, see every shipment, search, filter, download CSVs and print labels |
-| **Shipping: manage** | Everything above, plus get AWBs, create manual shipments, edit, cancel, re-create, book pickups and answer failed deliveries |
-| **Owner or admin** | Everything above, plus change Shipping → Settings |
+| **Shipping: manage** | Everything above, plus get AWBs, create manual shipments, edit, cancel, re-create, book pickups, answer failed deliveries and change Shipping → Settings |
+| **Owner or admin** | Everything above, always |
 | **Support: edit** | On a support ticket, change a customer's delivery details before Delhivery picks the parcel up |
 | **Anyone signed in** | See a parcel's Delhivery status on support tickets, marketing orders and the scanner |
 
@@ -34,7 +34,7 @@ Open **Shipping** in the left menu. A red number on it means auto-cancelled parc
 | **Pickups** | Book a pickup and see every parcel waiting, oldest first |
 | **Failed deliveries** | Delivery attempts that failed: re-attempt, change the phone or address, or have it returned |
 | **Activity** | Every bulk action and automatic job, with each failure and its reason |
-| **Settings** | Warehouse, packaging, packing rules, automation and alerts (owners and admins) |
+| **Settings** | Warehouse, packaging, packing rules, automation and alerts (anyone who can manage Shipping) |
 
 The status lists on the Shipments tab:
 
@@ -243,7 +243,7 @@ A cancelled label that goes out with the parcel is not picked up, so this check 
 
 ## Packaging and packing rules
 
-Delhivery charges by the bigger of the real weight and the size-based (volumetric) weight. When the weight we declare is lower than what they measure, the wallet is debited the difference later ("Captured weight is higher than declared weight"). Accurate packaging stops those surprise debits. An owner or admin sets this up once in **Shipping → Settings**.
+Delhivery charges by the bigger of the real weight and the size-based (volumetric) weight. When the weight we declare is lower than what they measure, the wallet is debited the difference later ("Captured weight is higher than declared weight"). Accurate packaging stops those surprise debits. Anyone who can manage Shipping sets this up once in **Shipping → Settings**.
 
 **1. Packaging** (Settings → Packaging). One row per polybag or box you use: name, polybag or box, length × breadth × height in cm, empty weight in grams, and how many pieces fit. Then choose the **Default packaging** and the **Weight per piece** used when nothing else knows a product's weight.
 
