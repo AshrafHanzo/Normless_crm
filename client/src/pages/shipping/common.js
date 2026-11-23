@@ -58,7 +58,7 @@ export const statusText = (s) => {
   if (s.status_code === 'FMEOD-152') return 'Not ready when Delhivery came'
   if (s.status_code === 'FMEOD-106') return 'Pickup not attempted yet'
   if (s.status_code === 'X-UCI') return 'AWB ready, no pickup scheduled'
-  if (s.status_code === 'X-PNP') return 'Not picked up, so Delhivery cancelled it'
+  if (s.status_code === 'X-PNP') return 'Not picked: Delhivery didn\'t receive it'
   return s.instructions || s.status || '—'
 }
 

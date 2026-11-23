@@ -115,11 +115,11 @@ async function finishJob(id, { ok = 0, failed = 0, summary = '', errors = [] }) 
  * Where a parcel is, in the CRM's words. Delhivery's status type (UD/DL/RT/CN/PP/PU) and status
  * come first; the NSL code tells a failed delivery (EOD-…) from a parcel merely sitting at a hub.
  *
- * An auto-cancel shows in tracking as "Not Picked" (X-PNP, "Shipment not received from client"):
- * the portal lists exactly these as CANCELLED. A few are picked up later the same day; tracking
- * then moves them on and the cancel mark comes off. Anything else that says "cancel" before
- * pickup counts too, except EOD-6O, which is the customer cancelling at the door (a failed
- * delivery, not a cancelled shipment).
+ * Only Delhivery's own "Cancelled" status is an auto-cancel (status type CN, or a status that
+ * says cancel). "Not Picked" (X-PNP, "Shipment not received from client") is not: the parcel is
+ * still waiting and can be picked up on a later visit. EOD-6O is the customer cancelling at the
+ * door, a failed delivery rather than a cancelled shipment. If a cancelled parcel is picked up
+ * after all, tracking moves it on and the cancel mark comes off.
  */
 function bucketOf(st = {}, direction = 'forward') {
     const type = String(st.StatusType || '').toUpperCase();
@@ -138,7 +138,6 @@ function bucketOf(st = {}, direction = 'forward') {
     if (type === 'CN' || /cancel/.test(s)) return 'cancelled';
     if (type === 'RT') return 'rto_transit';
     if (s === 'lost') return 'lost';
-    if (s === 'not picked' || code === 'X-PNP') return 'cancelled';
     if (s === 'manifested' || s === 'not picked' || s === 'open' || s === 'scheduled') {
         if (/cancel/i.test(ins) && code !== 'EOD-6O') return 'cancelled';
         return 'waiting_pickup';
@@ -232,6 +231,7 @@ async function applyTracking(S, { createdVia = 'portal' } = {}) {
         const r = await db.query(
             `UPDATE shipments SET ${sets.join(', ')},
                     cancel_kind = $${cols.length + 2}, cancelled_at = $${cols.length + 3},
+                    cancel_alerted_at = CASE WHEN $${cols.length + 2}::text IS NULL THEN NULL ELSE cancel_alerted_at END,
                     payment_mode = CASE WHEN $${cols.length + 4} = 'Return' THEN 'Return' ELSE COALESCE(payment_mode, $${cols.length + 4}) END,
                     last_tracked_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
               WHERE awb = $1 RETURNING *`,
