@@ -123,6 +123,7 @@ function Frame({ brand, me, children }) {
             <NavLink to={brand.path} end className="wa-seg-item">Inbox</NavLink>
             {can.dashboard && <NavLink to={`${brand.path}/dashboard`} className="wa-seg-item">Dashboard</NavLink>}
             {brand.key === 'crewfit' && <NavLink to={`${brand.path}/me`} className="wa-seg-item">{me ? 'My performance' : 'Performance'}</NavLink>}
+            {brand.key === 'normless' && (['admin', 'owner'].includes(user?.role) || user?.can_manage_nl_ai) && <NavLink to={`${brand.path}/ai`} className="wa-seg-item">AI agent</NavLink>}
             {can.settings && <NavLink to={`${brand.path}/settings`} className="wa-seg-item">Settings</NavLink>}
           </nav>
         </header>

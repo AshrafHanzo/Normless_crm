@@ -24,6 +24,7 @@ const lines = require('./wa-line');
 const shop = require('./nl-shop');
 const shopify = require('./shopify');
 const handover = require('./nl-handover');
+const usage = require('./ai-usage');
 const { readSettings, isOpen, clock } = require('./nl-settings');
 
 const MODEL = process.env.NL_BOT_MODEL || 'claude-opus-5-5';
@@ -282,6 +283,7 @@ async function think({ settings, context, turns, conversation, dry }) {
             tools: TOOLS,
             messages,
         });
+        await usage.record(dry ? 'nl_try' : 'nl_bot', response, { conversationId: conversation?.id || null });
 
         if (response.stop_reason === 'refusal') return { handOver: { reason: 'The bot could not answer this', summary: 'The message needs a person.' }, sent: ctx.sent };
         messages.push({ role: 'assistant', content: response.content });
@@ -350,6 +352,18 @@ async function answer(conversationId) {
 
     if (outcome.handOver) {
         await db.query('UPDATE wa_conversations SET nl_handoff_at = CURRENT_TIMESTAMP WHERE id = $1', [conversation.id]);
+        // With the AI agent on, it takes the chat first; it brings a person in only if it has to
+        // ask the team, so nobody is introduced to the customer for a chat the agent then answers.
+        const agent = require('./nl-agent');
+        if ((await agent.status(line.id)).on && !conversation.ai_paused) {
+            await db.query(`UPDATE wa_conversations SET mode = 'human', updated_at = CURRENT_TIMESTAMP WHERE id = $1`, [conversation.id]);
+            await db.query(`INSERT INTO wa_notes (conversation_id, author, body) VALUES ($1,'bot',$2)`,
+                [conversation.id, `Bot handed this to the AI agent — ${String(outcome.handOver.reason).slice(0, 200)}${outcome.handOver.summary ? `\n${String(outcome.handOver.summary).slice(0, 1500)}` : ''}`]);
+            await db.query(`INSERT INTO wa_activity (conversation_id, kind, body) VALUES ($1,'handoff',$2)`,
+                [conversation.id, `Bot handed this to the AI agent: ${String(outcome.handOver.reason).slice(0, 200)}`]);
+            agent.schedule(conversation.id, 3000);
+            return;
+        }
         await handover.handOver(conversation, outcome.handOver);
         return;
     }
@@ -444,4 +458,4 @@ async function tryIt(lineId, turns) {
     };
 }
 
-module.exports = { onInbound, tryIt, enabled, engine, inventedFigure, asMessages, MODEL };
+module.exports = { onInbound, tryIt, enabled, engine, inventedFigure, asMessages, runTool, TOOLS, MODEL };

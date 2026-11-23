@@ -180,6 +180,10 @@ router.put('/team/:username', manager, async (req, res) => {
     }
 });
 
+/* ── The AI agent: settings, playbook, questions, spend (routes/nl-ai) ────────────────────── */
+
+router.use('/ai', require('./nl-ai'));
+
 /* ── The bot, tried out from Settings without sending anything ─────────────────────────────── */
 
 router.post('/bot/try', async (req, res) => {

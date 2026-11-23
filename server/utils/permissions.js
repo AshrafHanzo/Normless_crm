@@ -20,7 +20,7 @@ const COLUMNS = new Set([
   'can_view_banking', 'can_edit_banking',
   'can_view_whatsapp', 'can_manage_whatsapp',
   'can_view_wa_normless', 'can_manage_wa_normless',
-  'can_view_wa_dashboard', 'can_manage_wa_settings', 'can_view_wa_nl_dashboard', 'can_manage_wa_nl_settings',
+  'can_view_wa_dashboard', 'can_manage_wa_settings', 'can_view_wa_nl_dashboard', 'can_manage_wa_nl_settings', 'can_manage_nl_ai',
   'can_view_backups',
   'can_view_tasks', 'can_manage_boards', 'can_view_payroll',
 ]);

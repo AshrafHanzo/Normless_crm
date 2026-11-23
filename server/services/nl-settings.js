@@ -10,6 +10,12 @@ const EXCHANGE_CENTER = 'https://normless.store/apps/aftership-returns-center';
 /** What a section holds before anybody has saved it. The policy facts are Normless's own. */
 const DEFAULTS = {
     bot: { enabled: false, tone: 'friendly', language: 'en' },
+    // The AI agent that answers the chats the bot hands to a person (nl-agent). Off until a
+    // manager switches it on; it stops for the month when the budget (US dollars) is spent.
+    agent: {
+        enabled: false, model: 'claude-opus-5-5', budget_usd: 50, usd_inr: 88,
+        quiet_minutes: 30, close_when_done: true,
+    },
     faqs: [
         { q: 'Is the COD advance refundable?', a: 'No — any advance on a partial COD order is non-refundable.' },
         { q: 'Do you ship outside India?', a: 'Yes. Charges are shown at checkout; delivery takes 7–21 business days.' },

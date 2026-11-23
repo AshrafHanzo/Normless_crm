@@ -131,6 +131,7 @@ async function parseWithClaude(text) {
             signal: AbortSignal.timeout(20000),
         });
         const data = await res.json();
+        await require('./ai-usage').record('cf_billing', data);
         const raw = (data?.content || []).map(c => c.text || '').join('');
         const json = safeJson(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1), null);
         if (!json) return null;

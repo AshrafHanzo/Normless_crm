@@ -45,6 +45,7 @@ import VendorQuotations from './pages/purchasing/VendorQuotations'
 import VendorPortal from './pages/purchasing/VendorPortal'
 import TeamMe from './pages/team/Me'
 import WhatsAppSettings from './pages/crewfit/WhatsAppSettings'
+import NlAiAgent from './pages/crewfit/NlAiAgent'
 import WhatsAppDashboard, { WhatsAppMyPerformance } from './pages/crewfit/WhatsAppDashboard'
 
 // API base. In dev, VITE_API_URL (from .env.development.local) points at the
@@ -280,6 +281,8 @@ function App() {
             <Route path="/whatsapp/dashboard" element={<ProtectedRoute permission="can_view_wa_nl_dashboard"><AppLayout><WhatsAppDashboard brand="normless" /></AppLayout></ProtectedRoute>} />
             <Route path="/whatsapp/settings" element={<ProtectedRoute permission="can_manage_wa_nl_settings"><AppLayout><WhatsAppSettings brand="normless" /></AppLayout></ProtectedRoute>} />
             <Route path="/whatsapp/settings/:tab" element={<ProtectedRoute permission="can_manage_wa_nl_settings"><AppLayout><WhatsAppSettings brand="normless" /></AppLayout></ProtectedRoute>} />
+            <Route path="/whatsapp/ai" element={<ProtectedRoute permission="can_manage_nl_ai"><AppLayout><NlAiAgent /></AppLayout></ProtectedRoute>} />
+            <Route path="/whatsapp/ai/:tab" element={<ProtectedRoute permission="can_manage_nl_ai"><AppLayout><NlAiAgent /></AppLayout></ProtectedRoute>} />
             <Route path="/crewfit/quotes" element={<ProtectedRoute permission="can_view_crewfit_calculator"><AppLayout><CrewfitQuotes /></AppLayout></ProtectedRoute>} />
             <Route path="/crewfit/payments" element={<ProtectedRoute permission="can_view_crewfit_payments"><AppLayout><CrewfitPayments /></AppLayout></ProtectedRoute>} />
             <Route path="/crewfit/customers" element={<ProtectedRoute permission="can_view_crewfit_customers"><AppLayout><CrewfitCustomers /></AppLayout></ProtectedRoute>} />

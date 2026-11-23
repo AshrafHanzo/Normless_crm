@@ -19,6 +19,7 @@ import { useWaCalls, WaCallDock } from './WaCalls'
 import WaNewChat from './WaNewChat'
 import TeamGuide from '../../components/TeamGuide'
 import { WaText, Ticks, BubbleButtons } from './WaBubble'
+import { AiChatBar, TeachButton } from './NlAiAgent'
 
 // Crewfit's queues, in the order a salesperson works them. `hint` says what each one is.
 const FILTERS = [
@@ -1472,6 +1473,9 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
           {config?.canDashboard
             ? <Link to={`${brand.path}/dashboard`} className="btn btn-secondary btn-sm"><Icon name="trending" size={14} /> Dashboard</Link>
             : cf && <Link to={`${brand.path}/me`} className="btn btn-secondary btn-sm"><Icon name="trending" size={14} /> My performance</Link>}
+          {!cf && (['admin', 'owner'].includes(user?.role) || user?.can_manage_nl_ai) && (
+            <Link to={`${brand.path}/ai`} className="btn btn-secondary btn-sm"><Icon name="spark" size={14} /> AI agent</Link>
+          )}
           {config?.canSettings && (
             <Link to={`${brand.path}/settings`} className="btn btn-secondary btn-sm">
               <Icon name="settings" size={14} /> Settings
@@ -1863,7 +1867,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                         <div className="wa-meta">
                           {m.type === 'template' && <span>template</span>}
                           {mine && (m.sender_type === 'phone' ? <span>from the phone app</span> : m.sender_type === 'auto' ? <span>sent automatically</span> : m.sender_type === 'bot' ? <span>{cf ? 'menu' : 'bot'}</span>
-                            : m.sender_type === 'ai' ? <span>assistant</span>
+                            : m.sender_type === 'ai' ? (cf ? <span>assistant</span> : <><span>AI agent</span>{m.sender_user === 'ai-agent' && <TeachButton message={m} />}</>)
                               : m.sender_user ? <span>{short(m.sender_user)}</span> : null)}
                           <span>{clock(m.sent_at)}</span>
                           {mine && <Ticks status={m.status} />}
@@ -1894,6 +1898,9 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                   </div>
                 ))}
               </div>
+
+              {/* Normless's AI agent on this chat: its question to the team, "tell the AI", pause. */}
+              {!cf && !thread.is_demo && <AiChatBar conversationId={thread.id} onChanged={() => poll.current()} />}
 
               {/* Replying is for the person the chat is with: nobody types into a chat that is
                   waiting for someone, or into someone else's, without taking it first — except a

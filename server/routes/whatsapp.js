@@ -285,6 +285,10 @@ async function receiveMessage(message, profileName) {
         } catch (err) { console.error('vendor chat check error:', err.message); }
         try { await nlBot.onInbound({ id: conversation.id, phone }); }
         catch (err) { console.error('normless bot error:', err.message); }
+        // A chat with the team: the AI agent looks at it once the burst settles (it stays out of
+        // chats the bot still has, a person is in, or somebody paused it on).
+        try { require('../services/nl-agent').schedule(conversation.id); }
+        catch (err) { console.error('normless agent error:', err.message); }
         return;
     }
 

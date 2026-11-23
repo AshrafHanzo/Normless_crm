@@ -4700,3 +4700,39 @@ p.wdb-sub { margin: 0; }
   .stg-grid, .stg-grid.four { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .stg-grid .span2 { grid-column: span 2; }
 }
+
+/* ── Normless AI agent (NlAiAgent.jsx) ───────────────────────────────────────────────────── */
+.nla-status { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.nla-status-main { display: flex; align-items: flex-start; gap: 12px; min-width: 0; }
+.nla-status h3 { margin: 0 0 2px; }
+.nla-dot { width: 10px; height: 10px; border-radius: 50%; margin-top: 6px; flex: none; background: var(--text-muted); }
+.nla-on .nla-dot { background: #22c55e; box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.18); }
+.nla-off .nla-dot { background: #f59e0b; }
+.nla-kpi-link { text-decoration: none; color: inherit; }
+.nla-kpi-link:hover { box-shadow: inset 0 0 0 1px var(--primary); }
+.nla-form { display: flex; flex-direction: column; gap: 12px; }
+.nla-form label { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; font-weight: 600; color: var(--text-secondary); }
+.nla-form small { font-weight: 400; color: var(--text-muted); }
+.nla-form textarea { resize: vertical; font: inherit; }
+.nla-check { display: inline-flex !important; flex-direction: row !important; align-items: center; gap: 8px; font-weight: 500 !important; color: var(--text-primary) !important; font-size: 13px; }
+.nla-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; font-size: 13px; line-height: 1.5; }
+.nla-lessons { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.nla-lesson { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; padding: 12px 0; border-top: 1px solid var(--border); }
+.nla-lesson:first-child { border-top: 0; }
+.nla-lesson-main { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.nla-lesson-main p { margin: 0; font-size: 13px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.nla-lesson-off { opacity: 0.55; }
+.nla-q { display: flex; flex-direction: column; gap: 8px; }
+.nla-q textarea { resize: vertical; font: inherit; width: 100%; box-sizing: border-box; }
+.nla-q-said { margin: 0; font-size: 13px; color: var(--text-secondary); font-style: italic; overflow-wrap: anywhere; }
+.nla-q-text { margin: 0; font-weight: 600; font-size: 13.5px; display: flex; gap: 6px; align-items: flex-start; overflow-wrap: anywhere; }
+.nla-q-text svg { flex: none; margin-top: 3px; color: #a78bfa; }
+.nla-q-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.nla-q-answer { margin: 0; font-size: 13px; overflow-wrap: anywhere; }
+.nla-q-compact { margin: 0; padding: 10px 12px; border-color: #a78bfa; }
+.nla-bar { display: flex; flex-direction: column; gap: 6px; padding: 8px 12px 0; }
+.nla-bar-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.nla-pill { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: rgba(167, 139, 250, 0.16); color: #7c3aed; }
+.nla-pill-off { background: var(--surface-hover); color: var(--text-muted); }
+.nla-teach { border: 0; background: none; padding: 0 0 0 4px; font-size: 11px; color: #7c3aed; cursor: pointer; text-decoration: underline; }
+@media (prefers-color-scheme: dark) { .nla-pill, .nla-teach { color: #c4b5fd; } }

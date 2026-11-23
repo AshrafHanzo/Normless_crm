@@ -243,6 +243,7 @@ async function ask(messages) {
         // The key itself is never in here; Anthropic's message is.
         throw new Error(data?.error?.message || `The assistant is unavailable (${res.status})`);
     }
+    await require('./ai-usage').record('cf_assistant', data);
     return data;
 }
 

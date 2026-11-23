@@ -1937,6 +1937,60 @@ async function ensureWaLinesSchema() {
                 UNIQUE (line_id, event, ref)
             );
             CREATE INDEX IF NOT EXISTS nl_auto_sends_recent_idx ON nl_auto_sends (line_id, created_at DESC);
+            -- Every Claude API call: tokens and what they cost, for the AI agent's spend page.
+            CREATE TABLE IF NOT EXISTS ai_usage (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                feature TEXT NOT NULL,
+                model TEXT,
+                input_tokens INTEGER NOT NULL DEFAULT 0,
+                output_tokens INTEGER NOT NULL DEFAULT 0,
+                cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+                cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+                cost_usd NUMERIC(12,6) NOT NULL DEFAULT 0,
+                conversation_id INTEGER,
+                ref TEXT,
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS ai_usage_at_idx ON ai_usage (created_at);
+            -- What the team taught the Normless AI agent: standing lessons, and announcements that
+            -- run out on a date (a dispatch delay, Instagram being down).
+            CREATE TABLE IF NOT EXISTS nl_ai_lessons (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                line_id INTEGER NOT NULL REFERENCES wa_lines(id),
+                kind TEXT NOT NULL DEFAULT 'lesson',
+                title TEXT,
+                body TEXT NOT NULL,
+                active BOOLEAN NOT NULL DEFAULT true,
+                expires_at TIMESTAMPTZ,
+                source TEXT NOT NULL DEFAULT 'manual',
+                conversation_id INTEGER,
+                created_by TEXT,
+                used_count INTEGER NOT NULL DEFAULT 0,
+                last_used_at TIMESTAMPTZ,
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            );
+            -- What the agent asked the team because it didn't know, and what they told it.
+            CREATE TABLE IF NOT EXISTS nl_ai_questions (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                line_id INTEGER NOT NULL REFERENCES wa_lines(id),
+                conversation_id INTEGER NOT NULL,
+                question TEXT NOT NULL,
+                context TEXT,
+                status TEXT NOT NULL DEFAULT 'open',
+                answer TEXT,
+                answered_by TEXT,
+                answered_at TIMESTAMPTZ,
+                lesson_id INTEGER,
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS nl_ai_questions_open_idx ON nl_ai_questions (line_id, status, created_at DESC);
+            -- A person can stop the agent on one chat ("I'll handle this one").
+            ALTER TABLE wa_conversations ADD COLUMN IF NOT EXISTS ai_paused BOOLEAN NOT NULL DEFAULT false;
+            -- Teaching the agent, answering its questions and seeing its spend: its own grant,
+            -- starting as whoever can change Normless's WhatsApp settings.
+            ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS can_manage_nl_ai BOOLEAN;
+            UPDATE admin_users SET can_manage_nl_ai = COALESCE(can_manage_wa_nl_settings, false) WHERE can_manage_nl_ai IS NULL;
             -- Replied STOP: no marketing templates (cart reminders, offers); order updates still go.
             ALTER TABLE wa_contacts ADD COLUMN IF NOT EXISTS opted_out_at TIMESTAMPTZ;
             -- Their WhatsApp profile photo, where one was brought in (the Cloud API does not give them).
@@ -2506,6 +2560,8 @@ app.listen(PORT, async () => {
     // actually looking at.
     // Normless's automatic WhatsApp messages: abandoned-cart reminders and order updates.
     require('./services/nl-automations').start();
+    // The Normless AI agent looks for chats waiting on the team every few minutes (when it's on).
+    require('./services/nl-agent').start();
     // WhatsApp updates to vendors, after their short hold.
     require('./services/vendor-wa').start();
     // Marketing broadcasts that were going when the server stopped carry on.
