@@ -346,6 +346,7 @@ app.use('/api/scanner', authMiddleware, require('./routes/packing'));
 // page in the CRM, and nothing it stores is served off /uploads.
 app.use('/api/banking', authMiddleware, require('./routes/banking'));
 // Customer support: returns, replacements and refunds arranged by hand.
+app.use('/api/support-email', authMiddleware, require('./routes/support-email'));
 app.use('/api/support', authMiddleware, require('./routes/support'));
 // Shipping with Delhivery: shipments, pickups, failed deliveries and auto-cancel alerts
 app.use('/api/shipping', authMiddleware, require('./routes/shipping'));
@@ -2161,6 +2162,51 @@ async function ensureSupportSchema() {
             ALTER TABLE support_tickets ADD COLUMN IF NOT EXISTS images TEXT;
             -- The Normless WhatsApp chat a ticket was raised from, so each opens the other.
             ALTER TABLE support_tickets ADD COLUMN IF NOT EXISTS wa_conversation_id INTEGER;
+            -- The contact@normless.store email thread a ticket was raised from.
+            ALTER TABLE support_tickets ADD COLUMN IF NOT EXISTS email_thread_id INTEGER;
+
+            -- contact@normless.store, read over IMAP and answered by the AI agent or the team.
+            -- One row per Gmail conversation (X-GM-THRID), so a reply lands in its thread.
+            CREATE TABLE IF NOT EXISTS email_threads (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                gm_thread TEXT UNIQUE,
+                subject TEXT,
+                customer_email TEXT NOT NULL,
+                customer_name TEXT,
+                status TEXT NOT NULL DEFAULT 'open',      -- 'open' | 'closed'
+                ai_state TEXT,                            -- 'replied' | 'asked' | 'closed' | null
+                ai_question TEXT,                         -- what it asked the team, while ai_state = 'asked'
+                ai_paused BOOLEAN NOT NULL DEFAULT false,
+                assigned_to TEXT,
+                last_inbound_at TIMESTAMPTZ,
+                last_message_at TIMESTAMPTZ,
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS email_threads_last_idx ON email_threads (last_message_at DESC);
+            CREATE TABLE IF NOT EXISTS email_messages (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                thread_id INTEGER NOT NULL REFERENCES email_threads(id) ON DELETE CASCADE,
+                message_id TEXT UNIQUE,                   -- the Message-ID header
+                direction TEXT NOT NULL,                  -- 'in' | 'out'
+                sender_type TEXT NOT NULL,                -- 'customer' | 'ai' | 'user'
+                sender_user TEXT,
+                from_email TEXT, from_name TEXT, to_email TEXT,
+                subject TEXT,
+                body TEXT,
+                attachments TEXT,                         -- JSON [{ url, name, mime, size }]
+                status TEXT,                              -- 'received' | 'sent' | 'failed'
+                error TEXT,
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS email_messages_thread_idx ON email_messages (thread_id, id);
+            -- Where the IMAP reader got to (UIDVALIDITY + last UID), so nothing is read twice.
+            CREATE TABLE IF NOT EXISTS email_sync_state (
+                mailbox TEXT PRIMARY KEY,
+                uid_validity TEXT,
+                last_uid BIGINT NOT NULL DEFAULT 0,
+                last_run_at TIMESTAMPTZ,
+                last_error TEXT
+            );
             CREATE UNIQUE INDEX IF NOT EXISTS support_tickets_ref_idx ON support_tickets (ref_no);
             CREATE INDEX IF NOT EXISTS support_tickets_order_idx ON support_tickets (order_number);
             CREATE INDEX IF NOT EXISTS support_tickets_raised_idx ON support_tickets (raised_on DESC);
@@ -2562,6 +2608,7 @@ app.listen(PORT, async () => {
     require('./services/nl-automations').start();
     // The Normless AI agent looks for chats waiting on the team every few minutes (when it's on).
     require('./services/nl-agent').start();
+    require('./services/email-agent').start();
     // WhatsApp updates to vendors, after their short hold.
     require('./services/vendor-wa').start();
     // Marketing broadcasts that were going when the server stopped carry on.

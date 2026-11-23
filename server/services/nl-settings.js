@@ -13,8 +13,8 @@ const DEFAULTS = {
     // The AI agent that answers the chats the bot hands to a person (nl-agent). Off until a
     // manager switches it on; it stops for the month when the budget (US dollars) is spent.
     agent: {
-        enabled: false, model: 'claude-opus-5-5', budget_usd: 50, usd_inr: 88,
-        quiet_minutes: 30, close_when_done: true,
+        enabled: false, model: 'claude-sonnet-5-5', budget_usd: 50, usd_inr: 88,
+        quiet_minutes: 30, close_when_done: true, idle_close_minutes: 15, email_enabled: false,
     },
     faqs: [
         { q: 'Is the COD advance refundable?', a: 'No — any advance on a partial COD order is non-refundable.' },

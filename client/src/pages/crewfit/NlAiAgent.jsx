@@ -136,8 +136,9 @@ function OverviewTab() {
             <div className="nla-form">
               <label>Model
                 <select className="input" value={draft.model} onChange={e => set({ model: e.target.value })}>
-                  <option value="claude-opus-5-5">Claude Opus 5.5 — best answers ($4 / $20 per million tokens)</option>
-                  <option value="claude-sonnet-5-5">Claude Sonnet 5.5 — cheaper ($2 / $10 per million tokens)</option>
+                  <option value="claude-sonnet-5-5">Claude Sonnet 5.5: recommended, half the price of Opus</option>
+                  <option value="claude-haiku-5-5">Claude Haiku 5.5: cheapest by far, simpler answers</option>
+                  <option value="claude-opus-5-5">Claude Opus 5.5: most careful, about twice Sonnet's cost</option>
                 </select>
               </label>
               <label>Monthly budget (US $)
@@ -152,9 +153,17 @@ function OverviewTab() {
                 <input className="input" type="number" min="0" step="5" value={draft.quiet_minutes} onChange={e => set({ quiet_minutes: e.target.value })} />
                 <small>So it never talks over someone who is in the chat.</small>
               </label>
+              <label>Close a chat after the customer goes quiet (minutes)
+                <input className="input" type="number" min="0" step="5" value={draft.idle_close_minutes ?? 15} onChange={e => set({ idle_close_minutes: e.target.value })} />
+                <small>After the agent’s reply, with no answer from the customer. No message is sent; the chat reopens when they write. 0 means never.</small>
+              </label>
               <label className="nla-check">
                 <input type="checkbox" checked={draft.close_when_done} onChange={e => set({ close_when_done: e.target.checked })} />
                 Close chats that need no reply (“ok”, “thanks”)
+              </label>
+              <label className="nla-check">
+                <input type="checkbox" checked={!!draft.email_enabled} onChange={e => set({ email_enabled: e.target.checked })} />
+                Answer emails to contact@normless.store too (see <Link to="/support/email">Support › Email</Link>)
               </label>
             </div>
           </section>
@@ -165,7 +174,7 @@ function OverviewTab() {
               <li>Promise a dispatch or delivery date, unless a lesson or your answer says it may.</li>
               <li>Write an amount it didn’t read from your data. A reply with an unknown ₹ figure becomes a question to you.</li>
               <li>Reply in a chat somebody paused it on, or one a person wrote in recently.</li>
-              <li>Pretend to be a person: asked, it says it is the team’s AI assistant.</li>
+              <li>Claim to be a person: if a customer sincerely asks, it hands the chat to you.</li>
             </ul>
           </section>
           {o.key_set && <KeyHelp />}

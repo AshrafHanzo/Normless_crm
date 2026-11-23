@@ -30,6 +30,7 @@ const FEATURES = {
     nl_agent: 'Normless AI agent',
     nl_bot: 'Normless bot',
     nl_try: 'Try it (testing)',
+    email_agent: 'Email agent (contact@)',
     cf_assistant: 'Crewfit assistant',
     cf_billing: 'Crewfit billing reader',
 };

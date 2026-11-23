@@ -27,7 +27,7 @@ const handover = require('./nl-handover');
 const usage = require('./ai-usage');
 const { readSettings, isOpen, clock } = require('./nl-settings');
 
-const MODEL = process.env.NL_BOT_MODEL || 'claude-opus-5-5';
+const MODEL = process.env.NL_BOT_MODEL || null;
 const MAX_TURNS = 6;          // tool rounds before it stops and hands over
 const HISTORY = 24;           // messages of context
 const SETTLE_MS = 2500;       // wait for a burst of messages to finish
@@ -269,13 +269,9 @@ async function think({ settings, context, turns, conversation, dry }) {
 
     for (let round = 0; round < MAX_TURNS; round++) {
         const response = await anthropic().beta.messages.create({
-            model: MODEL,
-            max_tokens: 16000,
-            // A short chat reply doesn't need deep thinking; low effort keeps answers quick.
-            output_config: { effort: 'low' },
-            // If a reply is declined by a safety check, the API answers with a fallback model.
-            betas: ['server-side-fallback-2026-07-01'],
-            fallbacks: 'default',
+            // The model chosen on the AI agent page (low effort, cached, with the safety fallback
+            // where the model has one), unless the server pins one.
+            ...require('./nl-agent').requestFor(MODEL || settings.agent?.model || 'claude-sonnet-5-5'),
             system: [
                 { type: 'text', text: STABLE, cache_control: { type: 'ephemeral' } },
                 { type: 'text', text: dynamic(settings, context) },

@@ -205,6 +205,33 @@ async function orderByNumber(conversation, orderNumber, { email = null, pincode 
     return { order: o ? shapeOrder(o, dispatch) : { order_number: number, state: 'Shipped', dispatch: { awb: dispatch.awb, courier: dispatch.courier, tracking_url: trackingUrl(dispatch) } } };
 }
 
+/**
+ * Orders a customer points to by another phone number or by email ("I ordered with my brother's
+ * number"). Giving the email or phone on an order is the same proof orderByNumber accepts, so the
+ * orders are shown — without the address, which the customer already knows.
+ */
+async function ordersByContact({ phone = null, email = null } = {}) {
+    const phone10 = last10(phone);
+    const mail = String(email || '').trim().toLowerCase();
+    if (phone10.length !== 10 && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail)) {
+        return { error: 'Give a 10-digit phone number or an email address.' };
+    }
+    const rows = (await db.query(
+        `SELECT ${ORDER_FIELDS}
+           FROM orders o LEFT JOIN customers c ON c.shopify_id = o.customer_shopify_id
+          WHERE ($1 <> '' AND ($1 = ANY(o.phones) OR RIGHT(REGEXP_REPLACE(COALESCE(c.phone, ''), '\\D', '', 'g'), 10) = $1
+                 OR o.order_number IN (SELECT p.order_number FROM packed_orders p
+                                        WHERE RIGHT(REGEXP_REPLACE(COALESCE(p.customer_phone, ''), '\\D', '', 'g'), 10) = $1)))
+             OR ($2 <> '' AND (LOWER(o.email) = $2 OR LOWER(c.email) = $2))
+          ORDER BY o.created_at DESC NULLS LAST LIMIT 8`, [phone10.length === 10 ? phone10 : '', mail])).rows;
+    if (phone10.length === 10) {
+        for (const o of await recentShopifyOrders(phone10)) if (!rows.some(x => x.order_number === o.order_number)) rows.unshift(o);
+    }
+    if (!rows.length) return { orders: [], message: `No orders found for ${phone10.length === 10 ? phone10 : mail}. Ask for the order number.` };
+    const dispatchOf = await dispatchesFor(rows.map(o => o.order_number));
+    return { orders: rows.map(o => shapeOrder(o, dispatchOf.get(o.order_number) || null)) };
+}
+
 /* ── The catalogue ─────────────────────────────────────────────────────────────────────────── */
 
 const STORE = 'https://normless.store';
@@ -241,4 +268,4 @@ async function productByHandle(handle) {
         || products.find(p => p.title.toLowerCase() === want) || null;
 }
 
-module.exports = { findCustomerId, recentShopifyOrders, customerFor, orderByNumber, searchProducts, productByHandle, shapeProduct, productUrl, paymentKind, last10, STORE };
+module.exports = { findCustomerId, recentShopifyOrders, customerFor, orderByNumber, ordersByContact, searchProducts, productByHandle, shapeProduct, productUrl, paymentKind, last10, STORE };

@@ -68,6 +68,8 @@ router.put('/settings', manage, async (req, res) => {
             usd_inr: Math.round(num(v.usd_inr, 1, 1000, 88) * 100) / 100,
             quiet_minutes: Math.round(num(v.quiet_minutes, 0, 1440, 30)),
             close_when_done: v.close_when_done !== false,
+            idle_close_minutes: Math.round(num(v.idle_close_minutes, 0, 1440, 15)),
+            email_enabled: !!v.email_enabled,
         };
         if (agentSettings.enabled && !process.env.ANTHROPIC_API_KEY) {
             return res.status(400).json({ error: 'Add the Anthropic API key to the server first (ANTHROPIC_API_KEY), then switch the agent on.' });

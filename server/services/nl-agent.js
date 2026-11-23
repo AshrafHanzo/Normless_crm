@@ -29,16 +29,32 @@ const shop = require('./nl-shop');
 const bot = require('./nl-bot');
 const handover = require('./nl-handover');
 const usage = require('./ai-usage');
+const files = require('./support-files');
 const { readSettings, isOpen, clock } = require('./nl-settings');
 
 const MAX_ROUNDS = 8;          // tool rounds before it gives up and asks the team
-const HISTORY = 30;            // messages of context
+const HISTORY = 20;            // messages of context
 const SETTLE_MS = 20_000;      // let a burst of messages finish (and the bot hand over) first
 const SWEEP_MS = 5 * 60_000;   // look for waiting chats this often
 const SWEEP_MAX = 15;          // chats per sweep, oldest first
 // A chat the agent hasn't answered this long after the customer wrote shows in "Needs a person".
 const GRACE_MINUTES = 60;
-const MODELS = ['claude-opus-5-5', 'claude-sonnet-5-5'];
+// Cheapest sensible first: the first is the default. Sonnet answers these chats well at half
+// Opus's price; Haiku is about a fortieth of it.
+const MODELS = ['claude-sonnet-5-5', 'claude-haiku-5-5', 'claude-opus-5-5'];
+// Minutes of silence after the agent's last reply before it closes the chat (Settings).
+const IDLE_CLOSE_DEFAULT = 15;
+const IDLE_MS = 60_000;
+
+/**
+ * What every agent request carries besides the prompt. Haiku has no server-side fallback (a
+ * `fallbacks` list is a 400 there). The top-level cache_control caches the whole conversation as it
+ * stands, so each tool round after the first reads it back at a twentieth of the price.
+ */
+function requestFor(model) {
+    const fallback = /haiku/.test(model) ? {} : { betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' };
+    return { model, max_tokens: 8000, output_config: { effort: 'low' }, cache_control: { type: 'ephemeral' }, ...fallback };
+}
 const REFUND_POLICY = 'https://normless.store/policies/refund-policy';
 // Support reasons the agent may raise a ticket for, and the nature each one is filed under.
 const TICKET_REASONS = {
@@ -158,10 +174,14 @@ address or size changes, complaints. You answer them the way a careful, kind per
 How you work:
 - Read the whole chat first, including what the team and the bot already told this customer. Never
   repeat a reply they already got word for word; if they ask again, acknowledge that and add what's new.
-- The customer's orders are in "This chat" below. Before saying where a parcel is, call track_shipment
-  for that order: it gives Delhivery's live status, and finds a shipment re-made under the order
-  number with an "A" on the end (e.g. 12598A) when the first one was cancelled. Give the new tracking
-  ID and link when there is one.
+- The customer's orders are in "This chat" below, found by their WhatsApp number. If none are there,
+  or they ask about another order, and they give a different phone number or an email address, call
+  find_orders with it. Before saying where a parcel is, use the live tracking in "This chat" or call
+  track_shipment for that order: it gives Delhivery's live status, and finds a shipment re-made under
+  the order number with an "A" on the end (e.g. 12598A) when the first one was cancelled. Give the
+  new tracking ID and link when there is one.
+- Photos and videos the customer sent in this chat are attached to any ticket you raise, and ones
+  sent later are added to their open ticket, so you don't need to ask for them again.
 - Follow the team's lessons and announcements below. They override anything else here. If one says
   not to promise something, don't.
 - You cannot refund, cancel, discount, change an order, or promise a delivery or dispatch date unless
@@ -194,6 +214,17 @@ The refund policy is at ${REFUND_POLICY}.`;
 
 const TOOLS = [
     ...bot.TOOLS.filter(t => ['search_products', 'send_product', 'send_size_chart', 'lookup_order', 'get_policy'].includes(t.name)),
+    {
+        name: 'find_orders',
+        description: "Find a customer's orders by the phone number or email address they placed them with, when it isn't this WhatsApp number (no orders in \"This chat\", or they mention another one). Returns each order with items, payment, status and tracking.",
+        input_schema: {
+            type: 'object',
+            properties: {
+                phone: { type: 'string', description: '10-digit Indian mobile number the order was placed with' },
+                email: { type: 'string', description: 'Email address the order was placed with' },
+            },
+        },
+    },
     {
         name: 'track_shipment',
         description: 'Live Delhivery status for one order: every shipment made for it, including one re-made as the order number with "A" on the end after the first was cancelled. Returns AWB, status, last scan and tracking link for each.',
@@ -265,6 +296,13 @@ async function contextFor(c, settings) {
         items: (o.items || []).map(i => `${i.title}${i.variant ? ` (${i.variant})` : ''} x${i.quantity || 1}`),
         awb: o.dispatch?.awb || null, tracking: o.dispatch?.tracking_url || null,
     }));
+    // Live tracking for the latest orders still on their way, fetched before the model starts so it
+    // doesn't spend a round (and a resend of the whole chat) asking for it.
+    const recent = orders.filter(o => o.state !== 'Cancelled' && Date.now() - new Date(o.placed || 0).getTime() < 45 * 86400000).slice(0, 2);
+    const live = [];
+    for (const o of recent) {
+        try { live.push(await trackShipment(o.order)); } catch { /* the tool is still there */ }
+    }
     const tickets = (data.tickets || []).slice(0, 6).map(t => ({
         ref: `CS-${String(t.ref_no).padStart(4, '0')}`, order: t.order_number, reason: t.reason, raised: t.raised_on,
         status: t.status, progress: t.progress, done_by_team: t.action || null,
@@ -273,6 +311,7 @@ async function contextFor(c, settings) {
         `Now: ${istNow()} (India). Team hours ${clock(settings.hours.start)} to ${clock(settings.hours.end)}; the team is ${isOpen(settings.hours) ? 'online' : 'offline'} now.`,
         `Customer: ${firstName(c) || 'name unknown'}${c.phone ? `, WhatsApp +${c.phone}` : ''}.${assignee ? ` The chat is assigned to ${assignee} on the team.` : ''}`,
         `Their orders: ${orders.length ? JSON.stringify(orders) : 'none found by this phone number; ask for the order number if they mention one.'}`,
+        live.length ? `Live Delhivery tracking, checked just now (no need to call track_shipment again for these): ${JSON.stringify(live)}` : null,
         `Their support tickets: ${tickets.length ? JSON.stringify(tickets) : 'none.'}`,
         notes.length ? `Team notes on this chat (newest first):\n${notes.map(n => `- ${n.author}: ${String(n.body).slice(0, 500)}`).join('\n')}` : null,
         answers.length ? `The team already answered your questions on this chat (use these):\n${answers.map(a => `- Q: ${a.question}\n  A (${String(a.answered_by || '').split('@')[0]}): ${a.answer}`).join('\n')}` : null,
@@ -320,6 +359,21 @@ async function trackShipment(orderNumber) {
     };
 }
 
+/** A new support ticket with the next CS- number. Returns its id. */
+async function createTicket(f) {
+    return db.transaction(async (tx) => {
+        await tx.query(`SELECT pg_advisory_xact_lock(hashtext('support_ticket_ref'))`);
+        const next = (await tx.query('SELECT COALESCE(MAX(ref_no), 0) + 1 AS n FROM support_tickets')).rows[0].n;
+        return (await tx.query(
+            `INSERT INTO support_tickets (ref_no, created_by, raised_on, source, order_number, customer_name, customer_phone, customer_email,
+                    nature, reason, request, status, progress, wa_conversation_id, email_thread_id)
+             VALUES ($1,$2,(now() AT TIME ZONE 'Asia/Kolkata')::date,$3,$4,$5,$6,$7,$8,$9,$10,'Open','Pending',$11,$12)
+             RETURNING id`,
+            [next, f.actor, f.source, f.order_number, f.customer_name || null, f.customer_phone || null, f.customer_email || null,
+                TICKET_REASONS[f.reason], f.reason, String(f.request).slice(0, 2000), f.wa_conversation_id || null, f.email_thread_id || null])).rows[0].id;
+    });
+}
+
 async function raiseTicket(c, input, actor) {
     const reason = Object.keys(TICKET_REASONS).includes(input.reason) ? input.reason : null;
     const digits = String(input.order_number || '').match(/\d{3,}/)?.[0];
@@ -331,21 +385,16 @@ async function raiseTicket(c, input, actor) {
         `SELECT ref_no FROM support_tickets WHERE order_number = $1 AND reason = $2 AND status = 'Open' LIMIT 1`, [num, reason])).rows[0];
     if (dup) return { already_open: `CS-${String(dup.ref_no).padStart(4, '0')}`, note: 'A ticket for this is already open; the team is on it.' };
     const order = (await db.query(`SELECT email FROM orders WHERE order_number = $1`, [num])).rows[0];
-    const id = await db.transaction(async (tx) => {
-        await tx.query(`SELECT pg_advisory_xact_lock(hashtext('support_ticket_ref'))`);
-        const next = (await tx.query('SELECT COALESCE(MAX(ref_no), 0) + 1 AS n FROM support_tickets')).rows[0].n;
-        return (await tx.query(
-            `INSERT INTO support_tickets (ref_no, created_by, raised_on, source, order_number, customer_name, customer_phone, customer_email,
-                    nature, reason, request, status, progress, wa_conversation_id)
-             VALUES ($1,$2,(now() AT TIME ZONE 'Asia/Kolkata')::date,'WhatsApp',$3,$4,$5,$6,$7,$8,$9,'Open','Pending',$10)
-             RETURNING id`,
-            [next, actor, num, c.customer_name || String(c.profile_name || '').replace(/^~/, '') || null, c.phone, order?.email || null,
-                TICKET_REASONS[reason], reason, String(input.request).slice(0, 2000), c.id])).rows[0].id;
+    const id = await createTicket({
+        actor, source: 'WhatsApp', order_number: num, reason, request: input.request,
+        customer_name: c.customer_name || String(c.profile_name || '').replace(/^~/, '') || null,
+        customer_phone: c.phone, customer_email: order?.email || null, wa_conversation_id: c.id,
     });
     const row = (await db.query(
         `SELECT id, ref_no, order_number, customer_name, customer_phone, reason, nature, request, wa_conversation_id FROM support_tickets WHERE id = $1`, [id])).rows[0];
     const ref = `CS-${String(row.ref_no).padStart(4, '0')}`;
-    await log(c.id, 'ticket', `AI agent raised ${ref} (${reason}) for ${num}`);
+    const photos = await files.addChatPhotos(id, c.id);
+    await log(c.id, 'ticket', `AI agent raised ${ref} (${reason}) for ${num}${photos ? ` with ${photos} photo${photos > 1 ? 's' : ''} from the chat` : ''}`);
     let told = null;
     try { told = await require('./nl-automations').ticketRaised(row); } catch (err) { told = { status: 'failed', error: err.message }; }
     return { raised: ref, customer_told: told?.status === 'sent' || told?.status === 'queued' ? 'yes, automatically' : 'no — mention the ticket number in your reply' };
@@ -370,11 +419,13 @@ async function say(c, text) {
     return wamid;
 }
 
-async function closeChat(c, reason) {
+async function closeChat(c, reason, { quiet = false } = {}) {
+    // Gone quiet mid-conversation: the chat stays the agent's, so when they write back (with the
+    // address it asked for, say) it carries on rather than the bot starting over.
     await db.query(
-        `UPDATE wa_conversations SET status = 'closed', mode = 'ai', assigned_to = NULL, nl_handoff_at = NULL,
-                updated_at = CURRENT_TIMESTAMP WHERE id = $1`, [c.id]);
-    if (wa.windowOpen(c.last_inbound_at)) {
+        `UPDATE wa_conversations SET status = 'closed', mode = CASE WHEN $2 THEN mode ELSE 'ai' END, assigned_to = NULL,
+                nl_handoff_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $1`, [c.id, quiet]);
+    if (!quiet && wa.windowOpen(c.last_inbound_at)) {
         const note = 'Our team has closed this chat. If you need anything else, just send us a message here and we’ll be happy to help.';
         const wamid = await wa.sendText(c.phone, note);
         await handover.record(c.id, wamid, note, 'auto');
@@ -429,11 +480,7 @@ async function think({ c, lineId, settings, task = null, turns = null, dry = fal
 
     for (let round = 0; round < MAX_ROUNDS; round++) {
         const response = await anthropic().beta.messages.create({
-            model: agent.model,
-            max_tokens: 16000,
-            output_config: { effort: 'medium' },
-            betas: ['server-side-fallback-2026-07-01'],
-            fallbacks: 'default',
+            ...requestFor(agent.model),
             system: [
                 { type: 'text', text: STABLE, cache_control: { type: 'ephemeral' } },
                 { type: 'text', text: book.text, cache_control: { type: 'ephemeral' } },
@@ -467,6 +514,7 @@ async function think({ c, lineId, settings, task = null, turns = null, dry = fal
             let result;
             try {
                 if (call.name === 'track_shipment') result = await trackShipment(call.input?.order_number);
+                else if (call.name === 'find_orders') result = dry ? { orders: [], message: 'Test: no real orders.' } : await shop.ordersByContact(call.input || {});
                 else if (call.name === 'raise_ticket') {
                     result = dry ? { raised: 'CS-TEST', customer_told: 'yes, automatically (test: nothing raised)' }
                         : await raiseTicket(c, call.input || {}, 'ai-agent');
@@ -620,11 +668,63 @@ async function seedPlaybook() {
     }
 }
 
+/**
+ * Chats the agent answered where the customer has gone quiet: closed after the minutes set on the
+ * AI agent page, without a message (they can write again anytime, and the chat reopens). Not a
+ * chat a person wrote in since, one with a question to the team, or one somebody paused it on.
+ */
+async function idleClose() {
+    try {
+        const line = lines.get('normless');
+        if (!line || !(await status(line.id)).on) return;
+        const { agent } = await settingsFor(line.id);
+        const minutes = Math.round(Number(agent.idle_close_minutes) || 0);
+        if (minutes <= 0) return;
+        const r = await db.query(
+            `SELECT c.id, c.last_inbound_at FROM wa_conversations c
+              WHERE c.line_id = $1 AND c.status = 'open' AND NOT c.ai_paused
+                AND ${LAST('direction')} = 'out'
+                AND (SELECT MAX(m.created_at) FROM wa_messages m WHERE m.conversation_id = c.id) < now() - make_interval(mins => $2)
+                AND EXISTS (SELECT 1 FROM wa_messages a WHERE a.conversation_id = c.id AND a.sender_user = 'ai-agent'
+                             AND a.created_at >= COALESCE(c.last_inbound_at, '-infinity'))
+                AND NOT EXISTS (SELECT 1 FROM wa_messages p WHERE p.conversation_id = c.id AND p.direction = 'out'
+                             AND p.sender_type IN ('user','phone') AND p.created_at >= COALESCE(c.last_inbound_at, '-infinity'))
+                AND NOT EXISTS (SELECT 1 FROM nl_ai_questions q WHERE q.conversation_id = c.id AND q.status = 'open')
+              LIMIT 50`, [line.id, minutes]);
+        for (const c of r.rows) {
+            if (running.has(c.id)) continue;
+            await lines.run(line, () => closeChat(c, `no reply from the customer for ${minutes} minutes`, { quiet: true }))
+                .catch(err => console.error('normless agent idle close:', err.message));
+        }
+    } catch (err) {
+        console.error('normless agent idle close failed:', err.message);
+    }
+}
+
+/**
+ * A photo arrived on a chat: put it on the chat's open support tickets raised in the last two
+ * weeks (the proof a damaged or wrong item needs usually comes after the ticket).
+ */
+async function mediaArrived(conversationId) {
+    try {
+        const t = (await db.query(
+            `SELECT id FROM support_tickets
+              WHERE wa_conversation_id = $1 AND status = 'Open' AND created_at > now() - INTERVAL '14 days'`, [conversationId])).rows;
+        for (const x of t) {
+            const n = await files.addChatPhotos(x.id, conversationId);
+            if (n) await log(conversationId, 'ticket', `Added ${n} photo${n > 1 ? 's' : ''} from the chat to the support ticket`);
+        }
+    } catch (err) {
+        console.error('normless ticket photos:', err.message);
+    }
+}
+
 let sweeping = null;
 function start() {
     if (sweeping) return;
     seedPlaybook();
     sweeping = setInterval(sweep, SWEEP_MS);
+    setInterval(idleClose, IDLE_MS);
     setTimeout(sweep, 60_000);
 }
 
@@ -716,4 +816,4 @@ async function tryIt(turns) {
     });
 }
 
-module.exports = { run, schedule, sweep, start, answer, tryIt, status, trackShipment, inboxSql, inboxStates, ticketUpdated, ticketNews, MODELS, TICKET_REASONS };
+module.exports = { run, schedule, sweep, start, answer, tryIt, status, trackShipment, inboxSql, inboxStates, ticketUpdated, ticketNews, idleClose, mediaArrived, requestFor, createTicket, MODELS, TICKET_REASONS, STABLE, playbook };

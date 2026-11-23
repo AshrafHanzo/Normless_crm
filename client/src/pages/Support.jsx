@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { useApi, useAuth } from '../App'
 import { useToast } from '../components/Toast'
 import Icon from '../components/Icon'
@@ -52,8 +52,10 @@ export default function Support() {
   const [target, setTarget] = useState(null)      // the ticket in the drawer, or a blank one
   const t = useServerTable({ sort: 'raised_on', dir: 'desc' })
 
+  const [emailNeeds, setEmailNeeds] = useState(0)
   useEffect(() => {
     apiFetch('/api/support/options').then(r => { if (r && !r.error) setOptions(r) })
+    apiFetch('/api/support-email/count').then(r => { if (r && !r.error) setEmailNeeds(r.needs || 0) })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -121,6 +123,7 @@ export default function Support() {
           <p style={{ color: 'var(--text-muted)' }}>Returns, replacements, reships and refunds arranged by hand</p>
         </div>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          <Link className="btn btn-secondary" to="/support/email"><Icon name="mail" size={15} /> Email{emailNeeds > 0 ? ` (${emailNeeds})` : ''}</Link>
           <DateRangeFilter startDate={from} endDate={to}
             onApply={(s, e) => { setFrom(s); setTo(e); t.resetPage() }}
             onClear={() => { setFrom(''); setTo(''); t.resetPage() }} />
