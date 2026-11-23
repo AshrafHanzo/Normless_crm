@@ -21,6 +21,7 @@ const router = express.Router();
 const GUIDES = {
     'crewfit-sales': { title: 'Crewfit sales playbook', permission: 'can_view_whatsapp' },
     'marketing-scaling': { title: 'Marketing scaling system', permission: 'can_view_marketing' },
+    'shipping-manual': { title: 'Shipping user manual', permission: 'can_view_shipping' },
 };
 const MAX_BYTES = 3 * 1024 * 1024;
 

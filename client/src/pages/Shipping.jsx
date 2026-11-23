@@ -13,6 +13,7 @@ import ShippingSettings from './shipping/ShippingSettings'
 import ShipDrawer from './shipping/ShipDrawer'
 import ShipmentDrawer from './shipping/ShipmentDrawer'
 import ManualShipDrawer from './shipping/ManualShipDrawer'
+import TeamGuide from '../components/TeamGuide'
 import { ago } from './shipping/common'
 
 const TABS = [
@@ -50,6 +51,7 @@ export default function Shipping() {
   const [openId, setOpenId] = useState(null)            // shipment in the detail drawer
   const [syncing, setSyncing] = useState(false)
   const [manual, setManual] = useState(false)
+  const [guideOpen, setGuideOpen] = useState(false)
   const [rev, setRev] = useState(0)                     // bumps when anything changed
 
   const loadShared = useCallback(async () => {
@@ -126,16 +128,21 @@ export default function Shipping() {
             {status?.last_sync && <> · tracking updated {ago(status.last_sync.started_at)}</>}
           </p>
         </div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button className="btn btn-secondary" onClick={() => setGuideOpen(true)}>
+            <Icon name="note" size={15} /> User manual
+          </button>
         {canManage && (
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <>
             <button className="btn btn-secondary" onClick={syncNow} disabled={syncing || status?.configured === false}>
               <Icon name="refresh" size={15} /> {syncing ? 'Updating…' : 'Update tracking'}
             </button>
             <button className="btn btn-primary" onClick={() => setManual(true)} disabled={status?.configured === false}>
               <Icon name="plus" size={15} /> New shipment
             </button>
-          </div>
+          </>
         )}
+        </div>
       </div>
 
       <form className="ship-find" onSubmit={runFind} role="search">
@@ -195,6 +202,7 @@ export default function Shipping() {
         <ShipDrawer orders={shipOrders} settings={settings} editFirst={!!shipOpts.editFirst} onClose={() => setShipOrders(null)}
           onDone={() => { changed() }} />
       )}
+      {guideOpen && <TeamGuide guideKey="shipping-manual" onClose={() => setGuideOpen(false)} />}
       {manual && <ManualShipDrawer onClose={() => setManual(false)} onDone={changed} />}
       {openId && (
         <ShipmentDrawer id={openId} canManage={canManage} settings={settings} onClose={() => setOpenId(null)}
