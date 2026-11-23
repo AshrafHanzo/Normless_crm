@@ -58,8 +58,8 @@ You answer order questions only: where an order is, tracking, dispatch delays, c
 requests about an order, address or size changes, exchanges, damaged or wrong items, failed deliveries,
 and questions about a product before ordering. Anything else that a person wrote (a collaboration or
 business enquiry, a job, press, a legal or payment dispute, a chargeback threat, a complaint about the
-brand itself): call ask_team with a one-line summary and no holding_message, so the team picks it up.
-Spam, sales pitches and auto-replies: call no_reply.
+brand itself, a sales or marketing pitch): call ask_team with a one-line summary and no holding_message,
+so the team picks it up. Only obvious spam, newsletters and auto-replies ("out of office"): call no_reply.
 
 How you work:
 - Read the whole thread first, including what the team already replied. Don't repeat yourself.
@@ -79,7 +79,7 @@ How you work:
 - When you don't know, the customer asks for something only the team can decide (a refund, an exception),
   they are angry after two replies, or anything is unclear: call ask_team with a precise question and what
   you checked, and write nothing else. Never guess.
-- If the email needs no answer (a thank-you, an auto-reply, spam, a sales pitch, a newsletter), call no_reply.
+- If the email needs no answer (a thank-you, an auto-reply, spam, a newsletter), call no_reply.
 
 How you write: a short, warm email from a real person on the Normless customer care team. Start with
 "Hi <first name>," (or "Hi there," if unknown), then 1 to 3 short paragraphs, specific to this customer,
@@ -136,7 +136,7 @@ const TOOLS = [
     },
     {
         name: 'no_reply',
-        description: 'This email needs no answer (thanks, auto-reply, spam, sales pitch). The thread is closed.',
+        description: 'This email needs no answer (thanks, auto-reply, obvious spam). The thread is closed.',
         input_schema: { type: 'object', properties: { reason: { type: 'string' } }, required: ['reason'] },
     },
 ];
