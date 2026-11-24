@@ -54,6 +54,23 @@ router.post('/customer-change', async (req, res) => {
     } catch (err) { fail(res, err, 'change the delivery details'); }
 });
 
+/**
+ * POST /hold { order_numbers, reason } and /release { order_numbers } — the team holds orders a
+ * customer or the AI agent asked to stop (from a support ticket), and releases them. Shipping
+ * managers and support editors.
+ */
+const holder = async (req, res, next) => ((isAdmin(req) || await hasPermission(req, 'can_manage_shipping') || await hasPermission(req, 'can_edit_support'))
+    ? next() : res.status(403).json({ error: 'You can\'t hold orders' }));
+const orderList = (v) => (Array.isArray(v) ? v : [v]).map(x => String(x || '').trim()).filter(Boolean).map(x => (x.startsWith('#') ? x : `#${x}`));
+router.post('/hold', holder, async (req, res) => {
+    try { res.json(await shipping.holdOrders(orderList(req.body?.order_numbers), req.body?.reason, me(req))); }
+    catch (err) { fail(res, err, 'hold orders'); }
+});
+router.post('/release', holder, async (req, res) => {
+    try { res.json(await shipping.releaseOrders(orderList(req.body?.order_numbers))); }
+    catch (err) { fail(res, err, 'release orders'); }
+});
+
 router.use(view);
 
 // The orders that still need an AWB: unfulfilled and not cancelled in Shopify, however old, with
@@ -90,14 +107,16 @@ const isDay = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v || ''));
 /** Product, colour and size: an order line has to match all that are chosen. */
 function itemFilter(q, vals, fallbackDesc = null) {
     const conds = [];
-    if (q.product) { vals.push(String(q.product)); conds.push(`li->>'title' = $${vals.length}`); }
+    // Products: one or several, separated by "|"; a line matching any of them counts.
+    const products = String(q.product || '').split('|').map(x => x.trim()).filter(Boolean);
+    if (products.length) { vals.push(products); conds.push(`li->>'title' = ANY($${vals.length})`); }
     if (q.color) { vals.push(String(q.color).toLowerCase()); conds.push(`LOWER(${COLOR_OF}) = $${vals.length}`); }
     // "variant_size", not "size": size is also the old page-size parameter.
     if (q.variant_size) { vals.push(String(q.variant_size).toLowerCase()); conds.push(`LOWER(${SIZE_OF}) = $${vals.length}`); }
     if (!conds.length) return null;
     const inOrder = `EXISTS (SELECT 1 FROM ${LINES} li WHERE ${conds.join(' AND ')})`;
     // A manual shipment has no order behind it; its product text is all there is to match.
-    if (fallbackDesc && q.product) { vals.push(`%${q.product}%`); return `(${inOrder} OR (o.id IS NULL AND ${fallbackDesc} ILIKE $${vals.length}))`; }
+    if (fallbackDesc && products.length) { vals.push(products.map(p => `%${p}%`)); return `(${inOrder} OR (o.id IS NULL AND ${fallbackDesc} ILIKE ANY($${vals.length})))`; }
     return inOrder;
 }
 function dateRange(col, from, to, vals, where) {
@@ -290,6 +309,7 @@ router.get('/pending', async (req, res) => {
         vals.push(t.limit, t.offset);
         const rows = (await db.query(
             `SELECT o.order_number, o.shopify_id, o.total_price, o.financial_status, o.created_at, o.line_items_json, COALESCE(o.on_hold, false) AS on_hold,
+                    o.held_at, o.held_by, o.hold_reason, COALESCE(o.shopify_hold, false) AS shopify_hold,
                     COALESCE(NULLIF(p.customer_name, ''), TRIM(CONCAT(c.first_name, ' ', c.last_name))) AS customer_name,
                     COALESCE(ov.city, p.ship_city) AS ship_city, COALESCE(ov.pincode, p.ship_pincode) AS ship_pincode, p.packed_at, p.packed_by,
                     ov.updated_at AS edited_at, ov.updated_by AS edited_by,
@@ -302,6 +322,7 @@ router.get('/pending', async (req, res) => {
                 return {
                     order_number: r.order_number, created_at: r.created_at, total_price: r.total_price,
                     financial_status: r.financial_status, on_hold: r.on_hold,
+                    held_at: r.held_at, held_by: r.held_by, hold_reason: r.hold_reason, shopify_hold: r.shopify_hold,
                     cod: String(r.financial_status || '').toLowerCase() === 'pending',
                     customer_name: r.customer_name || '', city: r.ship_city || '', pincode: r.ship_pincode || '',
                     packed_at: r.packed_at, packed_by: r.packed_by, cancelled_awb: r.cancelled_awb,
@@ -319,7 +340,7 @@ router.get('/pending.csv', async (req, res) => {
     try {
         const { vals, where } = pendingFilter(req.query);
         const rows = (await db.query(
-            `SELECT o.order_number, o.created_at, o.total_price, o.financial_status, o.line_items_json, COALESCE(o.on_hold, false) AS on_hold,
+            `SELECT o.order_number, o.created_at, o.total_price, o.financial_status, o.line_items_json, COALESCE(o.on_hold, false) AS on_hold, o.held_by, o.hold_reason,
                     COALESCE(NULLIF(p.customer_name, ''), TRIM(CONCAT(c.first_name, ' ', c.last_name))) AS customer_name, c.phone,
                     p.ship_city, p.ship_pincode, p.packed_at
              ${PENDING_FROM(where)} ORDER BY o.created_at DESC LIMIT 20000`, vals)).rows;
@@ -327,7 +348,7 @@ router.get('/pending.csv', async (req, res) => {
             order: r.order_number, date: ist(r.created_at), customer: r.customer_name, phone: r.phone || '',
             city: r.ship_city || '', pincode: r.ship_pincode || '', total: r.total_price,
             payment: String(r.financial_status || '').toLowerCase() === 'pending' ? 'COD' : 'Prepaid',
-            items: itemsOf(r.line_items_json).join('; '), packed: r.packed_at ? ist(r.packed_at) : '', hold: r.on_hold ? 'On hold' : '',
+            items: itemsOf(r.line_items_json).join('; '), packed: r.packed_at ? ist(r.packed_at) : '', hold: !r.on_hold ? '' : r.held_by || r.hold_reason ? `On hold: ${r.hold_reason || ''}${r.held_by ? ` (${r.held_by})` : ''}` : 'On hold in Shopify',
         })), [{ key: 'order', label: 'Order' }, { key: 'date', label: 'Ordered' }, { key: 'customer', label: 'Customer' },
             { key: 'phone', label: 'Phone' }, { key: 'city', label: 'City' }, { key: 'pincode', label: 'Pincode' },
             { key: 'total', label: 'Total' }, { key: 'payment', label: 'Payment' }, { key: 'items', label: 'Items' },

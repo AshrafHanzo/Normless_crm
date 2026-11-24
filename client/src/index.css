@@ -1058,6 +1058,15 @@ select { cursor: pointer; appearance: none;
 .ss-option-hint { font-size: 11.5px; color: var(--text-muted); flex-shrink: 0; }
 .ss-empty { padding: 10px; font-size: 12px; color: var(--text-muted); text-align: center; }
 .ss-disabled .ss-input { opacity: 0.55; }
+.mss-option { align-items: center; }
+.mss-option input[type="checkbox"] { width: 15px; height: 15px; margin: 0; flex: none; pointer-events: none; }
+.mss-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; align-items: center; }
+.mss-chip { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; padding: 3px 4px 3px 10px; border-radius: 999px; background: var(--surface-hover); border: 1px solid var(--border); font-size: 12.5px; color: var(--text-primary); }
+.mss-chip > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.mss-chip button { width: 20px; height: 20px; border: none; border-radius: 50%; background: transparent; color: var(--text-muted); font-size: 14px; line-height: 1; cursor: pointer; flex: none; }
+.mss-chip button:hover { background: var(--border); color: var(--text-primary); }
+.mss-clear { border: none; background: none; color: var(--text-muted); font-size: 12px; cursor: pointer; text-decoration: underline; padding: 2px 4px; }
+.ship-hold-note { font-size: 12px; color: var(--text-muted); margin-top: 4px; max-width: 260px; }
 
 /* A qualifier under a KPI, for a number the headline figure deliberately leaves out. */
 .kpi-note { margin-top: 5px; font-size: 11px; color: var(--warning); }
@@ -4543,7 +4552,7 @@ p.wdb-sub { margin: 0; }
 .ship-filter-on { border-color: var(--primary); color: var(--text-primary); }
 .ship-filter-panel { display: flex; flex-wrap: wrap; gap: 12px 16px; align-items: flex-start; padding: 14px 16px; margin-bottom: 14px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); }
 .ship-filter-panel .input-group { margin: 0; flex: 1 1 180px; min-width: 0; }
-.ship-filter-panel .input-group:has(.ship-range) { flex: 2 1 300px; }
+.ship-filter-panel .input-group:has(.ship-range), .ship-filter-panel .ship-filter-wide { flex: 2 1 300px; }
 .ship-range { display: flex; align-items: center; gap: 8px; }
 .ship-range input { flex: 1 1 0; min-width: 0; }
 .ship-range span { color: var(--text-muted); font-size: 12.5px; }

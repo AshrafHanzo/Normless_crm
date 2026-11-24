@@ -4,6 +4,7 @@ import { useToast } from '../../components/Toast'
 import Icon from '../../components/Icon'
 import Pagination from '../../components/Pagination'
 import useServerTable from '../../hooks/useServerTable'
+import MultiSearchSelect from '../../components/MultiSearchSelect'
 import { BUCKETS, BUCKET_BADGE, BUCKET_LABEL, day, dayTime, money, statusText, daysSince, plural, openLabels } from './common'
 
 const countOf = (counts, key) => (key === 'pending' ? counts.pending_awb : counts[key])
@@ -17,7 +18,7 @@ const NO_FILTERS = { manifested_from: '', manifested_to: '', ordered_from: '', o
  * need a shipment (Pending AWB, and the ones on hold that can't ship yet). Filters, paging and the
  * CSV download all go through the server, so the download is exactly the filtered list.
  */
-export default function Shipments({ counts, bucket, setBucket, canManage, ship, open, go, rev, searchSeed, hideNav }) {
+export default function Shipments({ counts, bucket, setBucket, canManage, ship, open, go, rev, changed, searchSeed, hideNav }) {
   const apiFetch = useApi()
   const toast = useToast()
   const t = useServerTable({ limit: 50 })
@@ -36,6 +37,8 @@ export default function Shipments({ counts, bucket, setBucket, canManage, ship, 
   const isHold = bucket === 'on_hold'
   const keyOf = (r) => (isOrders ? r.order_number : r.id)
   const activeFilters = Object.entries(filters).filter(([k, v]) => v && !(isOrders && k.startsWith('manifested'))).length
+  // Several products travel as one "|"-separated value; a shipment with any of them matches.
+  const products = filters.product ? filters.product.split('|') : []
 
   useEffect(() => { apiFetch('/api/shipping/filters').then(r => { if (r && !r.error) setFacets(r) }) }, []) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { const x = setTimeout(() => setTerm(search.trim()), 350); return () => clearTimeout(x) }, [search])
@@ -76,6 +79,41 @@ export default function Shipments({ counts, bucket, setBucket, canManage, ship, 
     a.href = href; a.download = r.filename || `${bucket}.csv`
     document.body.appendChild(a); a.click(); a.remove()
     URL.revokeObjectURL(href)
+  }
+
+  // The team holds orders a customer or the AI agent asked to stop (from a support ticket).
+  const hold = async (list) => {
+    const reason = await toast.prompt({
+      title: list.length === 1 ? `Put ${list[0].order_number} on hold?` : `Put ${list.length} orders on hold?`,
+      message: 'They leave Pending AWB, can\'t get an AWB, and the packing bench refuses them until someone releases them.',
+      input: { label: 'Why', placeholder: 'e.g. CS-0123: customer is changing the address' },
+      confirmLabel: 'Put on hold',
+    })
+    if (reason == null) return
+    setBusy('hold')
+    const r = await apiFetch('/api/shipping/hold', { method: 'POST', body: JSON.stringify({ order_numbers: list.map(o => o.order_number), reason }) })
+    setBusy('')
+    if (!r || r.error) return toast.error(r?.error || 'Could not hold them')
+    if (r.held.length) toast.success(`${plural(r.held.length, 'order')} on hold`)
+    if (r.errors.length) toast.error(r.errors.map(e => `${e.order_number} ${e.error}`).join("; "), { title: `${plural(r.errors.length, 'order')} not held` })
+    setPicked({}); changed?.()
+  }
+  const release = async (list) => {
+    const mine = list.filter(o => o.held_at)
+    if (!mine.length) return toast.error('These are on hold in Shopify; they come back by themselves once Shopify releases them.')
+    if (!await toast.confirm({
+      title: mine.length === 1 ? `Release ${mine[0].order_number}?` : `Release ${mine.length} orders?`,
+      message: 'They go back to Pending AWB and can be packed and shipped.',
+      details: mine.length === 1 ? [{ label: 'Held because', value: mine[0].hold_reason }, { label: 'Held by', value: mine[0].held_by }] : undefined,
+      confirmLabel: 'Release',
+    })) return
+    setBusy('hold')
+    const r = await apiFetch('/api/shipping/release', { method: 'POST', body: JSON.stringify({ order_numbers: mine.map(o => o.order_number) }) })
+    setBusy('')
+    if (!r || r.error) return toast.error(r?.error || 'Could not release them')
+    if (r.released.length) toast.success(`${plural(r.released.length, 'order')} back in Pending AWB`)
+    if (r.still_held_in_shopify.length) toast.warning(`${r.still_held_in_shopify.join(', ')} still on hold in Shopify`)
+    setPicked({}); changed?.()
   }
 
   const printLabels = async (ids) => {
@@ -122,7 +160,7 @@ export default function Shipments({ counts, bucket, setBucket, canManage, ship, 
         )}
         {isHold && (
           <div className="ship-alert info">
-            <span>On hold in Shopify, usually a return or exchange waiting for the team's decision. These can't get an AWB; they move to Pending AWB by themselves once Shopify releases them.</span>
+            <span>Orders the team put on hold (from a support ticket), and orders on hold in Shopify, usually a return or exchange waiting for a decision. None of these can get an AWB or be packed. Release the team's holds here; Shopify's come back by themselves once Shopify releases them.</span>
           </div>
         )}
 
@@ -163,10 +201,10 @@ export default function Shipments({ counts, bucket, setBucket, canManage, ship, 
                 <span>to</span>
                 <input type="date" aria-label="Ordered to" value={filters.ordered_to} onChange={e => setF({ ordered_to: e.target.value })} />
               </div></div>
-            <div className="input-group"><label htmlFor="sf-product">Product</label>
-              <select id="sf-product" value={filters.product} onChange={e => setF({ product: e.target.value })}>
-                <option value="">Any product</option>{facets.products.map(p => <option key={p}>{p}</option>)}
-              </select></div>
+            <div className="input-group ship-filter-wide"><label htmlFor="sf-product">Products</label>
+              <MultiSearchSelect id="sf-product" value={products} placeholder="Any product: type to find, tick several"
+                options={facets.products.map(p => ({ value: p, label: p }))}
+                onChange={(list) => setF({ product: list.join('|') })} /></div>
             <div className="input-group"><label htmlFor="sf-color">Colour</label>
               <select id="sf-color" value={filters.color} onChange={e => setF({ color: e.target.value })}>
                 <option value="">Any colour</option>{facets.colors.map(c => <option key={c}>{c}</option>)}
@@ -188,6 +226,16 @@ export default function Shipments({ counts, bucket, setBucket, canManage, ship, 
               {isOrders && !isHold && canManage && (
                 <button className="btn btn-primary btn-sm" onClick={() => ship(pickedList)}>
                   <Icon name="truck" size={14} /> Get AWB and labels for {pickedList.length}
+                </button>
+              )}
+              {isOrders && !isHold && canManage && (
+                <button className="btn btn-secondary btn-sm" disabled={busy === 'hold'} onClick={() => hold(pickedList)}>
+                  <Icon name="clock" size={14} /> Hold {pickedList.length}
+                </button>
+              )}
+              {isHold && canManage && (
+                <button className="btn btn-primary btn-sm" disabled={busy === 'hold'} onClick={() => release(pickedList)}>
+                  Release {pickedList.filter(o => o.held_at).length || ''}
                 </button>
               )}
               {canLabel && (
@@ -219,7 +267,8 @@ export default function Shipments({ counts, bucket, setBucket, canManage, ship, 
                       <td><input type="checkbox" checked={!!picked[o.order_number]} onChange={() => toggle(o)} aria-label={`Select ${o.order_number}`} /></td>
                       <td data-label="Order" className="cell-primary">{o.order_number}<div className="packed-sub">{dayTime(o.created_at)}</div>
                         {o.cancelled_awb && <div className="packed-sub" style={{ color: 'var(--danger)' }}>Auto-cancelled before</div>}
-                        {o.on_hold && <span className="status-badge on-hold" style={{ marginTop: 4 }}>On hold</span>}
+                        {o.on_hold && <span className="status-badge on-hold" style={{ marginTop: 4 }}>{o.held_at ? 'On hold' : 'On hold in Shopify'}</span>}
+                        {o.held_at && <div className="ship-hold-note">{o.hold_reason}{o.held_by ? ` · ${o.held_by}, ${day(o.held_at)}` : ''}</div>}
                         {o.edited_at && <div className="packed-sub" style={{ color: 'var(--warning)' }}>Details edited</div>}</td>
                       <td data-label="Customer">{o.customer_name || '—'}<div className="packed-sub">{[o.city, o.pincode].filter(Boolean).join(' · ')}</div></td>
                       <td data-label="Items" style={{ maxWidth: 280 }}>{o.items.slice(0, 2).join(', ')}{o.items.length > 2 ? ` +${o.items.length - 2}` : ''}</td>
@@ -228,6 +277,8 @@ export default function Shipments({ counts, bucket, setBucket, canManage, ship, 
                       <td>{canManage && (
                         <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
                           <button className="btn btn-secondary btn-sm" onClick={() => ship([o], { editFirst: true })}><Icon name="edit" size={14} /> Edit</button>
+                          {!o.on_hold && <button className="btn btn-secondary btn-sm" disabled={busy === 'hold'} onClick={() => hold([o])}>Hold</button>}
+                          {o.held_at && <button className="btn btn-primary btn-sm" disabled={busy === 'hold'} onClick={() => release([o])}>Release</button>}
                           {!o.on_hold && <button className="btn btn-primary btn-sm" onClick={() => ship([o])}>Get AWB</button>}
                         </div>
                       )}</td>

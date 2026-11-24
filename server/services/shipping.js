@@ -875,7 +875,7 @@ function payloadFor(facts, choice, s, delhiveryOrder, pack) {
 /** Preview for the drawer: the order's facts, problems, serviceability and charge. */
 async function quote(orderNumber, choice = {}) {
     const s = await getSettings();
-    const o = (await db.query('SELECT shopify_id, on_hold FROM orders WHERE order_number = $1', [orderNumber])).rows[0];
+    const o = (await db.query('SELECT shopify_id, on_hold, shopify_hold, held_by, hold_reason FROM orders WHERE order_number = $1', [orderNumber])).rows[0];
     if (!o) throw Object.assign(new Error(`Order ${orderNumber} isn't in the CRM`), { status: 404 });
     const facts = withOverride(orderFacts(await shopifyOrder(o.shopify_id)), await overrideFor(orderNumber));
     const pack = await packFor(facts, s);
@@ -893,8 +893,48 @@ async function quote(orderNumber, choice = {}) {
     }
     const active = await activeAwb(orderNumber);
     if (active) out.problems.push(alreadyHas(active));
-    if (o.on_hold) out.problems.push('on hold in Shopify (usually a return waiting for a decision); it can ship once released');
+    if (o.on_hold) out.problems.push(holdText(o));
     return out;
+}
+
+/** Why an order on hold can't ship, and who can release it. */
+function holdText(o) {
+    if (o.held_by || o.hold_reason) {
+        return `on hold in the CRM${o.held_by ? ` by ${o.held_by}` : ''}${o.hold_reason ? ` (${o.hold_reason})` : ''}; release it on the On hold list to ship it`;
+    }
+    return 'on hold in Shopify (usually a return waiting for a decision); it can ship once released';
+}
+
+/**
+ * The team holds orders a customer or the AI agent asked to stop (an address being sorted out,
+ * a size swap): they leave Pending AWB, can't get an AWB and the packing bench refuses them,
+ * until someone releases them. Only orders still waiting for an AWB; one with an AWB has to be
+ * cancelled first, and once Delhivery has picked it up a hold can't stop it.
+ */
+async function holdOrders(orderNumbers, reason, actor) {
+    const why = clean(reason).slice(0, 300);
+    if (!why) throw Object.assign(new Error('Say why the order is on hold'), { status: 400 });
+    const held = [], errors = [];
+    for (const num of [...new Set(orderNumbers.map(clean).filter(Boolean))].slice(0, 200)) {
+        const o = (await db.query('SELECT order_number, cancelled_at, fulfillment_status FROM orders WHERE order_number = $1', [num])).rows[0];
+        if (!o) { errors.push({ order_number: num, error: 'isn\'t in the CRM' }); continue; }
+        if (o.cancelled_at) { errors.push({ order_number: num, error: 'is cancelled' }); continue; }
+        if (['FULFILLED', 'RESTOCKED'].includes(String(o.fulfillment_status || '').toUpperCase())) { errors.push({ order_number: num, error: 'has already shipped' }); continue; }
+        const active = await activeAwb(num);
+        if (active) { errors.push({ order_number: num, error: `${alreadyHas(active)}; cancel that shipment first if it hasn't been picked up` }); continue; }
+        await db.query(`UPDATE orders SET held_at = now(), held_by = $2, hold_reason = $3, on_hold = true WHERE order_number = $1`, [num, actor, why]);
+        held.push(num);
+    }
+    return { held, errors };
+}
+
+/** Lift the team's hold. A hold Shopify placed stays until Shopify releases it. */
+async function releaseOrders(orderNumbers) {
+    const nums = [...new Set(orderNumbers.map(clean).filter(Boolean))].slice(0, 200);
+    const r = await db.query(
+        `UPDATE orders SET held_at = NULL, held_by = NULL, hold_reason = NULL, on_hold = COALESCE(shopify_hold, false)
+          WHERE order_number = ANY($1) AND held_at IS NOT NULL RETURNING order_number, on_hold`, [nums]);
+    return { released: r.rows.filter(x => !x.on_hold).map(x => x.order_number), still_held_in_shopify: r.rows.filter(x => x.on_hold).map(x => x.order_number) };
 }
 
 /** A live AWB to the customer for this order, if there is one (other than `exceptId`). */
@@ -945,13 +985,13 @@ async function createMany(items, { actor, kind = 'create' } = {}) {
     for (const it of items) {
         const orderNumber = clean(it.order_number);
         try {
-            const o = (await db.query('SELECT shopify_id, cancelled_at, on_hold, line_items_json, phones, total_price FROM orders WHERE order_number = $1', [orderNumber])).rows[0];
+            const o = (await db.query('SELECT shopify_id, cancelled_at, on_hold, shopify_hold, held_by, hold_reason, line_items_json, phones, total_price FROM orders WHERE order_number = $1', [orderNumber])).rows[0];
             const old = it.recreate_of ? (await db.query('SELECT * FROM shipments WHERE id = $1', [it.recreate_of])).rows[0] : null;
             // A re-make can go without the CRM's order (an exchange made in the portal): the old parcel has the details.
             if (!o && !old) throw new Error('order isn\'t in the CRM');
             if (o?.cancelled_at) throw new Error('order is cancelled in Shopify');
-            // On hold is usually a return waiting for a decision: it ships only once Shopify releases it.
-            if (o?.on_hold) throw new Error('order is on hold in Shopify; it can ship once it is released');
+            // Held in Shopify (usually a return waiting for a decision) or by the team: it ships once released.
+            if (o?.on_hold) throw new Error(holdText(o));
             const active = await activeAwb(orderNumber, old?.id || null);
             if (active) throw new Error(alreadyHas(active));
             let so = null;
@@ -1389,6 +1429,6 @@ function start() {
 }
 
 module.exports = {
-    getSettings, saveSettings, sync, quote, createMany, createManual, statusOf, linkTracking, saveOverride, overrideFor, changeForCustomer, fillCharges, catalog, packFor, RETURN_BUCKETS, recreate, markNotShipping, cancelOne, reattempt, editOne, bookPickup,
+    getSettings, saveSettings, sync, quote, createMany, createManual, statusOf, linkTracking, saveOverride, overrideFor, changeForCustomer, fillCharges, catalog, packFor, RETURN_BUCKETS, recreate, markNotShipping, cancelOne, reattempt, editOne, bookPickup, holdOrders, releaseOrders,
     labelsFor: (awbs) => dlv.labels(awbs, '4R'), bucketOf, fromTracking, trackingUrl, start,
 };

@@ -1449,6 +1449,13 @@ async function ensureInventorySchema() {
             -- offering pieces to orders that are never going out.
             ALTER TABLE orders ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMP;
             ALTER TABLE orders ADD COLUMN IF NOT EXISTS on_hold BOOLEAN DEFAULT false;
+            -- on_hold is what everything checks: Shopify's hold OR the team's own. The sync writes
+            -- shopify_hold and recomputes on_hold, so a hold the team placed survives every sync.
+            ALTER TABLE orders ADD COLUMN IF NOT EXISTS shopify_hold BOOLEAN;
+            ALTER TABLE orders ADD COLUMN IF NOT EXISTS held_at TIMESTAMPTZ;
+            ALTER TABLE orders ADD COLUMN IF NOT EXISTS held_by TEXT;
+            ALTER TABLE orders ADD COLUMN IF NOT EXISTS hold_reason TEXT;
+            UPDATE orders SET shopify_hold = COALESCE(on_hold, false) WHERE shopify_hold IS NULL;
             -- Every phone on an order (the order's own, shipping, billing, the customer's), last ten
             -- digits each, and its email: how a WhatsApp chat finds its orders when the Shopify
             -- customer profile has no phone (Razorpay checkouts put it on the order, not the profile).

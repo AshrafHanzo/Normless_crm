@@ -184,7 +184,9 @@ async function syncAll() {
         // stale flag, but neither is worth losing the orders themselves over.
         try {
             const held = await shopify.fetchOnHoldOrderNames();
-            await db.query('UPDATE orders SET on_hold = (order_number = ANY($1))', [held]);
+            // A hold the team placed in the CRM (held_at) stays, whatever Shopify says.
+            await db.query(`UPDATE orders SET shopify_hold = (order_number = ANY($1)),
+                                              on_hold = (order_number = ANY($1)) OR held_at IS NOT NULL`, [held]);
             if (held.length) console.log(`⏸  ${held.length} order(s) on hold`);
         } catch (e) {
             console.error('on-hold status skipped:', e.message);

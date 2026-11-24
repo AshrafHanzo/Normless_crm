@@ -49,20 +49,24 @@ function ConfirmDialog({ req, onResolve }) {
   const [typed, setTyped] = useState('')
   const inputRef = useRef(null)
   const needsText = !!req.requireText
-  const ready = !needsText || typed.trim() === String(req.requireText)
+  // prompt(): the dialog asks for a line of text and answers with it (null when cancelled).
+  const asks = !!req.input
+  const ready = asks ? !!typed.trim() || !!req.input.optional : !needsText || typed.trim() === String(req.requireText)
+  const yes = () => onResolve(asks ? typed.trim() : true)
+  const no = () => onResolve(asks ? null : false)
 
   useEffect(() => {
     const onKey = (e) => {
-      if (e.key === 'Escape') onResolve(false)
-      if (e.key === 'Enter' && ready && !needsText) onResolve(true)
+      if (e.key === 'Escape') no()
+      if (e.key === 'Enter' && ready && !needsText && !asks) yes()
     }
     window.addEventListener('keydown', onKey)
     setTimeout(() => inputRef.current?.focus(), 60)
     return () => window.removeEventListener('keydown', onKey)
-  }, [ready, needsText, onResolve])
+  }, [ready, needsText, asks, onResolve]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <div className="confirm-overlay" onClick={() => onResolve(false)}>
+    <div className="confirm-overlay" onClick={no}>
       <div className="confirm-card" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true">
         <div className={`confirm-icon ${req.danger ? 'confirm-icon-danger' : ''}`}>
           <Icon name={req.danger ? 'alert' : 'info'} size={22} />
@@ -80,6 +84,13 @@ function ConfirmDialog({ req, onResolve }) {
             ))}
           </dl>
         )}
+        {asks && (
+          <div className="input-group confirm-input">
+            <label htmlFor="confirm-prompt">{req.input.label}</label>
+            <input id="confirm-prompt" ref={inputRef} value={typed} placeholder={req.input.placeholder || ''} maxLength={req.input.maxLength || 300}
+              onChange={e => setTyped(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && ready) yes() }} autoComplete="off" />
+          </div>
+        )}
         {needsText && (
           <div className="input-group confirm-input">
             <label>Type <b>{req.requireText}</b> to confirm</label>
@@ -88,8 +99,8 @@ function ConfirmDialog({ req, onResolve }) {
           </div>
         )}
         <div className="confirm-actions">
-          <button className="btn btn-secondary" onClick={() => onResolve(false)}>{req.cancelLabel || 'Cancel'}</button>
-          <button className={`btn ${req.danger ? 'btn-danger' : 'btn-primary'}`} disabled={!ready} onClick={() => onResolve(true)}>
+          <button className="btn btn-secondary" onClick={no}>{req.cancelLabel || 'Cancel'}</button>
+          <button className={`btn ${req.danger ? 'btn-danger' : 'btn-primary'}`} disabled={!ready} onClick={yes}>
             {req.confirmLabel || 'Confirm'}
           </button>
         </div>
@@ -121,6 +132,9 @@ export default function ToastProvider({ children }) {
     info: (m, o) => push('info', m, o),
     dismiss,
     confirm: (req) => new Promise(resolve => { resolver.current = resolve; setConfirmReq(req) }),
+    // Like confirm(), with a text box: resolves to what was typed, or null if cancelled.
+    // toast.prompt({ title, input: { label, placeholder } })
+    prompt: (req) => new Promise(resolve => { resolver.current = resolve; setConfirmReq({ ...req, input: req.input || { label: '' } }) }),
   }).current
 
   const resolveConfirm = useCallback((val) => {
