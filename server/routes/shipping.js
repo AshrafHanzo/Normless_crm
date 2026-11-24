@@ -41,6 +41,17 @@ router.get('/track-status', async (req, res) => {
 });
 
 /**
+ * POST /bulk-check { codes: [awb or order…], live } — status of many parcels at once, for the
+ * packing bench (Scan Order → Status check). Read-only; open to anyone signed in, like /track-status.
+ */
+router.post('/bulk-check', async (req, res) => {
+    try {
+        const codes = Array.isArray(req.body?.codes) ? req.body.codes : String(req.body?.codes || '').split(/[\s,;]+/);
+        res.json(await shipping.bulkCheck(codes.slice(0, 1000), { live: req.body?.live !== false }));
+    } catch (err) { fail(res, err, 'check the parcels'); }
+});
+
+/**
  * POST /customer-change { order_number, name, phone, address, city, state, pincode, products_desc }
  * A customer's change of delivery details, from a support ticket. Open to Shipping managers and to
  * support editors; before pickup only (the service refuses after).

@@ -251,6 +251,21 @@ After about three failed attempts Delhivery sends it back by itself: **RTO in tr
 
 A cancelled label that goes out with the parcel is not picked up, so this check saves a lost day.
 
+**Checking many parcels at once: Status check**
+
+Before the pickup, open **Scan Order → Status check** and scan the label on each parcel, one after another (AWB or order barcode). Or press **Paste a list** and paste AWBs or order numbers. Each one is checked live with Delhivery and appears at the top of the list:
+
+| Result | What to do |
+| --- | --- |
+| **OK to send** | Waiting for pickup. Send it |
+| **Cancelled** | Don't send. Re-create it in Shipping → Auto-cancelled and swap the label |
+| **Old label** | It was re-made: swap it for the new label (the new AWB is shown) |
+| **Order cancelled** / **On hold** | Don't send. Check with the team |
+| **No AWB** / **Not found** | Check the label or get an AWB in Shipping |
+| **Already moving** | Delhivery already has it (in transit, delivered…) |
+
+A problem row turns red and plays a low tone. **Problems only** hides the good ones, **Check all again** re-checks the whole list, and **Download CSV** saves it.
+
 ## Packaging and packing rules
 
 Delhivery charges by the bigger of the real weight and the size-based (volumetric) weight. When the weight we declare is lower than what they measure, the wallet is debited the difference later ("Captured weight is higher than declared weight"). Accurate packaging stops those surprise debits. Anyone who can manage Shipping sets this up once in **Shipping → Settings**.

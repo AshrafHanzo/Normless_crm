@@ -3,6 +3,7 @@ import { useApi } from '../App';
 import { useToast } from '../components/Toast';
 import OrderDetailsCard from '../components/OrderDetailsCard';
 import PackedTab from './scan/PackedTab';
+import StatusCheck from './scan/StatusCheck';
 
 const ScanHub = () => {
   const [activeTab, setActiveTab] = useState('scan');
@@ -167,6 +168,13 @@ const ScanHub = () => {
             >
               📦 Packed
             </button>
+            {/* Many parcels at once: is any label cancelled before the pickup takes them? */}
+            <button
+              className={`scan-tab ${activeTab === 'status' ? 'active' : ''}`}
+              onClick={() => { setActiveTab('status'); clearOrder(); }}
+            >
+              🚚 Status check
+            </button>
           </div>
         </div>
 
@@ -189,6 +197,8 @@ const ScanHub = () => {
           </div>
         ) : activeTab === 'packed' ? (
           <PackedTab />
+        ) : activeTab === 'status' ? (
+          <StatusCheck />
         ) : (
           <form onSubmit={handleManualSubmit} className="manual-lookup-form">
             <input
@@ -281,7 +291,7 @@ const ScanHub = () => {
               )}
             </div>
           </>
-        ) : activeTab === 'packed' ? null : !loading && !error && (
+        ) : ['packed', 'status'].includes(activeTab) ? null : !loading && !error && (
           <div className="empty-state">
             <div className="empty-icon">📦</div>
             <h3>No Scan Detected</h3>

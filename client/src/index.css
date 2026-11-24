@@ -4793,3 +4793,22 @@ p.wdb-sub { margin: 0; }
   .em-layout { grid-template-columns: 1fr; }
   .em-list { max-height: 320px; }
 }
+
+/* Scan Order → Status check: many parcels' Delhivery status at once */
+.stc { display: flex; flex-direction: column; gap: 14px; }
+.stc-head { display: flex; flex-direction: column; gap: 8px; }
+.stc-paste { display: flex; flex-direction: column; gap: 10px; }
+.stc-paste textarea { width: 100%; font-family: var(--font-mono, monospace); }
+.stc-hint { margin: 0; font-size: 13px; color: var(--text-secondary); }
+.stc-bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; }
+.stc-counts, .stc-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.stc-chip { padding: 4px 10px; border-radius: 999px; font-size: 12.5px; font-weight: 600; background: var(--surface); border: 1px solid var(--border); color: var(--text-secondary); }
+.stc-chip.bad { background: var(--danger-bg); color: var(--danger); border-color: transparent; }
+.stc-chip.warn { background: color-mix(in srgb, var(--warning) 15%, transparent); color: var(--warning); border-color: transparent; }
+.stc-chip.ok { background: color-mix(in srgb, var(--success) 15%, transparent); color: var(--success); border-color: transparent; }
+.stc-total { font-size: 12.5px; color: var(--text-muted); }
+.stc-toggle { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; color: var(--text-secondary); cursor: pointer; }
+.stc-row.bad td { background: color-mix(in srgb, var(--danger) 9%, transparent); }
+.stc-row.bad td:first-child { box-shadow: inset 3px 0 0 var(--danger); }
+.stc-row.warn td:first-child { box-shadow: inset 3px 0 0 var(--warning); }
+@media (max-width: 640px) { .manual-lookup-form { flex-wrap: wrap; } .manual-lookup-form .input { flex: 1 1 100%; } }

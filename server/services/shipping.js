@@ -1282,6 +1282,79 @@ async function statusOf({ awbs = [], orders = [] } = {}) {
     return { by_awb: byAwb, by_order: byOrder };
 }
 
+/**
+ * Check many parcels at once, from the packing bench: each code is an AWB or an order number, as
+ * scanned or pasted. With `live`, Delhivery is asked first (tracking only, nothing changes there),
+ * so a parcel cancelled since the last 30-minute sync shows as cancelled now.
+ */
+async function bulkCheck(codes = [], { live = true } = {}) {
+    const items = [];
+    const seen = new Set();
+    for (const raw of codes.map(c => clean(c)).filter(Boolean)) {
+        const d = raw.replace(/\s+/g, '');
+        let it;
+        if (/^\d{10,20}$/.test(d)) it = { code: raw, awb: d };
+        else {
+            // A Shopify order label reads "#13584" or "Order 13584"; an exchange "#EXC-#11561-1".
+            const num = /^#?\d{3,8}$/.test(d) ? `#${d.replace(/^#/, '')}` : orderOf(d.startsWith('#') ? d : (d.match(/\d{4,8}/) ? `#${d.match(/\d{4,8}/)[0]}` : d));
+            it = { code: raw, order: num };
+        }
+        const key = it.awb || it.order;
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        items.push(it);
+        if (items.length >= 300) break;
+    }
+    const awbs = items.filter(i => i.awb).map(i => i.awb);
+    const orders = items.filter(i => i.order).map(i => i.order);
+
+    let liveError = null;
+    if (live && dlv.configured() && items.length) {
+        try {
+            // Every forward parcel these codes point at, and what replaced them.
+            const known = (await db.query(
+                `SELECT awb, order_number, recreated_as FROM shipments
+                  WHERE (awb = ANY($1) OR order_number = ANY($2)) AND COALESCE(direction, 'forward') = 'forward'`, [awbs, orders])).rows;
+            const ask = new Set([...awbs, ...known.map(r => r.awb), ...known.map(r => r.recreated_as).filter(Boolean)]);
+            for (const S of await dlv.track([...ask])) await applyTracking(S);
+            // Orders the CRM holds no parcel for may have been shipped from the portal minutes ago.
+            const unknown = orders.filter(n => !known.some(r => r.order_number === n));
+            if (unknown.length) await refreshFromDelhivery(unknown);
+        } catch (err) {
+            liveError = `Couldn't ask Delhivery just now (${err.message}); showing the CRM's last update.`;
+        }
+    }
+
+    const st = await statusOf({ awbs, orders });
+    // A replaced label: also say where its replacement is.
+    const repl = Object.values(st.by_awb).map(v => v.replaced_by).filter(Boolean);
+    const next = repl.length ? (await statusOf({ awbs: repl })).by_awb : {};
+    const ords = (await db.query(
+        `SELECT order_number, on_hold, cancelled_at, fulfillment_status FROM orders WHERE order_number = ANY($1)`,
+        [[...orders, ...Object.values(st.by_awb).map(v => v.order_number).filter(Boolean)]])).rows;
+    const orderRow = (n) => ords.find(r => r.order_number === n) || null;
+
+    const out = items.map(it => {
+        const s = it.awb ? st.by_awb[it.awb] : st.by_order[it.order];
+        const num = s?.order_number || it.order || null;
+        const o = num ? orderRow(num) : null;
+        let verdict;
+        if (!s) verdict = it.awb ? 'unknown_awb' : (o ? (o.cancelled_at ? 'order_cancelled' : o.on_hold ? 'on_hold' : 'no_awb') : 'unknown_order');
+        else if (s.replaced_by) verdict = 'replaced';
+        else if (s.bucket === 'cancelled') verdict = 'cancelled';
+        else if (o?.cancelled_at) verdict = 'order_cancelled';
+        else if (o?.on_hold && s.bucket === 'waiting_pickup') verdict = 'on_hold';
+        else if (s.bucket === 'waiting_pickup') verdict = 'ok';
+        else verdict = 'moving';
+        return {
+            ...it, order_number: num, verdict,
+            shipment: s || null, replacement: s?.replaced_by ? next[s.replaced_by] || { awb: s.replaced_by } : null,
+            order: o && { on_hold: !!o.on_hold, cancelled: !!o.cancelled_at },
+        };
+    });
+    return { items: out, live: live && !liveError, live_error: liveError, checked_at: new Date().toISOString() };
+}
+
 async function markNotShipping(ids, actor) {
     const r = await db.query(`UPDATE shipments SET cancel_handled = 'not_shipping', cancel_handled_by = $2, cancel_handled_at = CURRENT_TIMESTAMP
                                WHERE id = ANY($1) AND bucket = 'cancelled' AND cancel_handled IS NULL RETURNING id`, [ids, actor || null]);
@@ -1429,6 +1502,6 @@ function start() {
 }
 
 module.exports = {
-    getSettings, saveSettings, sync, quote, createMany, createManual, statusOf, linkTracking, saveOverride, overrideFor, changeForCustomer, fillCharges, catalog, packFor, RETURN_BUCKETS, recreate, markNotShipping, cancelOne, reattempt, editOne, bookPickup, holdOrders, releaseOrders,
+    getSettings, saveSettings, sync, quote, createMany, createManual, statusOf, bulkCheck, linkTracking, saveOverride, overrideFor, changeForCustomer, fillCharges, catalog, packFor, RETURN_BUCKETS, recreate, markNotShipping, cancelOne, reattempt, editOne, bookPickup, holdOrders, releaseOrders,
     labelsFor: (awbs) => dlv.labels(awbs, '4R'), bucketOf, fromTracking, trackingUrl, start,
 };
