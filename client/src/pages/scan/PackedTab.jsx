@@ -33,6 +33,9 @@ export default function PackedTab() {
   const [search, setSearch] = useState('')
   const [term, setTerm] = useState('')
   const [onlyToday, setOnlyToday] = useState(true)
+  const [from, setFrom] = useState('')
+  const [to, setTo] = useState('')
+  const [downloading, setDownloading] = useState(false)
   const [busy, setBusy] = useState(null)
   const [scanning, setScanning] = useState(false)
   const t = useServerTable({ sort: 'packed_at', dir: 'desc' })
@@ -43,10 +46,27 @@ export default function PackedTab() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search])
 
+  // The list's filters; the CSV download uses exactly these.
+  const filters = () => ({
+    ...(term && { search: term }),
+    ...(onlyToday ? { from: today(), to: today() } : { ...(from && { from }), ...(to && { to }) }),
+  })
+
+  const download = async () => {
+    setDownloading(true)
+    const res = await apiFetch('/api/scanner/packed.csv?' + new URLSearchParams(filters()).toString(), { responseType: 'blob' })
+    setDownloading(false)
+    if (!res || res.error) { toast.error(res?.error || 'Download failed'); return }
+    const href = URL.createObjectURL(res.blob)
+    const a = document.createElement('a')
+    a.href = href; a.download = res.filename || 'packed-orders.csv'
+    document.body.appendChild(a); a.click(); a.remove()
+    URL.revokeObjectURL(href)
+  }
+
   const load = async () => {
     setLoading(true)
-    const q = { ...(term && { search: term }), ...(onlyToday ? { from: today(), to: today() } : {}) }
-    const res = await apiFetch('/api/scanner/packed?' + t.query(q))
+    const res = await apiFetch('/api/scanner/packed?' + t.query(filters()))
     if (res && !res.error) {
       setRows(res.packed || [])
       setSummary(res.summary || null)
@@ -55,7 +75,7 @@ export default function PackedTab() {
     setLoading(false)
   }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { load() }, [term, onlyToday, t.key])
+  useEffect(() => { load() }, [term, onlyToday, from, to, t.key])
 
   const fetchAwb = async (row) => {
     setBusy(row.id)
@@ -96,6 +116,17 @@ export default function PackedTab() {
           <button type="button" className={`mini-btn ${onlyToday ? 'mini-btn-active' : ''}`}
             onClick={() => { setOnlyToday(v => !v); t.resetPage() }}>
             {onlyToday ? 'Today' : 'All days'}
+          </button>
+          {!onlyToday && (
+            <>
+              <input type="date" className="packed-date" aria-label="Packed from" value={from} max={to || undefined}
+                onChange={e => { setFrom(e.target.value); t.resetPage() }} />
+              <input type="date" className="packed-date" aria-label="Packed to" value={to} min={from || undefined}
+                onChange={e => { setTo(e.target.value); t.resetPage() }} />
+            </>
+          )}
+          <button type="button" className="mini-btn" onClick={download} disabled={downloading}>
+            {downloading ? 'Preparing…' : '⬇ Download CSV'}
           </button>
           {/* Recording a stack of parcels is the same log, filled faster — so it opens in place. */}
           <button type="button" className={`mini-btn ${scanning ? 'mini-btn-active' : ''}`}

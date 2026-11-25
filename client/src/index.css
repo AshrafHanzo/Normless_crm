@@ -1002,7 +1002,7 @@ select { cursor: pointer; appearance: none;
 .packed-stat b { color: var(--text-primary); font-size: 14px; margin-right: 4px; }
 .packed-stat-muted { opacity: 0.75; }
 .packed-stat-warn { border-color: var(--warning, #d97706); }
-.packed-filters { display: flex; gap: 8px; align-items: center; flex: 1 1 320px; justify-content: flex-end; }
+.packed-filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; flex: 1 1 320px; justify-content: flex-end; }
 .packed-filters .search-bar { flex: 1 1 240px; max-width: 420px; }
 .packed-awb { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; font-weight: 600; }
 .packed-sub { color: var(--text-muted); font-size: 11.5px; margin-top: 2px; max-width: 320px; }
@@ -4812,3 +4812,5 @@ p.wdb-sub { margin: 0; }
 .stc-row.bad td:first-child { box-shadow: inset 3px 0 0 var(--danger); }
 .stc-row.warn td:first-child { box-shadow: inset 3px 0 0 var(--warning); }
 @media (max-width: 640px) { .manual-lookup-form { flex-wrap: wrap; } .manual-lookup-form .input { flex: 1 1 100%; } }
+
+.packed-date { padding: 6px 8px; border-radius: var(--radius-sm, 8px); border: 1px solid var(--border); background: var(--surface); color: var(--text-primary); font-size: 13px; }

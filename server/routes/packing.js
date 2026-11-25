@@ -17,6 +17,7 @@ const express = require('express');
 const db = require('../db/connection');
 const { hasPermission } = require('../utils/permissions');
 const { tableParams, pagination } = require('../utils/table');
+const { toCsv } = require('../utils/csv');
 
 const router = express.Router();
 
@@ -198,21 +199,61 @@ router.post('/packed/:id/awb', async (req, res) => {
 });
 
 /** GET /api/scanner/packed — the dispatch log, newest first. */
+/** The dispatch log's filters (search, from, to), shared by the list and its CSV download. */
+function packedFilter({ search, from, to }) {
+    const where = [];
+    const vals = [];
+    if (search) {
+        vals.push(`%${String(search).trim().replace(/^#/, '')}%`);
+        where.push(`(order_number ILIKE $${vals.length} OR awb ILIKE $${vals.length}
+                     OR customer_name ILIKE $${vals.length} OR customer_phone ILIKE $${vals.length})`);
+    }
+    // Dates are the packer's day in IST, which is what the bench means by "today".
+    const day = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v || ''));
+    if (day(from)) { vals.push(from); where.push(`(packed_at AT TIME ZONE 'Asia/Kolkata')::date >= $${vals.length}`); }
+    if (day(to)) { vals.push(to); where.push(`(packed_at AT TIME ZONE 'Asia/Kolkata')::date <= $${vals.length}`); }
+    return { vals, sql: where.length ? `WHERE ${where.join(' AND ')}` : '' };
+}
+
+/**
+ * GET /api/scanner/packed.csv?search=&from=&to= — every parcel in the dispatch log that matches,
+ * not just the page on screen, as a spreadsheet.
+ */
+router.get('/packed.csv', async (req, res) => {
+    try {
+        const { vals, sql } = packedFilter(req.query);
+        const rows = (await db.query(
+            `SELECT *, to_char(packed_at, 'YYYY-MM-DD HH24:MI') AS packed_at_text FROM packed_orders ${sql} ORDER BY packed_at DESC LIMIT 50000`, vals)).rows;
+        const out = rows.map(hydrate).map(r => ({
+            order: r.order_number, awb: r.awb || '', courier: r.courier || '', tracking: r.tracking_url || '',
+            customer: r.customer_name || '', phone: r.customer_phone || '', email: r.customer_email || '',
+            address: r.ship_address || '', city: r.ship_city || '', state: r.ship_state || '', pincode: r.ship_pincode || '',
+            items: (r.items || []).map(i => `${i.title}${i.variant ? ` (${i.variant})` : ''} x${i.quantity}`).join('; '),
+            units: r.total_qty ?? '', value: r.total_price ?? '', note: r.note || '',
+            packed_by: r.packed_by || '', packed_at: r.packed_at_text || '',
+        }));
+        const range = [...new Set([req.query.from, req.query.to].filter(Boolean))];
+        const name = `packed-orders${range.length ? `-${range.join('-to-')}` : ''}.csv`;
+        res.set('Content-Type', 'text/csv; charset=utf-8');
+        res.set('Content-Disposition', `attachment; filename="${name}"`);
+        res.send(toCsv(out, [
+            { key: 'order', label: 'Order' }, { key: 'awb', label: 'AWB' }, { key: 'courier', label: 'Courier' },
+            { key: 'customer', label: 'Customer' }, { key: 'phone', label: 'Phone' }, { key: 'email', label: 'Email' },
+            { key: 'address', label: 'Address' }, { key: 'city', label: 'City' }, { key: 'state', label: 'State' }, { key: 'pincode', label: 'Pincode' },
+            { key: 'items', label: 'Items' }, { key: 'units', label: 'Units' }, { key: 'value', label: 'Value (Rs)' },
+            { key: 'packed_by', label: 'Packed by' }, { key: 'packed_at', label: 'Packed at (IST)' },
+            { key: 'note', label: 'Note' }, { key: 'tracking', label: 'Tracking link' },
+        ]));
+    } catch (err) {
+        console.error('packing csv error:', err);
+        res.status(500).json({ error: 'Failed to download the dispatch log' });
+    }
+});
+
 router.get('/packed', async (req, res) => {
     try {
-        const { search, from, to } = req.query;
         const t = tableParams(req.query, { sortable: PACKED_SORTS, defaultSort: 'packed_at' });
-        const where = [];
-        const vals = [];
-        if (search) {
-            vals.push(`%${String(search).trim().replace(/^#/, '')}%`);
-            where.push(`(order_number ILIKE $${vals.length} OR awb ILIKE $${vals.length}
-                         OR customer_name ILIKE $${vals.length} OR customer_phone ILIKE $${vals.length})`);
-        }
-        // Dates are the packer's day in IST, which is what the bench means by "today".
-        if (from) { vals.push(from); where.push(`(packed_at AT TIME ZONE 'Asia/Kolkata')::date >= $${vals.length}`); }
-        if (to) { vals.push(to); where.push(`(packed_at AT TIME ZONE 'Asia/Kolkata')::date <= $${vals.length}`); }
-        const sql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+        const { vals, sql } = packedFilter(req.query);
 
         const rows = (await db.query(
             `SELECT * FROM packed_orders ${sql} ${t.orderBy} LIMIT ${t.limit} OFFSET ${t.offset}`, vals)).rows;
