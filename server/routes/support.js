@@ -31,11 +31,11 @@ const router = express.Router();
    that says something we no longer offer should still read as it did. */
 const SOURCES = ['WhatsApp', 'Email', 'Instagram', 'Phone', 'Other'];
 const NATURES = [
-    'Order Edits (Pre-fulfilment)', 'Return & Replacement', 'Return & Refund', 'Refund', 'Reship',
+    'Order Edits (Pre-fulfilment)', 'Return & Replacement', 'Return & Refund', 'Refund', 'Cancel & Refund', 'Reship',
 ];
 const REASONS = [
     'Size Change', 'Address update', 'Initiate Return', 'Initiate Replacement', 'Initiate Refund',
-    'Failed Shipment', 'Damaged product', 'Wrong product', 'Order Cancelled', 'Other',
+    'Failed Shipment', 'Damaged product', 'Wrong product', 'Order Cancelled', 'Cancel & Refund', 'Hold order', 'Other',
 ];
 const PAYMENTS = ['Paid', 'Pending', 'Not applicable'];
 const STATUSES = ['Open', 'Closed'];
@@ -124,7 +124,7 @@ const SORTS = {
 // the day they were resolved. SQL rather than the browser so it can be sorted on.
 const AGING = `(COALESCE(resolved_on, CURRENT_DATE) - raised_on)`;
 const FIELDS = `id, ref_no, order_number, shopify_order_id, customer_name, customer_phone,
-                customer_email, source, nature, reason, payment_status, request, status, progress,
+                customer_email, source, nature, reason, payment_status, request, status, progress, priority,
                 action, ops_note, forward_awb, return_awb, assigned_to, images, wa_conversation_id,
                 TO_CHAR(raised_on,'YYYY-MM-DD') AS raised_on,
                 TO_CHAR(resolved_on,'YYYY-MM-DD') AS resolved_on,
@@ -152,6 +152,7 @@ router.get('/tickets', async (req, res) => {
         const view = String(req.query.view || 'open').toLowerCase();
         if (view === 'open') where.push(`status <> 'Closed'`);
         else if (view === 'closed') where.push(`status = 'Closed'`);
+        else if (view === 'top') where.push(`status <> 'Closed' AND priority = 'Top'`);
 
         for (const [col, q] of [['nature', req.query.nature], ['source', req.query.source], ['action', req.query.action]]) {
             const v = trim(q);
@@ -171,8 +172,11 @@ router.get('/tickets', async (req, res) => {
         const clause = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
         const t = tableParams(req.query, { sortable: SORTS, defaultSort: 'raised_on', defaultDir: 'desc' });
+        // Top-priority tickets still open come first, whatever the sort.
         const rows = (await db.query(
-            `SELECT ${FIELDS} FROM support_tickets ${clause} ${t.orderBy} LIMIT ${t.limit} OFFSET ${t.offset}`, vals)).rows;
+            `SELECT ${FIELDS} FROM support_tickets ${clause}
+              ORDER BY (status <> 'Closed' AND priority = 'Top') DESC${t.orderBy.replace(/^\s*ORDER BY/i, ',')}
+              LIMIT ${t.limit} OFFSET ${t.offset}`, vals)).rows;
         const total = (await db.query(`SELECT COUNT(*)::int AS n FROM support_tickets ${clause}`, vals)).rows[0].n;
 
         // The whole desk at a glance, not just the page being looked at.
@@ -181,6 +185,7 @@ router.get('/tickets', async (req, res) => {
                     COUNT(*) FILTER (WHERE status = 'Closed')::int AS closed,
                     COUNT(*) FILTER (WHERE status <> 'Closed' AND ${AGING} > 7)::int AS stale,
                     COUNT(*) FILTER (WHERE raised_on = CURRENT_DATE)::int AS today,
+                    COUNT(*) FILTER (WHERE status <> 'Closed' AND priority = 'Top')::int AS top,
                     COUNT(*)::int AS total
                FROM support_tickets`)).rows[0];
 
@@ -218,6 +223,7 @@ router.get('/order/:number', async (req, res) => {
         const r = await db.query(
             `SELECT o.shopify_id, o.order_number, o.total_price, o.line_items_json, o.created_at,
                     o.financial_status, o.fulfillment_status, o.cancelled_at, o.on_hold,
+                    o.held_at, o.held_by, o.hold_reason, COALESCE(o.shopify_hold, false) AS shopify_hold,
                     c.first_name, c.last_name, c.email AS customer_email, c.phone AS customer_phone
                FROM orders o
                LEFT JOIN customers c ON c.shopify_id = o.customer_shopify_id
@@ -242,6 +248,7 @@ router.get('/order/:number', async (req, res) => {
                 total_price: o.total_price,
                 financial_status: o.financial_status,
                 fulfillment_status: o.cancelled_at ? 'CANCELLED' : o.on_hold ? 'ON HOLD' : o.fulfillment_status,
+                hold: o.on_hold ? { by_team: !!o.held_at, held_at: o.held_at, held_by: o.held_by, reason: o.hold_reason, shopify: o.shopify_hold } : null,
                 created_at: o.created_at,
                 items: safeJson(o.line_items_json, []).map(i => ({ title: i.title, variant: i.variant, quantity: i.quantity })),
             } : {
@@ -281,6 +288,8 @@ const WRITABLE = {
     status: trim, progress: trim, action: trim, ops_note: trim,
     forward_awb: trim, return_awb: trim, assigned_to: trim,
     raised_on: isoDate, resolved_on: isoDate,
+    // Only "Top" means anything; anything else clears it.
+    priority: (v) => (String(v ?? '').trim().toLowerCase() === 'top' ? 'Top' : null),
 };
 
 /**
@@ -319,6 +328,13 @@ router.post('/tickets', canEdit, async (req, res) => {
             return r.rows[0].id;
         });
         const row = (await db.query(`SELECT ${FIELDS} FROM support_tickets WHERE id = $1`, [ticket])).rows[0];
+        // A cancellation or a hold stops the order shipping while the team works on it.
+        let held = null;
+        if (['Cancel & Refund', 'Hold order'].includes(row.reason) && row.order_number) {
+            const ref = `CS-${String(row.ref_no).padStart(4, '0')}`;
+            held = await require('../services/shipping').holdOrders([row.order_number], `${ref}: ${row.reason}`, req.user?.username || null)
+                .catch(err => ({ held: [], errors: [{ error: err.message }] }));
+        }
         // The customer is told the ticket number on WhatsApp, whichever page raised it. A failed
         // message never fails the ticket: it is on the Automations page, and said to whoever raised it.
         let notified = null;
@@ -328,7 +344,7 @@ router.post('/tickets', canEdit, async (req, res) => {
             console.error('support ticket message error:', err.message);
             notified = { status: 'failed', error: 'Could not message the customer' };
         }
-        res.status(201).json({ ticket: hydrate(row), notified });
+        res.status(201).json({ ticket: hydrate(row), notified, held });
     } catch (err) {
         console.error('support create error:', err);
         res.status(500).json({ error: 'Could not raise the ticket' });

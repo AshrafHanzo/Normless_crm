@@ -14,7 +14,7 @@ export const blankTicket = () => ({
   order_number: '', customer_name: '', customer_phone: '', customer_email: '',
   source: 'WhatsApp', nature: '', reason: '', payment_status: '', request: '',
   status: 'Open', progress: 'Pending', action: '', ops_note: '',
-  forward_awb: '', return_awb: '', raised_on: today(), resolved_on: '',
+  forward_awb: '', return_awb: '', raised_on: today(), resolved_on: '', priority: '',
 })
 
 const FIELDS = Object.keys(blankTicket())

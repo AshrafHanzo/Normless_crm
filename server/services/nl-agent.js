@@ -30,7 +30,8 @@ const bot = require('./nl-bot');
 const handover = require('./nl-handover');
 const usage = require('./ai-usage');
 const files = require('./support-files');
-const { readSettings, isOpen, clock } = require('./nl-settings');
+const { readSettings, isOpen, clock, EXCHANGE_CENTER } = require('./nl-settings');
+const exchangeFee = require('./exchange-fee');
 
 const MAX_ROUNDS = 8;          // tool rounds before it gives up and asks the team
 const HISTORY = 20;            // messages of context
@@ -64,7 +65,11 @@ const TICKET_REASONS = {
     'Damaged product': 'Return & Replacement',
     'Wrong product': 'Return & Replacement',
     'Failed Shipment': 'Reship',
+    'Cancel & Refund': 'Cancel & Refund',               // holds the order until the team cancels it
+    'Hold order': 'Order Edits (Pre-fulfilment)',        // holds the order until the team releases it
 };
+// Reasons whose ticket also puts the order on hold, so it doesn't ship while the team decides.
+const HOLDING_REASONS = ['Cancel & Refund', 'Hold order'];
 
 let client = null;
 const anthropic = () => {
@@ -166,6 +171,58 @@ async function inboxStates(ids) {
 
 /* ── What it is told ──────────────────────────────────────────────────────────────────────── */
 
+// After-delivery requests, cancellations, holds and priority: the same for WhatsApp and email.
+const AFTER_DELIVERY = `- After delivery, returns and exchanges go through our Returns & Exchange Center:
+  ${EXCHANGE_CENTER} (they enter the order number and email). It opens once the order is
+  delivered and stays open for 7 days. There the customer chooses a size exchange, or a return with a
+  50% refund. Send them the link; don't raise a ticket for this. If they can't find the exchange option,
+  tell them to scroll to the bottom after entering the order. More than 7 days after delivery: ask_team.
+- A damaged or wrong item is different: ask for the unboxing video (and photos) first. Once it has
+  arrived, raise "Damaged product" or "Wrong product": we collect the item, check it, and refund 100%.
+  Don't promise the full refund before the team has checked the video.
+- Manual exchange (rare): only if the customer asks us to do the exchange ourselves instead of the
+  centre, offer a manual exchange for a ₹198 fee: we collect the item, check it, and send the new size.
+  When they agree, call exchange_fee_link and put the link in your reply. Don't raise a ticket yourself:
+  once they pay, the exchange ticket is raised by itself with the payment and they get its number. If they
+  say they have paid, look at "Exchange fee links" below: if it shows Paid, the ticket is on its way or
+  raised; if not, ask for the Razorpay payment ID or a screenshot of the payment, then ask_team.
+- Cancel and refund: follow the lessons on cancellations. When it is agreed, raise "Cancel & Refund"
+  with the refund agreed (e.g. "Cancel and refund 50% as per policy"). The order is put on hold by
+  itself so it doesn't ship meanwhile; it can't be cancelled once Delhivery has picked it up.
+- When a customer asks us to hold their order (they are away, or an address is being sorted out), raise
+  "Hold order" with why and until when; the order is held by itself.
+- Set top_priority on raise_ticket when the customer is very angry, or the delay is on our side and
+  they have already waited long, so the team does it first.`;
+
+/** The ₹198 manual exchange: a payment link, sent in the reply. Shared with the email agent. */
+const EXCHANGE_FEE_TOOL = {
+    name: 'exchange_fee_link',
+    description: 'A Razorpay payment link for the ₹198 manual exchange fee, only after the customer agreed to a manual exchange. Once they pay, the exchange ticket is raised by itself with the payment. Returns the link to put in your reply.',
+    input_schema: {
+        type: 'object',
+        properties: {
+            order_number: { type: 'string' },
+            request: { type: 'string', description: 'What is exchanged, e.g. "Size exchange: Doom Legacy Tee (Black) from M to S"' },
+        },
+        required: ['order_number', 'request'],
+    },
+};
+
+/** After a ticket is raised: top priority, and the hold its reason asks for. Returns what to tell the agent. */
+async function afterTicket(id, ref, reason, num, input) {
+    const out = {};
+    if (input.top_priority) {
+        await db.query(`UPDATE support_tickets SET priority = 'Top' WHERE id = $1`, [id]);
+        out.priority = 'top';
+    }
+    if (HOLDING_REASONS.includes(reason)) {
+        const r = await require('./shipping').holdOrders([num], `${ref}: ${reason}`, 'ai-agent').catch(err => ({ held: [], errors: [{ error: err.message }] }));
+        out.order_held = r.held.length ? 'yes' : `no: the order ${r.errors[0]?.error || 'could not be held'}`;
+        if (!r.held.length) await db.query(`UPDATE support_tickets SET ops_note = $2 WHERE id = $1`, [id, `Could not hold ${num}: ${r.errors[0]?.error || 'unknown'}`]);
+    }
+    return out;
+}
+
 const STABLE = `You are the Normless team's AI agent on WhatsApp. Normless (normless.store) is an Indian
 streetwear brand: oversized tees, hoodies, joggers and accessories. The chats you get are the ones the
 Normless bot could not handle and handed to the team: late orders, tracking problems, cancellations,
@@ -188,11 +245,10 @@ How you work:
   a lesson or the team's answer says you can. Never say you have done any of these.
 - Raise a support ticket with raise_ticket for: an address change before dispatch (get the full new
   address with pincode), a size change before dispatch (reason "Size Change", with the new size), a
-  size exchange after delivery (reason "Initiate Replacement": item unworn, unwashed, tags on; get the
-  size they want), a damaged or wrong item (after photos or the unboxing video arrived), a failed
-  delivery. The customer is sent the ticket number automatically, so your reply only needs to say the
-  team is on it and will update them here.
-- Once Delhivery has picked the parcel up from our warehouse (tracking shows it picked up, in transit,
+  damaged or wrong item (after the unboxing video arrived), a failed delivery, a cancellation agreed
+  with the customer, a hold. The customer is sent the ticket number automatically, so your reply only
+  needs to say the team is on it and will update them here.
+${AFTER_DELIVERY}- Once Delhivery has picked the parcel up from our warehouse (tracking shows it picked up, in transit,
   out for delivery or later; check with track_shipment when you can't tell), its pincode and state can't
   be changed. Say so plainly: the parcel goes to the original address, and if nobody takes it there it
   comes back to us as an RTO (return to origin). Don't raise a ticket for a new pincode or state then.
@@ -247,10 +303,12 @@ const TOOLS = [
                 order_number: { type: 'string' },
                 reason: { type: 'string', enum: Object.keys(TICKET_REASONS) },
                 request: { type: 'string', description: 'Exactly what the team must do, with the details: e.g. "Change size of Venom Hoodie from L to XL" or the full new address' },
+                top_priority: { type: 'boolean', description: 'True when the customer is very angry, or the delay is ours and they have waited long' },
             },
             required: ['order_number', 'reason', 'request'],
         },
     },
+    EXCHANGE_FEE_TOOL,
     {
         name: 'ask_team',
         description: "Ask the Normless team when you don't know or it isn't yours to decide. The customer is told we are checking; the team's answer comes back to you. Write nothing else in the same reply.",
@@ -315,12 +373,14 @@ async function contextFor(c, settings) {
         ref: `CS-${String(t.ref_no).padStart(4, '0')}`, order: t.order_number, reason: t.reason, raised: t.raised_on,
         status: t.status, progress: t.progress, done_by_team: t.action || null,
     }));
+    const fees = c.id ? await exchangeFee.forCustomer({ wa_conversation_id: c.id, orders: orders.map(o => o.order) }).catch(() => []) : [];
     return [
         `Now: ${istNow()} (India). Team hours ${clock(settings.hours.start)} to ${clock(settings.hours.end)}; the team is ${isOpen(settings.hours) ? 'online' : 'offline'} now.`,
         `Customer: ${firstName(c) || 'name unknown'}${c.phone ? `, WhatsApp +${c.phone}` : ''}.${assignee ? ` The chat is assigned to ${assignee} on the team.` : ''}`,
         `Their orders: ${orders.length ? JSON.stringify(orders) : 'none found by this phone number; ask for the order number if they mention one.'}`,
         live.length ? `Live Delhivery tracking, checked just now (no need to call track_shipment again for these): ${JSON.stringify(live)}` : null,
         `Their support tickets: ${tickets.length ? JSON.stringify(tickets) : 'none.'}`,
+        `Exchange fee links (₹198 manual exchange), checked with Razorpay just now: ${fees.length ? JSON.stringify(fees) : 'none sent.'}`,
         notes.length ? `Team notes on this chat (newest first):\n${notes.map(n => `- ${n.author}: ${String(n.body).slice(0, 500)}`).join('\n')}` : null,
         answers.length ? `The team already answered your questions on this chat (use these):\n${answers.map(a => `- Q: ${a.question}\n  A (${String(a.answered_by || '').split('@')[0]}): ${a.answer}`).join('\n')}` : null,
     ].filter(Boolean).join('\n\n');
@@ -398,6 +458,7 @@ async function raiseTicket(c, input, actor) {
         customer_name: c.customer_name || String(c.profile_name || '').replace(/^~/, '') || null,
         customer_phone: c.phone, customer_email: order?.email || null, wa_conversation_id: c.id,
     });
+    const extra = await afterTicket(id, `CS-${String((await db.query('SELECT ref_no FROM support_tickets WHERE id = $1', [id])).rows[0].ref_no).padStart(4, '0')}`, reason, num, input);
     const row = (await db.query(
         `SELECT id, ref_no, order_number, customer_name, customer_phone, reason, nature, request, wa_conversation_id FROM support_tickets WHERE id = $1`, [id])).rows[0];
     const ref = `CS-${String(row.ref_no).padStart(4, '0')}`;
@@ -405,7 +466,7 @@ async function raiseTicket(c, input, actor) {
     await log(c.id, 'ticket', `AI agent raised ${ref} (${reason}) for ${num}${photos ? ` with ${photos} photo${photos > 1 ? 's' : ''} from the chat` : ''}`);
     let told = null;
     try { told = await require('./nl-automations').ticketRaised(row); } catch (err) { told = { status: 'failed', error: err.message }; }
-    return { raised: ref, customer_told: told?.status === 'sent' || told?.status === 'queued' ? 'yes, automatically' : 'no — mention the ticket number in your reply' };
+    return { raised: ref, ...extra, customer_told: told?.status === 'sent' || told?.status === 'queued' ? 'yes, automatically' : 'no — mention the ticket number in your reply' };
 }
 
 /* ── Doing things in the chat ──────────────────────────────────────────────────────────────── */
@@ -523,7 +584,14 @@ async function think({ c, lineId, settings, task = null, turns = null, dry = fal
             try {
                 if (call.name === 'track_shipment') result = await trackShipment(call.input?.order_number);
                 else if (call.name === 'find_orders') result = dry ? { orders: [], message: 'Test: no real orders.' } : await shop.ordersByContact(call.input || {});
-                else if (call.name === 'raise_ticket') {
+                else if (call.name === 'exchange_fee_link') {
+                    result = dry ? { link: 'https://rzp.io/test', amount: exchangeFee.FEE, note: 'Test: no link made.' }
+                        : await exchangeFee.linkFor({
+                            ...(call.input || {}), wa_conversation_id: c.id, customer_phone: c.phone,
+                            customer_name: c.customer_name || String(c.profile_name || '').replace(/^~/, '') || null,
+                        });
+                    if (result?.link) did.push(`exchange fee link for ${call.input?.order_number}`);
+                } else if (call.name === 'raise_ticket') {
                     result = dry ? { raised: 'CS-TEST', customer_told: 'yes, automatically (test: nothing raised)' }
                         : await raiseTicket(c, call.input || {}, 'ai-agent');
                 } else {
@@ -824,4 +892,4 @@ async function tryIt(turns) {
     });
 }
 
-module.exports = { run, schedule, sweep, start, answer, tryIt, status, trackShipment, inboxSql, inboxStates, ticketUpdated, ticketNews, idleClose, mediaArrived, requestFor, createTicket, MODELS, TICKET_REASONS, STABLE, playbook };
+module.exports = { run, schedule, sweep, start, answer, tryIt, status, trackShipment, inboxSql, inboxStates, ticketUpdated, ticketNews, idleClose, mediaArrived, requestFor, createTicket, afterTicket, EXCHANGE_FEE_TOOL, AFTER_DELIVERY, MODELS, TICKET_REASONS, STABLE, playbook };

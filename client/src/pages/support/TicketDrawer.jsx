@@ -90,6 +90,33 @@ export default function TicketDrawer({ ticket, options, onClose, onSaved, onDele
   const [uploading, setUploading] = useState(false)
   const [viewing, setViewing] = useState(null)   // index into the thumbnails
   const setF = (patch) => setForm(f => ({ ...f, ...patch }))
+  const canHold = canShip || canEdit
+  const [holdBusy, setHoldBusy] = useState(false)
+  // Hold or release the order itself (Shipping's hold): it can't get an AWB or be packed meanwhile.
+  const holdOrder = async (on) => {
+    const num = lookup?.order?.order_number
+    if (!num) return
+    let reason = ''
+    if (on) {
+      reason = await toast.prompt({
+        title: `Hold ${num}?`,
+        message: 'It leaves Pending AWB, can\'t get an AWB, and the packing bench refuses it until someone releases it.',
+        input: { label: 'Why', placeholder: 'e.g. customer travelling, address being sorted out' },
+        confirmLabel: 'Hold the order',
+      })
+      if (reason == null) return
+    } else if (!await toast.confirm({ title: `Release ${num}?`, message: 'It goes back to Pending AWB and can be packed and shipped.', confirmLabel: 'Release' })) return
+    setHoldBusy(true)
+    const r = await apiFetch(`/api/shipping/${on ? 'hold' : 'release'}`, {
+      method: 'POST', body: JSON.stringify({ order_numbers: [num], ...(on ? { reason: `${refOf(ticket)}: ${reason}` } : {}) }),
+    })
+    setHoldBusy(false)
+    if (!r || r.error) return toast.error(r?.error || 'That didn\'t work')
+    if (on && !r.held?.length) return toast.error(`${num} ${r.errors?.[0]?.error || 'could not be held'}`)
+    if (!on && r.still_held_in_shopify?.length) toast.warning(`${num} is still on hold in Shopify`)
+    else toast.success(on ? `${num} is on hold` : `${num} released`)
+    pull(true)
+  }
 
   const guard = useDirtyGuard({
     snapshot: { ...form },
@@ -241,6 +268,10 @@ export default function TicketDrawer({ ticket, options, onClose, onSaved, onDele
     }
     toast.success(isNew ? `${refOf(res.ticket)} raised` : `${refOf(res.ticket)} saved`)
     // The server tells the customer the ticket number on WhatsApp; say when that did not happen.
+    if (isNew && res.held) {
+      if (res.held.held?.length) toast.success(`${res.held.held[0]} is on hold until someone releases it`)
+      else toast.warning(`The order wasn't held: ${res.held.errors?.[0]?.error || 'unknown'}`)
+    }
     if (isNew && res.notified?.status === 'sent') toast.success('The customer was sent the ticket number on WhatsApp')
     else if (isNew && ['failed', 'skipped'].includes(res.notified?.status)) toast.error(`The customer wasn’t messaged: ${res.notified.error}`)
     guard.reset(asForm(res.ticket))
@@ -304,6 +335,18 @@ export default function TicketDrawer({ ticket, options, onClose, onSaved, onDele
                 <div className="packed-sub">
                   {(lookup.order.items || []).map(i => `${i.title}${i.variant ? ` (${i.variant})` : ''} ×${i.quantity}`).join(', ') || 'No items recorded'}
                 </div>
+                {lookup.order.hold ? (
+                  <div className="support-hold">
+                    <span className="status-badge on-hold">{lookup.order.hold.by_team ? 'On hold' : 'On hold in Shopify'}</span>
+                    <span className="packed-sub" style={{ margin: 0 }}>{lookup.order.hold.reason || ''}{lookup.order.hold.held_by ? ` · ${String(lookup.order.hold.held_by).split('@')[0]}` : ''}</span>
+                    {canHold && lookup.order.hold.by_team && <button type="button" className="mini-btn" disabled={holdBusy} onClick={() => holdOrder(false)}>Release</button>}
+                  </div>
+                ) : canHold && !isNew && !['CANCELLED', 'FULFILLED'].includes(String(lookup.order.fulfillment_status || '').toUpperCase()) && (
+                  <div className="support-hold">
+                    <button type="button" className="mini-btn" disabled={holdBusy} onClick={() => holdOrder(true)}><Icon name="clock" size={13} /> Hold this order</button>
+                    <span className="packed-sub" style={{ margin: 0 }}>Stops it getting an AWB or being packed until released.</span>
+                  </div>
+                )}
                 {lookup.history?.filter(h => h.id !== ticket?.id).length > 0 && (
                   <div className="support-order-prior">
                     {lookup.history.filter(h => h.id !== ticket?.id).length} earlier ticket(s) on this order:{' '}
@@ -447,6 +490,11 @@ export default function TicketDrawer({ ticket, options, onClose, onSaved, onDele
             </div>
 
             <div className="form-section">Where it stands</div>
+            <label className="support-priority">
+              <input type="checkbox" checked={form.priority === 'Top'} disabled={ro}
+                onChange={e => setF({ priority: e.target.checked ? 'Top' : '' })} />
+              <span><b>Top priority</b> <span className="packed-sub" style={{ margin: 0, maxWidth: "none" }}>an angry customer, or a delay on our side: listed first and done first</span></span>
+            </label>
             <div className="form-row">
               <div className="input-group">
                 <label>Ticket</label>

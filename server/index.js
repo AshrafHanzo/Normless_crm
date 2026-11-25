@@ -275,6 +275,9 @@ app.post('/api/crewfit/webhooks/razorpay', async (req, res) => {
         if (!linkId) return res.json({ received: true });
         const rzpPaymentId = event.payload?.payment?.entity?.id;
 
+        // Normless's ₹198 manual-exchange fee links (same Razorpay account): raise the exchange ticket.
+        if (await require('./services/exchange-fee').fromWebhook(linkId, rzpPaymentId)) return res.json({ received: true });
+
         // Order payments (advance / balance / custom) — settling one moves the order's
         // payment_status and, where relevant, its pipeline status.
         const pr = await db.query('SELECT * FROM crewfit_payments WHERE razorpay_payment_link_id = $1', [linkId]);
@@ -2171,6 +2174,25 @@ async function ensureSupportSchema() {
             ALTER TABLE support_tickets ADD COLUMN IF NOT EXISTS wa_conversation_id INTEGER;
             -- The contact@normless.store email thread a ticket was raised from.
             ALTER TABLE support_tickets ADD COLUMN IF NOT EXISTS email_thread_id INTEGER;
+            -- 'Top' for a customer who must not wait any longer (angry, or the delay is ours).
+            ALTER TABLE support_tickets ADD COLUMN IF NOT EXISTS priority TEXT;
+            -- The ₹198 manual-exchange fee: a Razorpay link the AI agent sends; once it is paid the
+            -- exchange ticket is raised with the payment on it.
+            CREATE TABLE IF NOT EXISTS nl_exchange_fees (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                order_number TEXT NOT NULL,
+                request TEXT NOT NULL,
+                amount NUMERIC(10,2) NOT NULL,
+                customer_name TEXT, customer_phone TEXT, customer_email TEXT,
+                wa_conversation_id INTEGER, email_thread_id INTEGER,
+                razorpay_payment_link_id TEXT UNIQUE, razorpay_short_url TEXT, razorpay_mode TEXT,
+                status TEXT NOT NULL DEFAULT 'Created',
+                razorpay_payment_id TEXT, paid_at TIMESTAMPTZ,
+                ticket_id INTEGER, created_by TEXT,
+                last_checked_at TIMESTAMPTZ,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            );
+            CREATE INDEX IF NOT EXISTS nl_exchange_fees_order_idx ON nl_exchange_fees (order_number);
 
             -- contact@normless.store, read over IMAP and answered by the AI agent or the team.
             -- One row per Gmail conversation (X-GM-THRID), so a reply lands in its thread.
@@ -2616,6 +2638,7 @@ app.listen(PORT, async () => {
     // The Normless AI agent looks for chats waiting on the team every few minutes (when it's on).
     require('./services/nl-agent').start();
     require('./services/email-agent').start();
+    require('./services/exchange-fee').start();
     // WhatsApp updates to vendors, after their short hold.
     require('./services/vendor-wa').start();
     // Marketing broadcasts that were going when the server stopped carry on.

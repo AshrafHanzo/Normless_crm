@@ -17,6 +17,7 @@ const lines = require('./wa-line');
 const shop = require('./nl-shop');
 const bot = require('./nl-bot');
 const agent = require('./nl-agent');
+const exchangeFee = require('./exchange-fee');
 const inbox = require('./email-inbox');
 const files = require('./support-files');
 const usage = require('./ai-usage');
@@ -71,10 +72,11 @@ How you work:
 - You cannot refund, cancel, discount, change an order, or promise a dispatch or delivery date unless a
   lesson or the team's answer says you can. Never say you have done any of these.
 - Raise a support ticket with raise_ticket for: an address change before dispatch (full new address with
-  pincode), a size change before dispatch ("Size Change", with the new size), a size exchange after
-  delivery ("Initiate Replacement": item unworn, unwashed, tags on; the size they want), a damaged or
-  wrong item (once photos are attached), a failed delivery. Photos attached to the thread go on the
-  ticket automatically. Give the customer the ticket number in your reply and say the team will update them.
+  pincode), a size change before dispatch ("Size Change", with the new size), a damaged or wrong item
+  (once the unboxing video or photos are attached), a failed delivery, a cancellation agreed with the
+  customer, a hold. Photos attached to the thread go on the ticket automatically. Give the customer the
+  ticket number in your reply and say the team will update them.
+${agent.AFTER_DELIVERY}
 - Once Delhivery has picked the parcel up from our warehouse (tracking shows it picked up, in transit,
   out for delivery or later; check with track_shipment when you can't tell), its pincode and state can't
   be changed. Say so plainly: the parcel goes to the original address, and if nobody takes it there it
@@ -125,10 +127,12 @@ const TOOLS = [
                 order_number: { type: 'string' },
                 reason: { type: 'string', enum: Object.keys(agent.TICKET_REASONS) },
                 request: { type: 'string', description: 'Exactly what the team must do, with the details' },
+                top_priority: { type: 'boolean', description: 'True when the customer is very angry, or the delay is ours and they have waited long' },
             },
             required: ['order_number', 'reason', 'request'],
         },
     },
+    agent.EXCHANGE_FEE_TOOL,
     {
         name: 'ask_team',
         description: "Ask the Normless team when you don't know or it isn't yours to decide. Write nothing else.",
@@ -172,6 +176,7 @@ async function contextFor(thread, settings) {
            FROM email_threads t JOIN email_messages m ON m.thread_id = t.id AND m.status <> 'failed'
           WHERE LOWER(t.customer_email) = $1 AND t.id <> $2 AND m.created_at > now() - INTERVAL '14 days'
           ORDER BY m.created_at DESC LIMIT 8`, [thread.customer_email, thread.id])).rows.reverse();
+    const fees = await exchangeFee.forCustomer({ email_thread_id: thread.id, orders: orders.map(o => o.order) }).catch(() => []);
     const ist = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
     return [
         `Now: ${ist} (India). Team hours ${clock(settings.hours.start)} to ${clock(settings.hours.end)}; the team is ${isOpen(settings.hours) ? 'online' : 'offline'} now.`,
@@ -179,6 +184,7 @@ async function contextFor(thread, settings) {
         `Orders placed with this email: ${orders.length ? JSON.stringify(orders) : 'none found. Ask for the order number, or the phone number they ordered with.'}`,
         live.length ? `Live Delhivery tracking, checked just now: ${JSON.stringify(live)}` : null,
         `Their support tickets: ${tickets.length ? JSON.stringify(tickets) : 'none.'}`,
+        `Exchange fee links (₹198 manual exchange), checked with Razorpay just now: ${fees.length ? JSON.stringify(fees) : 'none sent.'}`,
         others.length ? `Their other recent emails to us (separate threads; stay consistent with what we told them there):\n${others.map(o => `- [${o.subject}] ${o.direction === 'in' ? 'Customer' : o.sender_type === 'ai' ? 'We replied' : 'Team replied'}: ${String(o.body || '').replace(/\s+/g, ' ')}`).join('\n')}` : null,
     ].filter(Boolean).join('\n\n');
 }
@@ -217,7 +223,8 @@ async function raiseTicket(thread, input) {
     });
     const photos = await attachThreadPhotos(id, thread.id);
     const ref = `CS-${String((await db.query('SELECT ref_no FROM support_tickets WHERE id = $1', [id])).rows[0].ref_no).padStart(4, '0')}`;
-    return { raised: ref, photos_attached: photos, note: 'Give the customer this ticket number in your reply.' };
+    const extra = await agent.afterTicket(id, ref, reason, num, input);
+    return { raised: ref, photos_attached: photos, ...extra, note: 'Give the customer this ticket number in your reply.' };
 }
 
 /** The photos attached anywhere in a thread, onto a ticket. */
@@ -299,6 +306,12 @@ async function think({ thread, lineId, settings, task }) {
                 else if (call.name === 'find_orders') result = await shop.ordersByContact(input);
                 else if (call.name === 'lookup_order') result = await shop.orderByNumber({ phone: '' }, input.order_number, { email: thread.customer_email, pincode: input.pincode });
                 else if (call.name === 'raise_ticket') { result = await raiseTicket(thread, input); if (result.raised) did.push(`ticket ${result.raised}`); }
+                else if (call.name === 'exchange_fee_link') {
+                    const phone = (await db.query(`SELECT customer_phone FROM packed_orders WHERE order_number = $1 AND customer_phone IS NOT NULL LIMIT 1`,
+                        [`#${String(input.order_number || '').match(/\d{3,}/)?.[0] || ''}`])).rows[0]?.customer_phone || null;
+                    result = await exchangeFee.linkFor({ ...input, email_thread_id: thread.id, customer_name: thread.customer_name, customer_email: thread.customer_email, customer_phone: phone });
+                    if (result?.link) did.push(`exchange fee link for ${input.order_number}`);
+                }
                 else result = await bot.runTool(call.name, input, { conversation: { id: null }, dry: true, sent: [] });
             } catch (err) { result = { error: `That didn't work: ${err.message}` }; }
             const json = JSON.stringify(result);

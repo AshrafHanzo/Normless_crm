@@ -13,6 +13,7 @@ import { blankTicket, refOf, trackingFor } from './support/ticket'
 const day = (v) => (v ? new Date(v).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit' }) : '—')
 const TABS = [
   { key: 'open', label: 'Open' },
+  { key: 'top', label: 'Top priority' },
   { key: 'closed', label: 'Closed' },
   { key: 'all', label: 'All' },
 ]
@@ -141,6 +142,7 @@ export default function Support() {
             onClick={() => { setView(tab.key); t.resetPage() }}>
             {tab.label}
             {tab.key === 'open' && summary?.open > 0 && <span className="tab-badge">{summary.open}</span>}
+            {tab.key === 'top' && summary?.top > 0 && <span className="tab-badge">{summary.top}</span>}
           </button>
         ))}
       </div>
@@ -193,7 +195,8 @@ export default function Support() {
                   return (
                     <tr key={x.id} onClick={() => setTarget(x)} style={{ cursor: 'pointer' }}
                       className={stale ? 'support-row-stale' : undefined}>
-                      <td data-label="Ticket" className="cell-primary support-nowrap">{refOf(x)}</td>
+                      <td data-label="Ticket" className="cell-primary support-nowrap">{refOf(x)}
+                        {x.priority === 'Top' && x.status !== 'Closed' && <div><span className="status-badge cancelled" title="Do this one first">Top priority</span></div>}</td>
                       <td data-label="Order">
                         {x.order_number || '—'}
                         {/* Followed from the list without opening the ticket — the row click opens
