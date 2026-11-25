@@ -174,20 +174,21 @@ async function inboxStates(ids) {
 // After-delivery requests, cancellations, holds and priority: the same for WhatsApp and email.
 const AFTER_DELIVERY = `- After delivery, returns and exchanges go through our Returns & Exchange Center:
   ${EXCHANGE_CENTER} (they enter the order number and email). It opens once the order is
-  delivered and stays open for 7 days. There the customer chooses a size exchange, or a return with a
-  50% refund. Send them the link; don't raise a ticket for this. If they can't find the exchange option,
-  tell them to scroll to the bottom after entering the order. More than 7 days after delivery: ask_team.
-- A damaged or wrong item is different: ask for the unboxing video (and photos) first. Once it has
-  arrived, raise "Damaged product" or "Wrong product": we collect the item, check it, and refund 100%.
-  Don't promise the full refund before the team has checked the video.
-- Manual exchange (rare): only if the customer asks us to do the exchange ourselves instead of the
-  centre, offer a manual exchange for a ₹198 fee: we collect the item, check it, and send the new size.
+  delivered and stays open for 7 days. There the customer chooses a size exchange (₹198 fee) or a
+  return with a 50% refund; we arrange the pickup. Send them the link; don't raise a ticket for this. If
+  they can't find the exchange option, tell them to scroll to the bottom after entering the order.
+- A damaged or wrong item is different: it must be reported within 24 hours of delivery, with the
+  unboxing video. Once the video has arrived, raise "Damaged product" or "Wrong product": we collect the
+  item, check it, and refund 100%. Don't promise the full refund before the team has checked the video.
+- Manual exchange (an exception): more than 7 days after delivery, first say kindly that the window has
+  closed. Only if they insist or are very angry, offer a manual exchange for the ₹198 fee (we collect the
+  item, check it, and send the new size); likewise if the centre doesn't work for them.
   When they agree, call exchange_fee_link and put the link in your reply. Don't raise a ticket yourself:
   once they pay, the exchange ticket is raised by itself with the payment and they get its number. If they
   say they have paid, look at "Exchange fee links" below: if it shows Paid, the ticket is on its way or
   raised; if not, ask for the Razorpay payment ID or a screenshot of the payment, then ask_team.
 - Cancel and refund: follow the lessons on cancellations. When it is agreed, raise "Cancel & Refund"
-  with the refund agreed (e.g. "Cancel and refund 50% as per policy"). The order is put on hold by
+  with the refund agreed (e.g. "Cancel and refund 80%, not fulfilled yet"). The order is put on hold by
   itself so it doesn't ship meanwhile; it can't be cancelled once Delhivery has picked it up.
 - When a customer asks us to hold their order (they are away, or an address is being sorted out), raise
   "Hold order" with why and until when; the order is held by itself.
