@@ -237,6 +237,21 @@ function cartFacts(cart) {
 }
 
 /** The approved template an event is set to use, with what its parts need. */
+const rechecked = new Map();   // "line|name|language" → when Meta was last asked
+async function recheckTemplate(lineId, name, language) {
+    const key = `${lineId}|${name}|${language}`;
+    if (Date.now() - (rechecked.get(key) || 0) < 10 * 60 * 1000) return null;
+    rechecked.set(key, Date.now());
+    const line = ['normless', 'crewfit'].map(b => lines.get(b)).find(l => l?.id === lineId);
+    if (!line) return null;
+    const list = await lines.run(line, () => wa.fetchTemplates());
+    const m = list.find(x => x.name === name && x.language === language);
+    if (!m?.status) return null;
+    await db.query(`UPDATE wa_templates SET status = $4, synced_at = CURRENT_TIMESTAMP WHERE line_id = $1 AND name = $2 AND language = $3`,
+        [lineId, name, language, m.status]);
+    return m.status;
+}
+
 async function templateFor(lineId, key) {
     if (!key) return null;
     const [name, language] = key.split('|');
@@ -244,6 +259,12 @@ async function templateFor(lineId, key) {
         `SELECT name, language, category, status, body_text, variables, components FROM wa_templates WHERE line_id = $1 AND name = $2 AND language = $3`,
         [lineId, name, language])).rows[0];
     if (!t) return null;
+    // The stored status is only as fresh as the last template sync: a template approved at Meta
+    // since then would be refused here for no reason. Ask Meta again (at most every 10 minutes).
+    if (t.status !== 'APPROVED') {
+        const fresh = await recheckTemplate(lineId, name, language).catch(() => null);
+        if (fresh) t.status = fresh;
+    }
     const comps = safeJson(t.components, []);
     const header = comps.find(c => c.type === 'HEADER');
     const buttons = comps.find(c => c.type === 'BUTTONS')?.buttons || [];
