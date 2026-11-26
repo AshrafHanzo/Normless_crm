@@ -2177,6 +2177,10 @@ async function ensureSupportSchema() {
             ALTER TABLE support_tickets ADD COLUMN IF NOT EXISTS email_thread_id INTEGER;
             -- 'Top' for a customer who must not wait any longer (angry, or the delay is ours).
             ALTER TABLE support_tickets ADD COLUMN IF NOT EXISTS priority TEXT;
+            -- The last "Message to customer" the team sent from the ticket (passed on by WhatsApp/email).
+            ALTER TABLE support_tickets ADD COLUMN IF NOT EXISTS customer_message TEXT;
+            ALTER TABLE support_tickets ADD COLUMN IF NOT EXISTS customer_message_at TIMESTAMPTZ;
+            ALTER TABLE support_tickets ADD COLUMN IF NOT EXISTS customer_message_by TEXT;
             -- The ₹198 manual-exchange fee: a Razorpay link the AI agent sends; once it is paid the
             -- exchange ticket is raised with the payment on it.
             CREATE TABLE IF NOT EXISTS nl_exchange_fees (

@@ -247,7 +247,8 @@ How you work:
 - Raise a support ticket with raise_ticket for: an address change before dispatch (get the full new
   address with pincode), a size change before dispatch (reason "Size Change", with the new size), a
   damaged or wrong item (after the unboxing video arrived), a failed delivery, a cancellation agreed
-  with the customer, a hold. The customer is sent the ticket number automatically, so your reply only
+  with the customer, a hold the customer asked for (they want the order stopped; never for a customer who
+  wants it faster: that is not a hold). The customer is sent the ticket number automatically, so your reply only
   needs to say the team is on it and will update them here.
 ${AFTER_DELIVERY}- Once Delhivery has picked the parcel up from our warehouse (tracking shows it picked up, in transit,
   out for delivery or later; check with track_shipment when you can't tell), its pincode and state can't
@@ -266,6 +267,13 @@ ${AFTER_DELIVERY}- Once Delhivery has picked the parcel up from our warehouse (t
 
 How you write: like a real person on the Normless customer care team typing on WhatsApp. Short and
 warm, 1 to 4 short sentences, natural and specific to this customer, never templated or robotic.
+Sound like a person, not a script: vary how you start (not always "Hi <name>" or "Thanks for
+reaching out"), skip stock phrases ("I understand your frustration", "I apologise for any
+inconvenience", "rest assured", "kindly", "feel free to"), no em dashes, no lists, don't restate the
+customer's message back to them, and don't end every message with an offer to help further. Match
+the customer's register: if they write casually or in Hinglish, reply the same way; if they are
+formal, be a little more formal. Small natural touches are fine ("Got it", "Sure", "Give us a day").
+Never use emojis unless the customer does.
 Plain text, *single asterisks* for bold if needed, no headings, no bullet lists, paste links as plain
 URLs. Apologise once, sincerely, when we are late or wrong; don't grovel. Use the customer's first
 name when known. Write as "we" / "I" from the Normless team. Don't sign with a name and don't start
@@ -849,33 +857,86 @@ function ticketNews(before, after) {
 }
 
 /**
- * Somebody changed a support ticket. If the change is news to the customer (an action taken, work
- * started, resolved), they hear it on WhatsApp: written by the agent inside the 24-hour window,
- * else the approved "ticket update" template. Never throws.
+ * The team's plain note, rewritten as one or two warm, professional sentences for the customer
+ * (used where the WhatsApp template or a plain email carries it). Falls back to the note itself.
  */
-async function ticketUpdated(before, after) {
+async function polish(note, { ref, subject } = {}) {
+    const raw = String(note || '').replace(/\s+/g, ' ').trim();
+    if (!raw || !process.env.ANTHROPIC_API_KEY) return raw;
     try {
-        const news = ticketNews(before || {}, after || {});
+        const response = await anthropic().messages.create({
+            model: 'claude-haiku-5-5', max_tokens: 300,
+            system: `You turn a note from the Normless customer care team into the update a customer receives about support ticket ${ref || ''}${subject ? ` (${subject})` : ''}. Write one or two short, warm, professional sentences addressed to the customer, the way a person on the team would. Keep every fact and add none: no promises, dates, amounts or apologies the note doesn't have. No greeting, no sign-off, no emojis, no line breaks, no quotes. Output only the sentences.`,
+            messages: [{ role: 'user', content: raw.slice(0, 1000) }],
+        });
+        await usage.record('nl_agent', response, { ref: ref || null });
+        const out = response.content.filter(b => b.type === 'text').map(b => b.text).join(' ').replace(/\s+/g, ' ').trim();
+        return out && out.length <= 700 ? out : raw;
+    } catch (err) {
+        console.error('ticket note polish:', err.message);
+        return raw;
+    }
+}
+
+/** The ticket's update by email, on the thread it was raised from. */
+async function emailUpdate(after, { news, message, ref, subject }) {
+    if (!after.email_thread_id) return null;
+    try {
+        const ea = require('./email-agent');
+        const st = await ea.status();
+        if (st.on) {
+            return await ea.run(after.email_thread_id, {
+                task: `Support ticket ${ref} (${subject}) was just updated by the team. ${message ? `They wrote this for the customer: "${message}".` : `The update: ${news}.`} Write a short email telling the customer this update, with the ticket number. Keep every fact and don't promise anything beyond it.`,
+            });
+        }
+        const first = String(after.customer_name || '').trim().split(/\s+/)[0];
+        const line = message ? await polish(message, { ref, subject }) : `${news.charAt(0).toUpperCase()}${news.slice(1)}.`;
+        const body = `Hi ${first ? first.charAt(0).toUpperCase() + first.slice(1).toLowerCase() : 'there'},\n\nAn update on your ticket ${ref} (${subject}): ${line}\n\nIf you have any questions, just reply to this email.\n\nWarm regards,\nTeam Normless`;
+        await require('./email-inbox').reply(after.email_thread_id, body, { type: 'ai', user: 'ticket-update' });
+        return { emailed: true };
+    } catch (err) {
+        console.error('normless ticket update email:', err.message);
+        return { status: 'failed', error: err.message };
+    }
+}
+
+/**
+ * Somebody changed a support ticket, or wrote it a message for the customer (`message`). If it is
+ * news to the customer (an action taken, work started, resolved, or the team's own words), they
+ * hear it on WhatsApp — written by the agent inside the 24-hour window, else the approved "ticket
+ * update" template — and by email when the ticket came by email. Never throws.
+ */
+async function ticketUpdated(before, after, { message = null } = {}) {
+    const out = {};
+    try {
+        const news = message ? String(message).trim() : ticketNews(before || {}, after || {});
         if (!news) return null;
-        const line = lines.get('normless');
-        if (!line?.id) return null;
         const ref = `CS-${String(after.ref_no ?? 0).padStart(4, '0')}`;
+        const subject = `${String(after.reason || 'your request').toLowerCase()}${after.order_number ? ` on order ${after.order_number}` : ''}`;
+        out.email = await emailUpdate(after, { news, message, ref, subject });
+
+        const line = lines.get('normless');
+        if (!line?.id) return out;
         const conv = after.wa_conversation_id ? (await db.query(
             `SELECT c.id, c.last_inbound_at, c.ai_paused, c.status FROM wa_conversations c WHERE c.id = $1 AND c.line_id = $2`,
             [after.wa_conversation_id, line.id])).rows[0] : null;
-        const subject = `${String(after.reason || 'your request').toLowerCase()}${after.order_number ? ` on order ${after.order_number}` : ''}`;
         if (conv && wa.windowOpen(conv.last_inbound_at) && (await status(line.id)).on && !conv.ai_paused) {
             if (conv.status !== 'open') await db.query(`UPDATE wa_conversations SET status = 'open' WHERE id = $1`, [conv.id]);
-            await log(conv.id, 'ticket', `${ref} updated (${news}); the AI agent is telling the customer`);
-            return await run(conv.id, {
+            await log(conv.id, 'ticket', `${ref} updated (${message ? 'message from the team' : news}); the AI agent is telling the customer`);
+            out.whatsapp = await run(conv.id, {
                 force: true,
-                task: `Support ticket ${ref} (${subject}) was just updated by the team: ${news}.${after.request ? ` The request was: ${String(after.request).slice(0, 300)}.` : ''} Tell the customer this update in one or two friendly sentences, with the ticket number. Don't promise anything beyond it.`,
+                task: message
+                    ? `The team wrote this update for the customer about support ticket ${ref} (${subject}): "${message}". Pass it on in your own words: warm, professional, one to three short sentences, with the ticket number. Keep every fact and don't promise anything beyond it.`
+                    : `Support ticket ${ref} (${subject}) was just updated by the team: ${news}.${after.request ? ` The request was: ${String(after.request).slice(0, 300)}.` : ''} Tell the customer this update in one or two friendly sentences, with the ticket number. Don't promise anything beyond it.`,
             });
+            return out;
         }
-        return await require('./nl-automations').ticketUpdated?.(after, news) || null;
+        const words = message ? await polish(message, { ref, subject }) : news;
+        out.whatsapp = await require('./nl-automations').ticketUpdated?.(after, words) || null;
+        return out;
     } catch (err) {
         console.error('normless ticket update message:', err.message);
-        return { status: 'failed', error: err.message };
+        return { ...out, status: 'failed', error: err.message };
     }
 }
 

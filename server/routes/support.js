@@ -125,7 +125,8 @@ const SORTS = {
 const AGING = `(COALESCE(resolved_on, CURRENT_DATE) - raised_on)`;
 const FIELDS = `id, ref_no, order_number, shopify_order_id, customer_name, customer_phone,
                 customer_email, source, nature, reason, payment_status, request, status, progress, priority,
-                action, ops_note, forward_awb, return_awb, assigned_to, images, wa_conversation_id,
+                action, ops_note, forward_awb, return_awb, assigned_to, images, wa_conversation_id, email_thread_id,
+                customer_message, customer_message_at, customer_message_by,
                 TO_CHAR(raised_on,'YYYY-MM-DD') AS raised_on,
                 TO_CHAR(resolved_on,'YYYY-MM-DD') AS resolved_on,
                 created_by, created_at, updated_at, ${AGING} AS aging`;
@@ -357,6 +358,28 @@ router.post('/tickets', canEdit, async (req, res) => {
  * Closing stamps the day it was resolved and reopening clears it, so the aging on a reopened
  * ticket starts counting again instead of staying frozen at the day somebody closed it early.
  */
+/**
+ * POST /tickets/:id/customer-message { text } — the team writes an update for the customer in
+ * plain words; it reaches them professionally worded on WhatsApp (and by email for a ticket raised
+ * by email). Waits for the sends, so the team sees how it went.
+ */
+router.post('/tickets/:id/customer-message', canEdit, async (req, res) => {
+    try {
+        const text = String(req.body?.text || '').trim();
+        if (text.length < 3) return res.status(400).json({ error: 'Write the message first' });
+        if (text.length > 1000) return res.status(400).json({ error: 'Keep it under 1000 characters' });
+        const row = (await db.query(
+            `UPDATE support_tickets SET customer_message = $2, customer_message_at = CURRENT_TIMESTAMP, customer_message_by = $3, updated_at = CURRENT_TIMESTAMP
+              WHERE id = $1 RETURNING ${FIELDS}`, [req.params.id, text, req.user?.username || null])).rows[0];
+        if (!row) return res.status(404).json({ error: 'Ticket not found' });
+        const sent = await require('../services/nl-agent').ticketUpdated(row, row, { message: text });
+        res.json({ ticket: hydrate(row), sent });
+    } catch (err) {
+        console.error('support customer message error:', err);
+        res.status(500).json({ error: 'Could not send the message' });
+    }
+});
+
 router.patch('/tickets/:id', canEdit, async (req, res) => {
     try {
         const id = parseInt(req.params.id, 10) || 0;

@@ -78,6 +78,28 @@ export default function TicketDrawer({ ticket, options, onClose, onSaved, onDele
   const [changeBusy, setChangeBusy] = useState(false)
   const [orderShip, setOrderShip] = useState(undefined) // the order's own parcel: undefined = not looked up
   const isNew = !ticket?.id
+  // "Message to customer": the team's plain words, passed on professionally by WhatsApp / email.
+  const [msg, setMsg] = useState('')
+  const [msgBusy, setMsgBusy] = useState(false)
+  const [lastMsg, setLastMsg] = useState(() => (ticket?.customer_message ? { text: ticket.customer_message, at: ticket.customer_message_at, by: ticket.customer_message_by } : null))
+  const sendMsg = async () => {
+    const text = msg.trim()
+    if (text.length < 3 || msgBusy) return
+    setMsgBusy(true)
+    const r = await apiFetch(`/api/support/tickets/${ticket.id}/customer-message`, { method: 'POST', body: JSON.stringify({ text }) })
+    setMsgBusy(false)
+    if (!r || r.error) return toast.error(r?.error || 'Could not send the message')
+    const wa = r.sent?.whatsapp, em = r.sent?.email
+    const how = [
+      wa && (wa.replied || wa.status === 'sent' || wa.id) ? 'WhatsApp' : null,
+      em && (em.replied || em.emailed) ? 'email' : null,
+    ].filter(Boolean)
+    const problem = [wa?.error, wa?.skipped, wa?.asked && 'the agent asked the team instead', em?.error, em?.skipped].filter(Boolean)[0]
+    if (how.length) toast.success(`Sent to the customer by ${how.join(' and ')}`)
+    else toast.info(problem ? `Saved, but not sent: ${problem}` : 'Saved. The customer gets it on WhatsApp or email when one is linked to this ticket')
+    setLastMsg({ text, at: new Date().toISOString(), by: user?.username })
+    setMsg('')
+  }
 
   const [form, setForm] = useState(() => asForm(ticket?.id ? ticket : { ...blankTicket(), ...ticket }))
   const [busy, setBusy] = useState(false)
@@ -441,6 +463,23 @@ export default function TicketDrawer({ ticket, options, onClose, onSaved, onDele
                 link={trackingFor(form.return_awb, null)} status={shipping?.return}
                 onChange={e => setF({ return_awb: e.target.value })} />
             </div>
+            {canEdit && !isNew && (
+              <section className="ship-card" style={{ margin: 0 }}>
+                <div><h3 style={{ fontSize: 14, margin: 0 }}>Message to customer</h3>
+                  <p className="packed-sub" style={{ maxWidth: 'none', margin: '2px 0 0' }}>
+                    Write the update in plain words. It reaches the customer professionally worded, with the ticket number:
+                    on WhatsApp{ticket?.email_thread_id ? ' and by email' : ''}.
+                  </p></div>
+                <textarea className="input" rows={3} value={msg} maxLength={1000} disabled={msgBusy}
+                  placeholder="e.g. replacement hoodie packed, goes out with tomorrow's pickup"
+                  onChange={e => setMsg(e.target.value)} />
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                  <button type="button" className="btn btn-primary btn-sm" disabled={msgBusy || msg.trim().length < 3} onClick={sendMsg}>
+                    {msgBusy ? 'Sending…' : 'Send to customer'}</button>
+                  {lastMsg && <span className="packed-sub" style={{ margin: 0 }}>Last sent {new Date(lastMsg.at).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: 'numeric', minute: '2-digit' })}{lastMsg.by ? ` by ${String(lastMsg.by).split('@')[0]}` : ''}: “{lastMsg.text}”</span>}
+                </div>
+              </section>
+            )}
             {(canShip || canEdit) && !isNew && form.order_number && (
               <section className="ship-card" style={{ margin: 0 }}>
                 <div className="ship-card-head">
