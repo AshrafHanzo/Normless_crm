@@ -1450,9 +1450,22 @@ async function editOne(id, fields, actor) {
 }
 
 /** Book a pickup for everything at our location still waiting. */
-async function bookPickup({ date, time, count } = {}, actor) {
+/**
+ * Book a Delhivery pickup at the warehouse. `awbs` (optional) are the parcels it is for, picked on
+ * Shipping → Ready to ship: Delhivery books pickups per warehouse with a parcel count, not per AWB,
+ * so they set the count and are recorded with the booking, then re-checked with Delhivery so their
+ * new status (Ready for pickup) shows at once rather than at the next sync.
+ */
+async function bookPickup({ date, time, count, awbs: picked } = {}, actor) {
     const s = await getSettings();
-    const waiting = (await db.query(
+    const chosen = Array.isArray(picked) ? [...new Set(picked.map(String).filter(a => /^\d{6,20}$/.test(a)))] : [];
+    if (Array.isArray(picked) && !chosen.length) throw Object.assign(new Error('Choose the parcels for the pickup'), { status: 400 });
+    if (chosen.length) {
+        const ok = (await db.query(`SELECT awb FROM shipments WHERE awb = ANY($1) AND bucket = 'waiting_pickup'`, [chosen])).rows.map(r => r.awb);
+        const gone = chosen.filter(a => !ok.includes(a));
+        if (gone.length) throw Object.assign(new Error(`${gone.length === 1 ? `AWB ${gone[0]} is` : `${gone.length} of them are`} no longer waiting for pickup; refresh the list`), { status: 400 });
+    }
+    const waiting = chosen.length ? chosen : (await db.query(
         `SELECT awb FROM shipments WHERE bucket = 'waiting_pickup' AND COALESCE(pickup_location, $1) = $1`, [s.pickup_location])).rows.map(r => r.awb);
     const n = Math.max(1, parseInt(count, 10) || waiting.length || 1);
     const day = /^\d{4}-\d{2}-\d{2}$/.test(date || '') ? date : new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
@@ -1470,8 +1483,19 @@ async function bookPickup({ date, time, count } = {}, actor) {
         `INSERT INTO shipping_pickups (pickup_id, pickup_date, pickup_time, location, expected_count, awbs, response, created_by)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
         [pickupId, day, at, s.pickup_location, n, waiting, JSON.stringify(r || {}), actor || null])).rows[0];
-    await finishJob(jobId, { ok: 1, summary: `Pickup ${pickupId || '(no id returned)'} booked for ${day} ${at.slice(0, 5)}` });
-    return row;
+    // Ask Delhivery straight away where the chosen parcels now stand.
+    let moved = null;
+    if (chosen.length) {
+        moved = 0;
+        try {
+            for (const S of await dlv.track(chosen)) {
+                const t = await applyTracking(S);
+                if (t?.was && t.row && t.was.status_code !== t.row.status_code) moved++;
+            }
+        } catch { moved = null; }
+    }
+    await finishJob(jobId, { ok: 1, summary: `Pickup ${pickupId || '(no id returned)'} booked for ${day} ${at.slice(0, 5)}${chosen.length ? ` · ${chosen.length} chosen parcel${chosen.length === 1 ? '' : 's'}` : ''}` });
+    return { ...row, chosen: chosen.length, moved };
 }
 
 /* ───────────────────────────── worker ───────────────────────────── */

@@ -1452,6 +1452,7 @@ async function ensureInventorySchema() {
             -- offering pieces to orders that are never going out.
             ALTER TABLE orders ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMP;
             ALTER TABLE orders ADD COLUMN IF NOT EXISTS on_hold BOOLEAN DEFAULT false;
+            ALTER TABLE orders ADD COLUMN IF NOT EXISTS tags TEXT;
             -- on_hold is what everything checks: Shopify's hold OR the team's own. The sync writes
             -- shopify_hold and recomputes on_hold, so a hold the team placed survives every sync.
             ALTER TABLE orders ADD COLUMN IF NOT EXISTS shopify_hold BOOLEAN;

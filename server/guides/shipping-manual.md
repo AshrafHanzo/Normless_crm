@@ -194,6 +194,7 @@ Both show where each parcel is, from the CRM's Delhivery tracking, and keep thei
 - The **Pickups** tab lists every parcel waiting at the warehouse, oldest first, with Delhivery's last word on it. "Not ready when Delhivery came" means the pickup person found it unpacked: these are the next to be cancelled.
 - **Book pickup** asks Delhivery to come at the pickup time in Settings, for the number of parcels waiting. One booking a day is enough. If Delhivery runs a daily pickup for our account already, you don't need to book.
 - **Automatic pickup** (Settings → Automation) books it for you between 10 AM and 4 PM when parcels are waiting and none is booked yet.
+- **From Ready to ship:** tick the parcels and press **Move N to Ready for pickup**, choose the date and time, and **Book pickup**. Delhivery books pickups for the whole warehouse with a parcel count (not one by one), then lists the parcels as Ready for pickup. If a pickup is already booked for that day, Delhivery may refuse a second one; the parcels then go with the booked pickup.
 
 **Failed deliveries**
 
@@ -221,8 +222,9 @@ After about three failed attempts Delhivery sends it back by itself: **RTO in tr
 | --- | --- |
 | Manifested (from, to) | Parcels whose AWB was made in a date range |
 | Order received (from, to) | Orders placed in a date range |
-| Product | One product, for example Dr Doom Hoodie |
-| Colour, Size | Taken from the variant ("Green / XL"): every order with that colour or size |
+| Products | One or several products, for example Dr Doom Hoodie. Only products in the list you are looking at are offered |
+| Order tags | Shopify order tags (magic, upi, exchange order…), one or several, with how many orders carry each. Tags also show under each order |
+| Colour, Size | Taken from the variant ("Green / XL"): every order with that colour or size. Only those in the current list are offered |
 | COD and prepaid | Payment type |
 | Packed or not | On Pending AWB: only packed orders, or only unpacked |
 

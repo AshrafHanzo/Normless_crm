@@ -163,7 +163,7 @@ function orderPhones(o) {
  */
 async function fetchAllOrders() {
     const allOrders = [];
-    let url = `${REST_BASE}/orders.json?status=any&limit=250&fields=id,name,created_at,total_price,currency,financial_status,fulfillment_status,cancelled_at,customer,line_items,phone,email,shipping_address,billing_address`;
+    let url = `${REST_BASE}/orders.json?status=any&limit=250&fields=id,name,created_at,total_price,currency,financial_status,fulfillment_status,cancelled_at,customer,line_items,phone,email,shipping_address,billing_address,tags`;
 
     while (url) {
         const response = await fetch(url, {
@@ -187,6 +187,8 @@ async function fetchAllOrders() {
             fulfillment_status: (o.fulfillment_status || 'unfulfilled').toUpperCase(),
             // A cancelled order is never shipping, so nothing should be reserved or offered for it.
             cancelled_at: o.cancelled_at || null,
+            // Shopify's order tags ("magic, upi"), for the Shipping filters.
+            tags: String(o.tags || '').split(',').map(t => t.trim()).filter(Boolean).join(', '),
             phones: orderPhones(o),
             email: String(o.email || o.customer?.email || '').trim().toLowerCase() || null,
             line_items_json: JSON.stringify((o.line_items || []).map(li => ({

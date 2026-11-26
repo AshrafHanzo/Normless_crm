@@ -130,6 +130,14 @@ function itemFilter(q, vals, fallbackDesc = null) {
     if (fallbackDesc && products.length) { vals.push(products.map(p => `%${p}%`)); return `(${inOrder} OR (o.id IS NULL AND ${fallbackDesc} ILIKE ANY($${vals.length})))`; }
     return inOrder;
 }
+// Shopify order tags, any of several ("magic|upi"), compared without case.
+const TAGS_OF = `regexp_split_to_table(COALESCE(o.tags, ''), '\\s*,\\s*')`;
+function tagFilter(q, vals) {
+    const tags = String(q.tags || '').split('|').map(x => x.trim().toLowerCase()).filter(Boolean);
+    if (!tags.length) return null;
+    vals.push(tags);
+    return `EXISTS (SELECT 1 FROM ${TAGS_OF} tg WHERE LOWER(tg) = ANY($${vals.length}))`;
+}
 function dateRange(col, from, to, vals, where) {
     if (isDay(from)) { vals.push(from); where.push(`${col} >= $${vals.length}::date`); }
     if (isDay(to)) { vals.push(to); where.push(`${col} < $${vals.length}::date + 1`); }
@@ -157,6 +165,8 @@ function shipmentFilter(q) {
     if (q.source === 'manual' || q.source === 'shopify') { vals.push(q.source); where.push(`COALESCE(s.source, 'shopify') = $${vals.length}`); }
     dateRange(`COALESCE(s.manifested_at, s.created_at)`, q.manifested_from, q.manifested_to, vals, where);
     dateRange('o.created_at', q.ordered_from, q.ordered_to, vals, where);
+    const tagged = tagFilter(q, vals);
+    if (tagged) where.push(tagged);
     const items = itemFilter(q, vals, 's.products_desc');
     if (items) where.push(items);
     const term = String(q.q || '').trim();
@@ -190,6 +200,8 @@ function pendingFilter(q) {
     dateRange('o.created_at', q.ordered_from, q.ordered_to, vals, extra);
     const items = itemFilter(q, vals);
     if (items) extra.push(items);
+    const tagged = tagFilter(q, vals);
+    if (tagged) extra.push(tagged);
     if (extra.length) where += ` AND ${extra.join(' AND ')}`;
     return { vals, where };
 }
@@ -294,18 +306,41 @@ router.get('/overview', async (req, res) => {
 });
 
 /** GET /filters — what the product, colour and size filters can offer (orders of the last 6 months). */
+/**
+ * GET /filters?list=pending|shipments&… — the products, colours, sizes and order tags found in the
+ * list being looked at (its tab, search, dates and payment), not the whole catalogue. The list's
+ * own product, colour, size and tag choices are left out, so ticking one doesn't hide the others.
+ */
 router.get('/filters', async (req, res) => {
     try {
+        const q = { ...req.query };
+        for (const k of ['product', 'color', 'variant_size', 'tags']) delete q[k];
+        let from, vals;
+        if (q.list === 'pending' || q.list === 'on_hold') {
+            const f = pendingFilter({ ...q, hold: q.list === 'on_hold' ? 'only' : '' });
+            from = PENDING_FROM(f.where); vals = f.vals;
+        } else if (q.list === 'shipments') {
+            const f = shipmentFilter(q);
+            from = SHIPMENTS_FROM(f.where); vals = f.vals;
+        } else {
+            from = `FROM orders o WHERE o.created_at > NOW() - INTERVAL '180 days'`; vals = [];
+        }
+        const base = `SELECT DISTINCT o.id, o.line_items_json, o.tags ${from}`;
         const r = (await db.query(
             `SELECT DISTINCT li->>'title' AS product, ${COLOR_OF} AS color, ${SIZE_OF} AS size
-               FROM orders o, ${LINES} li WHERE o.created_at > NOW() - INTERVAL '180 days'`)).rows;
+               FROM (${base}) o, ${LINES} li`, vals)).rows;
+        const tags = (await db.query(
+            `SELECT tg AS tag, COUNT(*)::int AS n FROM (${base}) o, ${TAGS_OF} tg WHERE tg <> '' GROUP BY tg ORDER BY n DESC, tg`, vals)).rows;
         const uniq = (k) => [...new Set(r.map(x => x[k]).filter(Boolean))];
         const SIZE_ORDER = ['XXS', 'XS', 'S', 'M', 'L', 'XL', '2XL', 'XXL', '3XL', 'XXXL', '4XL', '5XL'];
         const sizes = uniq('size').sort((a, b) => {
             const ia = SIZE_ORDER.indexOf(a.toUpperCase()), ib = SIZE_ORDER.indexOf(b.toUpperCase());
             return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b);
         });
-        res.json({ products: uniq('product').sort((a, b) => a.localeCompare(b)), colors: uniq('color').sort((a, b) => a.localeCompare(b)), sizes });
+        res.json({
+            products: uniq('product').sort((a, b) => a.localeCompare(b)), colors: uniq('color').sort((a, b) => a.localeCompare(b)), sizes,
+            tags: tags.map(t => ({ tag: t.tag, count: t.n })),
+        });
     } catch (err) { fail(res, err, 'load the filters'); }
 });
 
@@ -319,7 +354,7 @@ router.get('/pending', async (req, res) => {
         const total = (await db.query(`SELECT COUNT(*)::int AS n ${PENDING_FROM(where)}`, vals)).rows[0].n;
         vals.push(t.limit, t.offset);
         const rows = (await db.query(
-            `SELECT o.order_number, o.shopify_id, o.total_price, o.financial_status, o.created_at, o.line_items_json, COALESCE(o.on_hold, false) AS on_hold,
+            `SELECT o.order_number, o.shopify_id, o.total_price, o.financial_status, o.created_at, o.line_items_json, COALESCE(o.on_hold, false) AS on_hold, o.tags,
                     o.held_at, o.held_by, o.hold_reason, COALESCE(o.shopify_hold, false) AS shopify_hold,
                     COALESCE(NULLIF(p.customer_name, ''), TRIM(CONCAT(c.first_name, ' ', c.last_name))) AS customer_name,
                     COALESCE(ov.city, p.ship_city) AS ship_city, COALESCE(ov.pincode, p.ship_pincode) AS ship_pincode, p.packed_at, p.packed_by,
@@ -394,7 +429,7 @@ router.get('/shipments', async (req, res) => {
                     s.shipping_mode, s.consignee_name, s.consignee_city, s.consignee_pincode, s.destination, s.manifested_at, s.picked_up_at,
                     s.expected_delivery, s.delivered_at, s.ndr_attempts, s.ndr_reason, s.ndr_action, s.ndr_action_at,
                     s.cancelled_at, s.cancel_kind, s.cancel_handled, s.recreated_from, s.recreated_as, s.shopify_fulfilled, s.shopify_error,
-                    s.label_url, s.created_by, s.created_at, s.products_desc, o.created_at AS ordered_at, o.line_items_json,
+                    s.label_url, s.created_by, s.created_at, s.products_desc, o.created_at AS ordered_at, o.line_items_json, o.tags,
                     s.charge_estimate, s.charge_zone, s.charge_cod, s.pieces, s.charged_weight_g,
                     s.consignee_state, s.consignee_address, s.consignee_phone,
                     (o.id IS NULL OR o.created_at < NOW() - INTERVAL '58 days') AS outside_shopify,

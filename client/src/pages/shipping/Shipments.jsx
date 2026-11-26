@@ -11,14 +11,14 @@ const countOf = (counts, key) => (key === 'pending' ? counts.pending_awb : count
 const ORDER_LISTS = ['pending', 'on_hold']
 // Lists whose parcels still have a label worth printing.
 const LABEL_LISTS = ['ready_to_ship', 'ready_for_pickup', 'waiting_pickup', 'manual', 'all', 'in_transit', 'not_ready', 'recreated', 'recreated_all']
-const NO_FILTERS = { manifested_from: '', manifested_to: '', ordered_from: '', ordered_to: '', product: '', color: '', variant_size: '' }
+const NO_FILTERS = { manifested_from: '', manifested_to: '', ordered_from: '', ordered_to: '', product: '', color: '', variant_size: '', tags: '' }
 
 /**
  * Every shipment by status, the way the Delhivery portal lists them, plus the orders that still
  * need a shipment (Pending AWB, and the ones on hold that can't ship yet). Filters, paging and the
  * CSV download all go through the server, so the download is exactly the filtered list.
  */
-export default function Shipments({ counts, bucket, setBucket, canManage, ship, open, go, rev, changed, searchSeed, hideNav }) {
+export default function Shipments({ counts, bucket, setBucket, canManage, ship, open, go, rev, changed, searchSeed, hideNav, settings }) {
   const apiFetch = useApi()
   const toast = useToast()
   const t = useServerTable({ limit: 50 })
@@ -30,17 +30,34 @@ export default function Shipments({ counts, bucket, setBucket, canManage, ship, 
   const [packed, setPacked] = useState('')
   const [filters, setFilters] = useState(NO_FILTERS)
   const [showFilters, setShowFilters] = useState(false)
-  const [facets, setFacets] = useState({ products: [], colors: [], sizes: [] })
+  const [facets, setFacets] = useState({ products: [], colors: [], sizes: [], tags: [] })
   const [picked, setPicked] = useState({})     // key → row
   const [busy, setBusy] = useState('')
+  const [pickupForm, setPickupForm] = useState(null)   // { date, time } while booking a pickup for the chosen parcels
   const isOrders = ORDER_LISTS.includes(bucket)
   const isHold = bucket === 'on_hold'
   const keyOf = (r) => (isOrders ? r.order_number : r.id)
   const activeFilters = Object.entries(filters).filter(([k, v]) => v && !(isOrders && k.startsWith('manifested'))).length
   // Several products travel as one "|"-separated value; a shipment with any of them matches.
   const products = filters.product ? filters.product.split('|') : []
+  const tags = filters.tags ? filters.tags.split('|') : []
 
-  useEffect(() => { apiFetch('/api/shipping/filters').then(r => { if (r && !r.error) setFacets(r) }) }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  // The filter choices come from the list on screen (its tab, search, dates, payment), so a
+  // product shows only if some order in this list has it.
+  const { product: _p, color: _c, variant_size: _s, tags: _t, ...listFilters } = filters // eslint-disable-line no-unused-vars
+  const listKey = JSON.stringify([bucket, term, payment, packed, listFilters])
+  useEffect(() => {
+    if (!showFilters) return
+    const f = { q: term, ...listFilters }
+    const q = isOrders
+      ? { ...f, manifested_from: '', manifested_to: '', packed, list: isHold ? 'on_hold' : 'pending' }
+      : { ...f, bucket: bucket === 'all' ? '' : bucket, payment, list: 'shipments' }
+    const x = setTimeout(() => {
+      apiFetch(`/api/shipping/filters?${new URLSearchParams(Object.entries(q).filter(([, v]) => v)).toString()}`)
+        .then(r => { if (r && !r.error) setFacets({ tags: [], ...r }) })
+    }, 250)
+    return () => clearTimeout(x)
+  }, [listKey, showFilters]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { const x = setTimeout(() => setTerm(search.trim()), 350); return () => clearTimeout(x) }, [search])
   useEffect(() => { t.resetPage(); setPicked({}) }, [bucket, term, payment, packed, filters]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -114,6 +131,27 @@ export default function Shipments({ counts, bucket, setBucket, canManage, ship, 
     if (r.released.length) toast.success(`${plural(r.released.length, 'order')} back in Pending AWB`)
     if (r.still_held_in_shopify.length) toast.warning(`${r.still_held_in_shopify.join(', ')} still on hold in Shopify`)
     setPicked({}); changed?.()
+  }
+
+  // Ready to ship → Ready for pickup: book a Delhivery pickup for the chosen parcels.
+  const istToday = () => new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10)
+  const bookPickup = async () => {
+    const awbs = pickedList.map(s => s.awb).filter(Boolean)
+    if (!awbs.length || !pickupForm) return
+    if (!await toast.confirm({
+      title: `Book a Delhivery pickup for ${plural(awbs.length, 'parcel')}?`,
+      message: `Delhivery is asked to collect ${plural(awbs.length, 'parcel')} from ${settings?.pickup_location || 'the warehouse'} on ${pickupForm.date} at ${pickupForm.time}. Delhivery then lists them as Ready for pickup.`,
+      confirmLabel: 'Book pickup',
+    })) return
+    setBusy('pickup')
+    const r = await apiFetch('/api/shipping/pickups', { method: 'POST', body: JSON.stringify({ ...pickupForm, awbs }) })
+    setBusy('')
+    if (!r || r.error) return toast.error(r?.error || 'Delhivery refused the pickup')
+    toast.success(r.moved > 0
+      ? `${plural(r.moved, 'parcel')} moved to Ready for pickup`
+      : 'Delhivery will move them to Ready for pickup shortly; the list updates on the next tracking update', { title: `Pickup ${r.pickup_id || ''} booked`.trim() })
+    setPickupForm(null); setPicked({})
+    if (changed) changed()
   }
 
   const printLabels = async (ids) => {
@@ -203,8 +241,15 @@ export default function Shipments({ counts, bucket, setBucket, canManage, ship, 
               </div></div>
             <div className="input-group ship-filter-wide"><label htmlFor="sf-product">Products</label>
               <MultiSearchSelect id="sf-product" value={products} placeholder="Any product: type to find, tick several"
-                options={facets.products.map(p => ({ value: p, label: p }))}
+                options={[...new Set([...facets.products, ...products])].map(p => ({ value: p, label: p }))}
                 onChange={(list) => setF({ product: list.join('|') })} /></div>
+            <div className="input-group ship-filter-wide"><label htmlFor="sf-tags">Order tags</label>
+              <MultiSearchSelect id="sf-tags" value={tags} placeholder={facets.tags.length ? 'Any tag: type to find, tick several' : 'No tags on these orders'}
+                options={[...new Set([...facets.tags.map(x => x.tag), ...tags])].map(tag => {
+                  const n = facets.tags.find(x => x.tag === tag)?.count
+                  return { value: tag, label: n ? `${tag} (${n})` : tag }
+                })}
+                onChange={(list) => setF({ tags: list.join('|') })} /></div>
             <div className="input-group"><label htmlFor="sf-color">Colour</label>
               <select id="sf-color" value={filters.color} onChange={e => setF({ color: e.target.value })}>
                 <option value="">Any colour</option>{facets.colors.map(c => <option key={c}>{c}</option>)}
@@ -238,11 +283,37 @@ export default function Shipments({ counts, bucket, setBucket, canManage, ship, 
                   Release {pickedList.filter(o => o.held_at).length || ''}
                 </button>
               )}
+              {bucket === 'ready_to_ship' && canManage && (
+                <button className="btn btn-primary btn-sm" disabled={busy === 'pickup'}
+                  onClick={() => setPickupForm(f => (f ? null : { date: istToday(), time: String(settings?.pickup_time || '18:00').slice(0, 5) }))}>
+                  <Icon name="truck" size={14} /> Move {pickedList.length} to Ready for pickup
+                </button>
+              )}
               {canLabel && (
                 <button className="btn btn-primary btn-sm" disabled={busy === 'labels'} onClick={() => printLabels(pickedList.map(s => s.id))}>
                   <Icon name="printer" size={14} /> {busy === 'labels' ? 'Fetching…' : `Labels for ${pickedList.length}`}
                 </button>
               )}
+            </div>
+          </div>
+        )}
+        {pickupForm && pickedList.length > 0 && bucket === 'ready_to_ship' && (
+          <div className="ship-card ship-pickup-form">
+            <div>
+              <h3 style={{ margin: 0, fontSize: 14 }}>Book a Delhivery pickup for {plural(pickedList.length, 'parcel')}</h3>
+              <p className="packed-sub" style={{ maxWidth: 'none', margin: '2px 0 0' }}>
+                Delhivery books pickups for the whole warehouse ({settings?.pickup_location || 'pickup location'}) with a parcel count; once booked it lists these parcels as Ready for pickup.
+                If a pickup is already booked for that day, Delhivery may refuse a second one: the parcels then go with the existing pickup.
+              </p>
+            </div>
+            <div className="ship-pickup-row">
+              <div className="input-group"><label htmlFor="pk-date">Date</label>
+                <input id="pk-date" type="date" min={istToday()} value={pickupForm.date} onChange={e => setPickupForm(f => ({ ...f, date: e.target.value }))} /></div>
+              <div className="input-group"><label htmlFor="pk-time">Time</label>
+                <input id="pk-time" type="time" value={pickupForm.time} onChange={e => setPickupForm(f => ({ ...f, time: e.target.value }))} /></div>
+              <button className="btn btn-primary" disabled={busy === 'pickup' || !pickupForm.date || !pickupForm.time} onClick={bookPickup}>
+                {busy === 'pickup' ? 'Booking…' : 'Book pickup'}</button>
+              <button className="btn btn-secondary" disabled={busy === 'pickup'} onClick={() => setPickupForm(null)}>Cancel</button>
             </div>
           </div>
         )}
@@ -265,7 +336,7 @@ export default function Shipments({ counts, bucket, setBucket, canManage, ship, 
                   {rows.map(o => (
                     <tr key={o.order_number}>
                       <td><input type="checkbox" checked={!!picked[o.order_number]} onChange={() => toggle(o)} aria-label={`Select ${o.order_number}`} /></td>
-                      <td data-label="Order" className="cell-primary">{o.order_number}<div className="packed-sub">{dayTime(o.created_at)}</div>
+                      <td data-label="Order" className="cell-primary">{o.order_number}<div className="packed-sub">{dayTime(o.created_at)}</div>{o.tags && <div className="ship-tags">Tags: {o.tags.split(/\s*,\s*/).join(' | ')}</div>}
                         {o.cancelled_awb && <div className="packed-sub" style={{ color: 'var(--danger)' }}>Auto-cancelled before</div>}
                         {o.on_hold && <span className="status-badge on-hold" style={{ marginTop: 4 }}>{o.held_at ? 'On hold' : 'On hold in Shopify'}</span>}
                         {o.held_at && <div className="ship-hold-note">{o.hold_reason}{o.held_by ? ` · ${o.held_by}, ${day(o.held_at)}` : ''}</div>}
@@ -300,7 +371,7 @@ export default function Shipments({ counts, bucket, setBucket, canManage, ship, 
                     return (
                       <tr key={s.id} onClick={() => open(s.id)} style={{ cursor: 'pointer' }}>
                         <td onClick={e => e.stopPropagation()}><input type="checkbox" checked={!!picked[s.id]} onChange={() => toggle(s)} aria-label={`Select ${s.awb}`} /></td>
-                        <td data-label="Order · AWB" className="cell-primary">{s.order_number || s.delhivery_order || '—'}<div className="packed-sub ship-mono">{s.awb}</div>
+                        <td data-label="Order · AWB" className="cell-primary">{s.order_number || s.delhivery_order || '—'}<div className="packed-sub ship-mono">{s.awb}</div>{s.tags && <div className="ship-tags">Tags: {s.tags.split(/\s*,\s*/).join(' | ')}</div>}
                           {s.ordered_at && <div className="packed-sub">ordered {day(s.ordered_at)}</div>}</td>
                         <td data-label="Customer">{s.consignee_name || '—'}<div className="packed-sub">{[s.consignee_city || s.destination, s.consignee_pincode].filter(Boolean).join(' · ')}</div></td>
                         <td data-label="Items" style={{ maxWidth: 240 }}>{(s.items || []).slice(0, 2).join(', ') || '—'}{(s.items || []).length > 2 ? ` +${s.items.length - 2}` : ''}</td>

@@ -4818,3 +4818,9 @@ p.wdb-sub { margin: 0; }
 @media (max-width: 640px) { .manual-lookup-form { flex-wrap: wrap; } .manual-lookup-form .input { flex: 1 1 100%; } }
 
 .packed-date { padding: 6px 8px; border-radius: var(--radius-sm, 8px); border: 1px solid var(--border); background: var(--surface); color: var(--text-primary); font-size: 13px; }
+
+.ship-tags { margin-top: 2px; font-size: 11.5px; font-weight: 500; color: var(--text-muted); }
+
+.ship-pickup-form { display: flex; flex-direction: column; gap: 10px; margin: 0 0 14px; }
+.ship-pickup-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+.ship-pickup-row .input-group { margin: 0; }
