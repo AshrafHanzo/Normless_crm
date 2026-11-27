@@ -452,6 +452,54 @@ router.post('/tickets/:id/images', canEdit, uploadImages, async (req, res) => {
 });
 
 /**
+ * Proof for the customer — GET / POST (images + note) / DELETE /api/support/tickets/:id/proof.
+ * Uploading sends them to the customer straight away (WhatsApp, or the template and then the photos
+ * when they reply; email when the ticket came by email).
+ */
+router.get('/tickets/:id/proof', async (req, res) => {
+    try { res.json({ proofs: await require('../services/support-proof').list(parseInt(req.params.id, 10) || 0) }); }
+    catch (err) { console.error('support proof list:', err); res.status(500).json({ error: 'Could not read the proof' }); }
+});
+router.post('/tickets/:id/proof', canEdit, uploadImages, async (req, res) => {
+    const scrap = () => (req.files || []).forEach(f => fs.unlink(f.path, () => {}));
+    try {
+        const id = parseInt(req.params.id, 10) || 0;
+        const row = (await db.query('SELECT id FROM support_tickets WHERE id = $1', [id])).rows[0];
+        if (!row) { scrap(); return res.status(404).json({ error: 'That ticket is gone' }); }
+        if (!req.files?.length) return res.status(400).json({ error: 'No images were attached' });
+        // WhatsApp shows only JPG and PNG as photos.
+        if (req.files.some(f => !/^image\/(jpeg|png)$/.test(f.mimetype))) {
+            scrap();
+            return res.status(400).json({ error: 'Proof must be JPG or PNG (WhatsApp can’t show HEIC or WEBP photos). A screenshot works.' });
+        }
+        const proof = require('../services/support-proof');
+        await proof.add(id, req.files, { note: req.body?.note, by: req.user?.username });
+        const sent = await proof.deliver(id);
+        res.json({ proofs: await proof.list(id), sent });
+    } catch (err) {
+        console.error('support proof upload:', err);
+        scrap();
+        res.status(500).json({ error: 'Could not attach the proof' });
+    }
+});
+router.post('/tickets/:id/proof/resend', canEdit, async (req, res) => {
+    try {
+        const id = parseInt(req.params.id, 10) || 0;
+        const proof = require('../services/support-proof');
+        const sent = await proof.deliver(id);
+        res.json({ proofs: await proof.list(id), sent });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+router.delete('/tickets/:id/proof/:proofId', canEdit, async (req, res) => {
+    try {
+        const id = parseInt(req.params.id, 10) || 0;
+        const proof = require('../services/support-proof');
+        await proof.remove(id, parseInt(req.params.proofId, 10) || 0);
+        res.json({ proofs: await proof.list(id) });
+    } catch (err) { res.status(err.status || 500).json({ error: err.message }); }
+});
+
+/**
  * DELETE /api/support/tickets/:id/images — body { url }.
  *
  * The file goes with the record. Only paths this ticket actually holds are touched, so a crafted

@@ -229,7 +229,7 @@ const asHtml = (text) => `<div style="font-family:Arial,sans-serif;font-size:14p
  * Reply in a thread, as the Normless team. who: { type: 'ai' | 'user', user }. Returns the stored
  * message; a failure is stored too (status 'failed') and thrown.
  */
-async function reply(threadId, text, who) {
+async function reply(threadId, text, who, files = []) {
     const t = transport();
     if (!t) throw Object.assign(new Error('The contact@ mailbox is not connected on the server yet.'), { status: 400 });
     const thread = (await db.query('SELECT * FROM email_threads WHERE id = $1', [threadId])).rows[0];
@@ -244,6 +244,7 @@ async function reply(threadId, text, who) {
     try {
         const info = await t.sendMail({
             from: `"Normless" <${user()}>`, to: thread.customer_email, subject, text: body, html: asHtml(body),
+            ...(files.length ? { attachments: files.map(f => ({ path: f.path, filename: f.filename, contentType: f.mime })) } : {}),
             ...(lastIn?.message_id ? { inReplyTo: lastIn.message_id, references: ids.slice(-20) } : {}),
         });
         messageId = info.messageId || null;
@@ -252,8 +253,9 @@ async function reply(threadId, text, who) {
     }
     const row = (await db.query(
         `INSERT INTO email_messages (thread_id, message_id, direction, sender_type, sender_user, from_email, to_email, subject, body, attachments, status, error)
-         VALUES ($1,$2,'out',$3,$4,$5,$6,$7,$8,'[]',$9,$10) RETURNING *`,
-        [threadId, messageId, who.type, who.user || null, user(), thread.customer_email, subject, body, error ? 'failed' : 'sent', error])).rows[0];
+         VALUES ($1,$2,'out',$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+        [threadId, messageId, who.type, who.user || null, user(), thread.customer_email, subject, body,
+            JSON.stringify(files.map(f => ({ url: f.url, name: f.filename, mime: f.mime }))), error ? 'failed' : 'sent', error])).rows[0];
     await db.query('UPDATE email_threads SET last_message_at = now() WHERE id = $1', [threadId]);
     if (error) throw Object.assign(new Error(`Gmail didn't send it: ${error}`), { status: 502 });
     return row;

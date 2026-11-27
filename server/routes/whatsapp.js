@@ -283,6 +283,8 @@ async function receiveMessage(message, profileName) {
             const vendor = (await db.query(`SELECT 1 FROM vendors WHERE phone IS NOT NULL AND phone = RIGHT($1, 10) LIMIT 1`, [String(phone || '').replace(/\D/g, '')])).rows[0];
             if (vendor) return;
         } catch (err) { console.error('vendor chat check error:', err.message); }
+        // Proof photos the team shared while the 24-hour window was shut go now that it is open.
+        require('../services/support-proof').customerWrote(conversation.id, phone).catch(err => console.error('support proof:', err.message));
         // A photo goes onto the chat's open support ticket as proof.
         if (mediaUrl && message.type === 'image') {
             require('../services/nl-agent').mediaArrived(conversation.id).catch(() => {});

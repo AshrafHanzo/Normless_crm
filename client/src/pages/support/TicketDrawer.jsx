@@ -9,6 +9,7 @@ import useDirtyGuard from '../../hooks/useDirtyGuard'
 import { refOf, blankTicket, asForm, trackingFor } from './ticket'
 import ManualShipDrawer from '../shipping/ManualShipDrawer'
 import DetailsForm from '../shipping/DetailsForm'
+import ProofForCustomer from './ProofForCustomer'
 import { BUCKET_BADGE } from '../shipping/common'
 
 const today = () => new Date().toLocaleDateString('en-CA')
@@ -480,6 +481,7 @@ export default function TicketDrawer({ ticket, options, onClose, onSaved, onDele
                 </div>
               </section>
             )}
+            {canEdit && !isNew && <ProofForCustomer ticket={ticket} />}
             {(canShip || canEdit) && !isNew && form.order_number && (
               <section className="ship-card" style={{ margin: 0 }}>
                 <div className="ship-card-head">

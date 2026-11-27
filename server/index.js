@@ -2198,6 +2198,17 @@ async function ensureSupportSchema() {
                 created_at TIMESTAMPTZ NOT NULL DEFAULT now()
             );
             CREATE INDEX IF NOT EXISTS nl_exchange_fees_order_idx ON nl_exchange_fees (order_number);
+            -- Proof the team shares with the customer (what was raised with Delhivery, a QC result),
+            -- sent to them by itself on WhatsApp and/or email.
+            CREATE TABLE IF NOT EXISTS support_ticket_proofs (
+                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                ticket_id INTEGER NOT NULL,
+                url TEXT NOT NULL, name TEXT, mime TEXT, note TEXT,
+                uploaded_by TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                wa_status TEXT, wa_sent_at TIMESTAMPTZ, wa_error TEXT,
+                email_status TEXT, email_sent_at TIMESTAMPTZ
+            );
+            CREATE INDEX IF NOT EXISTS support_ticket_proofs_ticket_idx ON support_ticket_proofs (ticket_id);
 
             -- contact@normless.store, read over IMAP and answered by the AI agent or the team.
             -- One row per Gmail conversation (X-GM-THRID), so a reply lands in its thread.
