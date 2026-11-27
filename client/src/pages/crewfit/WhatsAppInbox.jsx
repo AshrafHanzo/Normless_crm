@@ -404,6 +404,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
   const [mockups, setMockups] = useState([])
   const [mockPick, setMockPick] = useState([])           // mockup ids ticked to send
   const [mockUploading, setMockUploading] = useState(false)
+  const [asMockup, setAsMockup] = useState(true)          // message-box pictures at Need mockup go for approval
   const [canQuote, setCanQuote] = useState(false)
   const [quoteOpen, setQuoteOpen] = useState(false)
   const quoteToLink = useRef(null)                      // the quote an order is being made from
@@ -628,6 +629,32 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
     if (!id) return
     const r = await apiFetch(`${API}/conversations/${id}/customer`)
     if (r && !r.error && shownId.current === id) setShop(r)
+  }
+
+  /**
+   * Pictures attached in the message box of a lead at Need mockup go as the mockup for approval:
+   * saved under Design mockups, then sent with the Confirm / Need changes buttons (or the
+   * "mockup is ready" template past the 24-hour window). Designers attach them there by habit.
+   */
+  const sendAsMockups = async (files, body, quote) => {
+    if (body) await sendOne(body, null, quote)
+    const fd = new FormData()
+    for (const f of files) fd.append('files', f)
+    const before = new Set(mockups.map(m => m.id))
+    const up = await apiFetch(`${API}/conversations/${thread.id}/mockups`, { method: 'POST', body: fd })
+    if (!up || up.error) return toast.error(up?.error || 'Could not upload the mockups', { duration: 0 })
+    const ids = up.mockups.filter(m => !before.has(m.id)).map(m => m.id)
+    setMockups(up.mockups)
+    await track({
+      label: thread.window_open ? `🎨 ${ids.length} mockup${ids.length > 1 ? 's' : ''} for approval` : '🎨 Mockup ready — asking the customer to reply', retryKey: 'mockups',
+      stages: ORDER_STAGES.mockups,
+      run: () => apiFetch(`${API}/conversations/${thread.id}/mockups/send`, { method: 'POST', body: JSON.stringify({ ids }) }),
+      onDone: (r) => {
+        for (const m of r.messages || []) appendSent(m)
+        setMockups(r.mockups); setMockPick([]); loadActivity()
+        if (r.waiting) { toast.success('The customer was told the mockup is ready — it goes to them the moment they reply'); poll.current() }
+      },
+    })
   }
 
   const uploadMockups = async (files) => {
@@ -926,6 +953,9 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
   const pendingHere = pending.filter(x => x.conv === thread?.id)
   const busyWith = (key) => pendingHere.some(x => x.retryKey === key && !x.error)
 
+  // Attachments a lead at Need mockup can take as its mockup: pictures and PDFs only.
+  const mockupAttach = (files) => cf && thread?.lead_id && thread.lead_status === 'need_mockup' && files.length > 0
+    && files.every(f => /^image\//.test(f.type) || f.type === 'application/pdf')
   const sendOne = (body, file, quote) => {
     const form = new FormData()
     if (body) form.append('body', body)
@@ -952,6 +982,7 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
     // The box is cleared at once: what was typed now lives in the pending bubbles.
     setDraft(''); setStaged([]); setReplyTo(null)
     if (!files.length) return sendOne(body, null, quote)
+    if (asMockup && mockupAttach(files)) return sendAsMockups(files, body, quote)
     const captionable = !/^audio\//.test(files[0].type)
     if (body && !captionable) await sendOne(body, null, quote)
     for (const [i, f] of files.entries()) {
@@ -2154,6 +2185,12 @@ export default function WhatsAppInbox({ brand: brandKey = 'crewfit' }) {
                           <li><button type="button" className="wa-tray-add" onClick={() => fileRef.current?.click()}><Icon name="plus" size={16} /> Add</button></li>
                         )}
                       </ul>
+                    )}
+                    {mockupAttach(staged) && (
+                      <label className="wa-tray-mock">
+                        <input type="checkbox" checked={asMockup} onChange={e => setAsMockup(e.target.checked)} />
+                        <span><b>Send as the mockup for approval</b> — the customer gets ✅ Confirm / ✏️ Need changes after the pictures</span>
+                      </label>
                     )}
                   </div>
                 )}

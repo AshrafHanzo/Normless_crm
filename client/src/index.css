@@ -4831,3 +4831,9 @@ p.wdb-sub { margin: 0; }
 .ship-pickup-form { display: flex; flex-direction: column; gap: 10px; margin: 0 0 14px; }
 .ship-pickup-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
 .ship-pickup-row .input-group { margin: 0; }
+
+/* Message-box pictures on a lead at Need mockup: sent as the mockup for approval. */
+.wa-tray-mock { display: flex; align-items: flex-start; gap: 8px; margin-top: 8px; padding: 8px 10px; border-radius: 8px; font-size: 12.5px; color: var(--text-secondary); cursor: pointer;
+  border: 1px solid color-mix(in srgb, var(--primary) 45%, var(--border)); background: color-mix(in srgb, var(--primary) 8%, transparent); }
+.wa-tray-mock input { width: auto; margin: 2px 0 0; accent-color: var(--primary); }
+.wa-tray-mock b { color: var(--text-primary); font-weight: 600; }
