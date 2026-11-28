@@ -4,7 +4,7 @@ import { useToast } from '../../components/Toast'
 import Icon from '../../components/Icon'
 import DetailsForm from './DetailsForm'
 import ShipmentFilterBar from './ShipmentFilterBar'
-import { dayTime, money, plural, openLabels } from './common'
+import { day, dayTime, money, plural, openLabels } from './common'
 
 /**
  * Shipments Delhivery cancelled because they weren't picked up in time. The parcel is still on
@@ -117,18 +117,25 @@ export default function AutoCancelled({ canManage, settings, changed, open, go, 
                   <thead><tr>
                     <th style={{ width: 36 }}><input type="checkbox" checked={all} aria-label="Select all"
                       onChange={() => setPicked(all ? {} : Object.fromEntries(rows.map(s => [s.id, true])))} /></th>
-                    <th>Order</th><th>Customer</th><th>Old AWB</th><th>Cancelled</th><th>Payment</th><th>Details</th>
+                    <th>Order · old AWB</th><th>Customer</th><th>Items</th><th>Payment</th><th>Freight</th><th>Cancelled</th><th>Made in</th><th>Details</th>
                   </tr></thead>
                   <tbody>
                     {rows.map(s => (
                       <tr key={s.id}>
                         <td><input type="checkbox" checked={!!picked[s.id]} aria-label={`Select ${s.order_number}`}
                           onChange={() => setPicked(p => ({ ...p, [s.id]: !p[s.id] }))} /></td>
-                        <td data-label="Order" className="cell-primary"><button className="mini-btn" onClick={() => open(s.id)}>{s.order_number || '—'}</button></td>
-                        <td data-label="Customer">{s.consignee_name || '—'}<div className="packed-sub">{s.consignee_city || s.destination || ''}</div></td>
-                        <td data-label="Old AWB" className="ship-mono" style={{ textDecoration: 'line-through', color: 'var(--text-muted)' }}>{s.awb}</td>
-                        <td data-label="Cancelled">{dayTime(s.cancelled_at || s.status_at)}<div className="packed-sub">{s.instructions || s.status}</div></td>
+                        <td data-label="Order · old AWB" className="cell-primary"><button className="mini-btn" onClick={() => open(s.id)}>{s.order_number || s.delhivery_order || '—'}</button>
+                          <div className="packed-sub ship-mono" style={{ textDecoration: 'line-through' }}>{s.awb}</div>
+                          {s.tags && <div className="ship-tags">Tags: {s.tags.split(/\s*,\s*/).join(' | ')}</div>}
+                          {s.ordered_at && <div className="packed-sub">ordered {day(s.ordered_at)}</div>}</td>
+                        <td data-label="Customer">{s.consignee_name || '—'}<div className="packed-sub">{[s.consignee_city || s.destination, s.consignee_pincode].filter(Boolean).join(' · ')}</div></td>
+                        <td data-label="Items" style={{ maxWidth: 260 }}>{(s.items || []).join(', ') || '—'}</td>
                         <td data-label="Payment">{s.payment_mode === 'COD' ? `COD ${money(s.cod_amount)}` : (s.payment_mode || '—')}</td>
+                        <td data-label="Freight">{s.charge_estimate != null ? (
+                          <>{money(s.charge_estimate)}<div className="packed-sub">{(s.pieces || 1) > 1 ? `${money(Number(s.charge_estimate) / s.pieces)} per item · ` : ''}{s.charge_zone ? `zone ${s.charge_zone}` : ''}</div></>
+                        ) : <span style={{ color: 'var(--text-muted)' }}>—</span>}</td>
+                        <td data-label="Cancelled">{dayTime(s.cancelled_at || s.status_at)}<div className="packed-sub">{s.instructions || s.status}</div></td>
+                        <td data-label="Made in">{s.source === 'manual' ? 'Manual' : s.created_via === 'crm' ? 'CRM' : 'Portal'}</td>
                         <td data-label="Details">
                           {needsDetails(s)
                             ? <span className="status-badge on-hold" title="Shopify no longer shows this order, so the CRM needs the address and phone">Needs address</span>
