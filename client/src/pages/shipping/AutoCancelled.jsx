@@ -3,6 +3,7 @@ import { useApi } from '../../App'
 import { useToast } from '../../components/Toast'
 import Icon from '../../components/Icon'
 import DetailsForm from './DetailsForm'
+import ShipmentFilterBar from './ShipmentFilterBar'
 import { dayTime, money, plural, openLabels } from './common'
 
 /**
@@ -20,17 +21,27 @@ export default function AutoCancelled({ canManage, settings, changed, open, go, 
   const [result, setResult] = useState(null)
   const [editing, setEditing] = useState(null)   // the row whose delivery details are being added
   const [saving, setSaving] = useState(false)
+  const [params, setParams] = useState(null)     // the filter bar's query (search, payment, filters)
+  const [total, setTotal] = useState(0)
+  const filtered = !!params && Object.keys(params).some(k => k !== 'bucket')
 
   useEffect(() => {
-    apiFetch('/api/shipping/shipments?bucket=cancelled_open&limit=300').then(r => {
+    if (!params) return
+    let live = true
+    const q = new URLSearchParams({ ...params, bucket: 'cancelled_open', limit: '300' }).toString()
+    apiFetch(`/api/shipping/shipments?${q}`).then(r => {
+      if (!live) return
       const list = r && !r.error ? r.shipments : []
       setRows(list)
+      setTotal(r?.total ?? list.length)
       setPicked(Object.fromEntries(list.map(s => [s.id, true])))
     })
+    return () => { live = false }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rev])
+  }, [rev, params])
 
-  if (!rows) return <div className="loader"><div className="spinner" /></div>
+  const bar = <ShipmentFilterBar bucket="cancelled_open" csvName="auto-cancelled" onChange={setParams} />
+  if (!rows) return <div className="ship-layout"><section className="ship-main">{bar}<div className="loader"><div className="spinner" /></div></section></div>
   const ids = rows.filter(s => picked[s.id]).map(s => s.id)
   const all = rows.length > 0 && ids.length === rows.length
 
@@ -89,10 +100,14 @@ export default function AutoCancelled({ canManage, settings, changed, open, go, 
           </section>
         )}
 
+        {bar}
+        {filtered && rows.length > 0 && <p className="packed-sub" style={{ maxWidth: 'none', margin: '0 0 8px' }}>{plural(total, 'shipment')} match these filters{total > rows.length ? ` (first ${rows.length} shown)` : ''}.</p>}
+
         {!rows.length ? (
           <div className="data-table-wrapper"><div className="empty-state">
-            <div className="empty-icon">✅</div><h3>Nothing auto-cancelled</h3>
-            <p>Every cancelled shipment has been re-created or marked as not shipping.</p>
+            {filtered
+              ? <><div className="empty-icon">🔎</div><h3>Nothing matches these filters</h3><p>Clear the search or filters to see every auto-cancelled shipment.</p></>
+              : <><div className="empty-icon">✅</div><h3>Nothing auto-cancelled</h3><p>Every cancelled shipment has been re-created or marked as not shipping.</p></>}
           </div></div>
         ) : (
           <>
